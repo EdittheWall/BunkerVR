@@ -1,0 +1,19 @@
+BunkerVR patch 1
+file script/custom/player/PlayerState_UsingCutters.hps
+from a3f73c720a68cc4349977245650c43872bbcc99b78f7aec1d1831058baec38bf 9974
+to 6d3046ad69fda4d2ab59f0b7db6f5392a7ac3174c3fe48cb52dfc750c59be8ae 10607
+=116
++		// BunkerVR: while both hands hold the cutters' handles in the headset,
++		// the hands pose the cutters (their own "cutter_cut_air" held at the
++		// opening: VRUpdateCutters in PlayerBodyHandler.hps), so the game must
++		// not start its own animations on them meanwhile.
++		if (cVR_Active() && cScript_GetGlobalVarInt("BunkerVR_CuttersPosed") == 1) return;
++		
+=28
++		// BunkerVR: in the headset the cutters are opened and squeezed shut
++		// with both hands, around what they cut (VRUpdateCutters in
++		// PlayerBodyHandler.hps): no scene, and the right squeeze does
++		// nothing else with them.
++		if (cVR_Active()) return;
++		
+end

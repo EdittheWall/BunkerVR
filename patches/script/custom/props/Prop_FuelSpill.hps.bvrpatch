@@ -1,0 +1,17 @@
+BunkerVR patch 1
+file script/custom/props/Prop_FuelSpill.hps
+from 9ad41c088bd0fec8189a168549a5bdf9ef8cc504cbf8c2c45ad46ab355926629 17751
+to c082aac3c4f6fcc0fd4353997c6a7cdbedc1bb5b3cb8afd02e2741e0bef33ec6 18184
+=26
++// BunkerVR: how many spills' fire preloads have been timed in the log (at most 20).
++int glVRSpillPreloadNotes = 0;
++
+=42
++		uint lVRStart = cSystem_GetApplicationTime(); // BunkerVR: the preload is timed for the log
+=4
++		if (glVRSpillPreloadNotes < 20)
++		{
++			glVRSpillPreloadNotes++;
++			Log("BunkerVR: a spill's preloading of its fire (" + mBaseObj.GetName() + ") took " + (cSystem_GetApplicationTime() - lVRStart) + " ms\n");
++		}
+end

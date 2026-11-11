@@ -1,0 +1,62 @@
+BunkerVR patch 1
+file script/custom/player/PlayerState_UsingItem_Base.hps
+from 62990e324e8e186bdac18c9701c3270290e017aafea9daac7e7d3235896cb37b 33756
+to 6cc81d449aeae3e45924d8fb569622b6c569f44123987dd7be7f5b7b9ea6f25a 35911
+=397
+-1
++			// (BunkerVR: at once when the left hand waits for the game's
++			// interact button while the item is ready in the right. Otherwise a
++			// squeeze let go before the raising animation ends, up to 2 seconds,
++			// grabs nothing, and the item is raised again.)
++			if (mbLeaveState && (mfIntroTimer >= mfIntroDelayTime || cVR_OtherHandWaits()))
+=76
++		// BunkerVR: the item may be gone by now (put away or used up while
++		// this state was still on): its animation is then left out. Without
++		// this check the function stops short of leaving the state, so it
++		// runs again every update and the arms' outro restarts over and over,
++		// with its sound (for example a bandage put away with X pressed twice).
+=3
+-4
++			if (pItem !is null)
++			{
++				pItem.PlayAnimation(msFocusOutroAnim_Item, fFadeTime, false);
++				
++				cMeshEntity@ pItemMesh = pItem.GetMeshEntity();
++				cAnimationState@ pItemAnim = pItemMesh !is null ? pItemMesh.GetAnimationStateFromName(msFocusOutroAnim_Item) : null;
++				if (pItemAnim !is null) pItemAnim.SetRelativeTimePosition(fRelTime);
++			}
+=84
++		// BunkerVR: an item fitted by hand into what it is used on (a key in
++		// its lock, a fuse in its box: VRUpdateFit in PlayerBodyHandler.hps) is
++		// used by its fit, by turning it. The game's use button does nothing
++		// meanwhile, or the grip pressed to twist a fuse would use it at once.
++		if (cVR_Active() && cScript_GetGlobalVarInt("BunkerVR_FitIn") == 1) return;
++		
+=68
+-1
++		// BunkerVR: the game stops the player moving while crawling with an
++		// item held ready. In VR a drawn gun is always held ready, which would
++		// freeze the player under tables and in low gaps, so with the VR mod
++		// running the player can move.
++		if ((alAnalogId == eAnalogType_Move || alAnalogId == eAnalogType_GamepadMove) && Player_GetCrawling() && VRUsingItemModActive() == false)
+=8
++	
++	// BunkerVR: is the VR mod running? It answers through the camera: after
++	// setting a special roll value, reading the camera's matrix returns the
++	// mod's data (12345 as its first number) instead.
++	bool VRUsingItemModActive()
++	{
++		cLuxPlayer@ pVRPlayer = cLux_GetPlayer();
++		cCamera@ pVRCam = pVRPlayer !is null ? pVRPlayer.GetCamera() : null;
++		if (pVRCam is null) return false;
++		
++		float fVRRealRoll = pVRCam.GetRoll();
++		pVRCam.SetRoll(7006.0f);
++		cVector3f vVRStatus = pVRCam.GetMatrix().GetTranslation();
++		pVRCam.SetRoll(fVRRealRoll);
++		
++		return vVRStatus.x > 12344.0f && vVRStatus.x < 12346.0f;
++	}
++	
++	//------------------------------------------------------------
+end

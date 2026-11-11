@@ -1,0 +1,18 @@
+name: Idea or suggestion
+description: A mechanic that could feel better in VR, a comfort option, or anything else you'd like to see.
+labels: ["idea"]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: What would you like, and where in the game does it come up?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: What feels off today, or what it would make better. If another VR game does it well, say which.
+    validations:
+      required: false

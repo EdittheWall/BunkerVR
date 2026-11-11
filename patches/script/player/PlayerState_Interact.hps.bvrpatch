@@ -1,0 +1,243 @@
+BunkerVR patch 1
+file script/player/PlayerState_Interact.hps
+from fac9647bb2bf79d1b3799ea94cc6e986e36b21d2f5143676e0cd629345064d37 6862
+to 0c9ac1b3127ffcc55addc65b2452838fdcc67b69c6bddbd5b0499b2c6909be4b 18027
+=9
++// BunkerVR: a VR hand holding a drawer, lever or wheel lets go when the real
++// hand is this far from the spot it holds (meters)...
++const float gfVRInteractLetGoDistance = 0.30f;
++// ...for this long (seconds). The same as a held door; see VRHoldSpot.
++const float gfVRInteractLetGoTime = 0.15f;
++// ...and the object is moved to close this share of the gap to the hand each
++// update (a quarter, as a held door; the game's own push, which is limited,
++// does the moving).
++const float gfVRHoldCatchUp = 0.25f;
++// ...and the spot held is the palm whenever it is this near the object's box
++// (meters; see VRHoldSpot).
++const float gfVRHoldNearThing = 0.12f;
++
+=88
++		mbVRHoldSet = false; // BunkerVR: a hold starts afresh
+=27
++		VRHoldClear(); // BunkerVR
+=96
++
++	//------------------------------------------------------------
++
++	/////////////////////////////////////////
++	// BunkerVR: a VR hand holding what this state moves
++	/////////////////////////////////////////
++
++	// Drawers (the slide state), levers and wheels (the rotate base's states)
++	// are held the way doors are (the VR part of
++	// PlayerState_Interact_SwingDoor.hps), so they move smoothly and have
++	// weight. The hand takes hold of a spot on the object, which stays on it,
++	// and is drawn there; the object is moved so that spot follows the hand,
++	// along its rail or around its hinge, closing a share of the gap each
++	// update, by the game's own push, which is limited (the object's weight,
++	// a jam). The hand lets go when pulled gfVRInteractLetGoDistance off it
++	// for gfVRInteractLetGoTime, with a light buzz, and feels the object
++	// stop. The game's turning of the view to keep the held spot on the
++	// screen (CheckOutsideAtScreenEdgeAndMove) is left out: in a headset it
++	// turns the world around the player.
++
++	// Is a hand grabbing with the game's interact button (the VR mod's roll
++	// 7002: 12345, 1, which hand), which (0 left, 1 right), and where is its
++	// palm (7011 left, 7012 right; the grabbing hand's position, 7001, if
++	// that isn't known)? False without the mod, or with no hand grabbing.
++	bool VRGrabbingHand(int &out alHand, cVector3f &out avPalm)
++	{
++		alHand = 1;
++		avPalm = cVector3f(0.0f);
++		cLuxPlayer@ pPlayer = cLux_GetPlayer();
++		cCamera@ pCam = pPlayer !is null ? pPlayer.GetCamera() : null;
++		if(pCam is null) return false;
++		float fRealRoll = pCam.GetRoll();
++		pCam.SetRoll(7002.0f);
++		cVector3f vStatus = pCam.GetMatrix().GetTranslation();
++		bool bHand = vStatus.x > 12344.0f && vStatus.x < 12346.0f && vStatus.y > 0.5f;
++		if(bHand)
++		{
++			alHand = vStatus.z > 0.5f ? 1 : 0;
++			pCam.SetRoll(7001.0f);
++			cVector3f vHand = pCam.GetMatrix().GetTranslation();
++			pCam.SetRoll(alHand == 0 ? 7011.0f : 7012.0f);
++			cVector3f vPalm = pCam.GetMatrix().GetTranslation();
++			avPalm = (vPalm - vHand).Length() < 0.5f ? vPalm : vHand;
++		}
++		pCam.SetRoll(fRealRoll);
++		return bHand;
++	}
++
++	// The spot held, kept on the body (mvVRHoldOnBody), taken at the first
++	// update: the palm, when it is near the spot the game took hold of (where
++	// the hand touched it) or within gfVRHoldNearThing of the object's box,
++	// else that spot; the log says which. The palm is preferred because the
++	// game's spot can be over 25 cm from it: a hand drawn there can stick
++	// behind a drawer's wall, and the hold lets go at once ("pulled off").
++	// Returns where the spot is now, and has the arms' script draw the hand
++	// there (the door's variables, which only one state at a time sets:
++	// "BunkerVR_DoorHand"...; see Prop_PlayerBody.hps). A bar to hold
++	// (VRHoldSetBar) is set after it.
++	cVector3f VRHoldSpot(iPhysicsBody@ apBody, int alHand, const cVector3f &in avPalm, const tString &in asWhat)
++	{
++		cMatrixf mtxBody = apBody.GetLocalMatrix();
++		if(mbVRHoldSet == false)
++		{
++			mbVRHoldSet = true;
++			float fFromFocus = (avPalm - mvFocusPos).Length();
++			float fFromThing = 0.0f;
++			cBoundingVolume@ pBox = apBody.GetBoundingVolume();
++			if(pBox !is null)
++			{
++				cVector3f vLow = pBox.GetMin();
++				cVector3f vHigh = pBox.GetMax();
++				cVector3f vInBox = cVector3f(cMath_Clamp(avPalm.x, vLow.x, vHigh.x), cMath_Clamp(avPalm.y, vLow.y, vHigh.y), cMath_Clamp(avPalm.z, vLow.z, vHigh.z));
++				fFromThing = (avPalm - vInBox).Length();
++			}
++			bool bPalm = fFromFocus < 0.25f || fFromThing < gfVRHoldNearThing;
++			cVector3f vSpot = bPalm ? avPalm : mvFocusPos;
++			// (On its handle, where the object has one: a drawer's,
++			// VRHoldOnHandle.)
++			cVector3f vOnHandle;
++			bool bHandle = VRHoldOnHandle(apBody, vSpot, vOnHandle);
++			Log("BunkerVR: the spot held is " + (bPalm ? "the palm" : "where the game took hold") + " (the palm " + int(fFromFocus * 100.0f + 0.5f) +
++				" cm from there, " + int(fFromThing * 100.0f + 0.5f) + " cm from the thing's box)" +
++				(bHandle ? (", on its handle " + int((vOnHandle - vSpot).Length() * 100.0f + 0.5f) + " cm from it") : "") + "\n");
++			if(bHandle) vSpot = vOnHandle;
++			mvVRHoldPalmOff = avPalm - vSpot; // (the hand moves it from where it took hold, not from the handle)
++			mvVRHoldOnBody = cMath_MatrixMul(cMath_MatrixInverse(mtxBody), vSpot);
++			mfVRHoldBarWay = 0.0f; // (the way the hand lies along a bar: found at its first update, VRHoldSetBar)
++			mfVRHoldApart = 0.0f;
++			mfVRHoldStopWait = 0.0f;
++			mfVRHoldLastWanted = 0.0f;
++			mfVRHoldTurned = 0.0f;
++			VRBuzzHand(alHand, 0.03f, 0.4f);
++			cLuxProp@ pProp = cLux_ID_Prop(mPropID);
++			Log("BunkerVR: a hand takes hold of " + asWhat + " " + (pProp !is null ? pProp.GetName() : "?") + "\n");
++		}
++		cVector3f vSpot = cMath_MatrixMul(mtxBody, mvVRHoldOnBody);
++		cScript_SetGlobalVarInt("BunkerVR_DoorHand", alHand + 1);
++		cScript_SetGlobalVarInt("BunkerVR_DoorHand2", 0);
++		cScript_SetGlobalVarVector3f("BunkerVR_DoorGrip", vSpot);
++		cScript_SetGlobalVarVector3f("BunkerVR_DoorGripAxis", cVector3f(0.0f));
++		cScript_SetGlobalVarVector3f("BunkerVR_DoorGripOut", cVector3f(0.0f));
++		cScript_SetGlobalVarInt("BunkerVR_DoorStamp", cScript_GetGlobalVarInt("BunkerVR_DoorStamp") + 1);
++		return vSpot;
++	}
++
++	// The bar the hand holds at the spot (a drawer's handle, a wheel's rim):
++	// the hand closes around it and turns only about it, within limits
++	// either side of facing in (avOut: out of the object, towards the
++	// player), as on a door's bar (Prop_PlayerBody.hps VRHoldBar). Unlike a
++	// door's, it can be held either way around: the way the hand lay along
++	// it when it took hold (its fist's line, alHand's palm) is kept for the
++	// whole hold. Don't let the arms' script choose the way again every
++	// frame: a hand twisted past square to the bar would flip over. Set each
++	// update after VRHoldSpot.
++	void VRHoldSetBar(int alHand, const cVector3f &in avBar, const cVector3f &in avOut)
++	{
++		cVector3f vBar = cMath_Vector3Normalize(avBar);
++		if(mfVRHoldBarWay == 0.0f)
++		{
++			mfVRHoldBarWay = 1.0f;
++			cMatrixf mtxPalm;
++			if(VRPalmMatrix(alHand, mtxPalm))
++			{
++				cVector3f vRod = cMath_MatrixMul3x3(mtxPalm, cVector3f(0.0f, 0.866f, -0.5f)); // (the fist's line, as VRHoldBar has it)
++				if(cMath_Vector3Dot(vRod, vBar) < 0.0f) mfVRHoldBarWay = -1.0f;
++			}
++		}
++		cScript_SetGlobalVarVector3f("BunkerVR_DoorGripAxis", vBar * mfVRHoldBarWay);
++		cScript_SetGlobalVarVector3f("BunkerVR_DoorGripOut", avOut);
++	}
++
++	// The handle on what a hand takes hold of, nearest avNear (avOnHandle);
++	// false if it has none. None here; a drawer finds its own
++	// (PlayerState_Interact_Slide.hps).
++	bool VRHoldOnHandle(iPhysicsBody@ apBody, const cVector3f &in avNear, cVector3f &out avOnHandle)
++	{
++		avOnHandle = avNear;
++		return false;
++	}
++
++	// A VR hand's palm, turned as it is (the mod's roll 7011 left, 7012
++	// right); false without the mod.
++	bool VRPalmMatrix(int alHand, cMatrixf &out a_mtxPalm)
++	{
++		a_mtxPalm = cMatrixf_Identity;
++		cLuxPlayer@ pPlayer = cLux_GetPlayer();
++		cCamera@ pCam = pPlayer !is null ? pPlayer.GetCamera() : null;
++		if(pCam is null) return false;
++		float fRealRoll = pCam.GetRoll();
++		pCam.SetRoll(7010.0f);
++		cVector3f vStatus = pCam.GetMatrix().GetTranslation();
++		bool bKnown = vStatus.x > 12344.0f && vStatus.x < 12346.0f;
++		if(bKnown)
++		{
++			pCam.SetRoll(alHand == 0 ? 7011.0f : 7012.0f);
++			a_mtxPalm = pCam.GetMatrix();
++		}
++		pCam.SetRoll(fRealRoll);
++		return bKnown;
++	}
++
++	// Pulled off the spot held for long enough: true (with a light buzz),
++	// and the caller lets go.
++	bool VRHoldPulledOff(int alHand, const cVector3f &in avPalm, const cVector3f &in avSpot, float afTimeStep)
++	{
++		if((avPalm - avSpot).Length() > gfVRInteractLetGoDistance)	mfVRHoldApart += afTimeStep;
++		else													mfVRHoldApart = 0.0f;
++		if(mfVRHoldApart <= gfVRInteractLetGoTime) return false;
++		VRBuzzHand(alHand, 0.04f, 0.4f);
++		Log("BunkerVR: the hand is pulled off what it held, and lets go\n");
++		return true;
++	}
++
++	// The hand feels the object stop (its end, a jam, something in the way):
++	// asked to move fast last update (afWantedWas), it hardly did (afMoving),
++	// with the hand well off the spot (afGap, meters).
++	void VRHoldFeelStop(int alHand, float afWantedWas, float afMoving, float afGap, float afTimeStep)
++	{
++		if(mfVRHoldStopWait > 0.0f) mfVRHoldStopWait -= afTimeStep;
++		if(cMath_Abs(afWantedWas) < 0.3f || cMath_Abs(afMoving) > cMath_Abs(afWantedWas) * 0.2f || afGap < 0.03f) return;
++		if(mfVRHoldStopWait > 0.0f) return;
++		VRBuzzHand(alHand, 0.05f, 0.6f);
++		mfVRHoldStopWait = 0.35f;
++	}
++
++	// No hand on anything any more (the door's variables cleared: see VRHoldSpot).
++	void VRHoldClear()
++	{
++		if(mbVRHoldSet == false) return;
++		mbVRHoldSet = false;
++		cScript_SetGlobalVarInt("BunkerVR_DoorHand", 0);
++		cScript_SetGlobalVarInt("BunkerVR_DoorHand2", 0);
++	}
++
++	// Buzzes a hand (0 left, 1 right; the mod's roll 7064).
++	void VRBuzzHand(int alHand, float afSeconds, float afStrength)
++	{
++		cLuxPlayer@ pPlayer = cLux_GetPlayer();
++		cCamera@ pCam = pPlayer !is null ? pPlayer.GetCamera() : null;
++		if(pCam is null) return;
++		float fRealRoll = pCam.GetRoll();
++		cVector3f vRealPos = pCam.GetPosition();
++		pCam.SetPosition(cVector3f(float(alHand), afSeconds, afStrength));
++		pCam.SetRoll(7064.0f);
++		pCam.GetMatrix();
++		pCam.SetPosition(vRealPos);
++		pCam.SetRoll(fRealRoll);
++	}
+=26
++	// BunkerVR: the VR hand's hold (see VRHoldSpot).
++	[nosave] bool mbVRHoldSet = false;				// is the spot held known (the hold under way)?
++	[nosave] cVector3f mvVRHoldOnBody = cVector3f(0.0f);	// the spot held, in the body's own frame
++	[nosave] float mfVRHoldBarWay = 0.0f;			// the way the hand lies along the bar held (1 or -1; 0 not yet found; VRHoldSetBar)
++	[nosave] cVector3f mvVRHoldPalmOff = cVector3f(0.0f);	// the palm's offset from the spot held when it took hold (world; for a drawer's handle)
++	[nosave] float mfVRHoldApart = 0.0f;			// how long the hand has been pulled off it (seconds)
++	[nosave] float mfVRHoldStopWait = 0.0f;			// seconds until the stop may buzz again
++	[nosave] float mfVRHoldLastWanted = 0.0f;		// the speed asked for last update (for the stop)
++	[nosave] float mfVRHoldTurned = 0.0f;			// how far turned since the last tick (radians; wheels)
++
+end

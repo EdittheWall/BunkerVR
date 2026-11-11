@@ -1,0 +1,75 @@
+// BunkerVR: the finale by hand, the levels' side. Where the game tells the player to set the dynamite and the
+// detonator's handle to blow up the exit, the player does it with their hands instead of watching cutscenes; the
+// explosion goes off, the view darkens, and then the game's scene of Henri getting up plays. Included by
+// officer_hub.hps and the item test map, whose things have the same names. The hands' side is PlayerBodyHandler.hps
+// VRUpdateFinale; the two share the state through the global "BunkerVR_Finale" (the level keeps its own copy, which
+// is saved with it).
+//
+// In the headset, at the exit:
+// - the detonator handle brought to the top of the detonator fits in (the game's own use of it on Detonator_Proxy, its
+//   scene left out): the T-bar stands up on its rod, and the two wing nuts on the top are then done up by hand;
+// - the dynamite bundle brought to its place at the barricade is set down there (its use on Trigger_DynamiteBundleSlot,
+//   its scene left out), and the cable's free end is then taken and laid on it by hand, along the path the game's own
+//   scene lays it (detonator_cable_use, held at the hand's place on it);
+// - with both done, the T-bar pushed down hard fires it (the push's own animation, detonator_ignite, held at the
+//   hands' depth): the game's explosion at once; the view darkens, and the game's scene after the push
+//   (player_detonator_ignite) plays from where Henri is down, getting up.
+// The things' poses are the game's own animations held still (as its moving buttons hold theirs): the detonator's
+// fitting at its first frame (no handle: the rod down out of sight), its push at its first frame (the T-bar up, ready),
+// the cable's laying at its first and last frames.
+
+#include "custom/helpers/helper_bunkervr_finale_shared.hps" // (the state's bits, the animations' times, holding them)
+
+// The level's state shown: the detonator, the bundle and the cable posed as it says, the hands told (the global).
+// The detonator is always the animated one in the headset (the plain one, a moving button, and the game's push area
+// are the flat game's: the hands push the animated one's T-bar).
+void BunkerVR_FinaleShow(int alState)
+{
+	cScript_SetGlobalVarInt("BunkerVR_Finale", alState);
+	if ((alState & glBunkerVR_FinaleFired) != 0) return; // (as the game leaves them after the blast)
+	Entity_SetActive("Detonator", false);
+	Entity_SetActive("Detonator_InteractArea", false);
+	Entity_SetActive("Detonator_Animated", true);
+	if ((alState & glBunkerVR_FinaleHandle) != 0)
+		BunkerVR_FinaleHold("Detonator_Animated", "detonator_ignite", 0.0f);
+	else
+		BunkerVR_FinaleHold("Detonator_Animated", "detonator_fasten_handle", 0.0f);
+	Entity_SetActive("Detonator_DynamiteBundle", (alState & glBunkerVR_FinaleBundle) != 0);
+	BunkerVR_FinaleHold("DynamiteFuse", "detonator_cable_use", (alState & glBunkerVR_FinaleCable) != 0 ? gfBunkerVR_FinaleCableTo : gfBunkerVR_FinaleCableFrom);
+}
+
+// The state from the game's own flags, for a level played in the flat game (or saved without the "BunkerVR_Finale"
+// state): the handle in (flat: fitted and done up), the dynamite in (with its cable), the exit blown.
+int BunkerVR_FinaleFromGame(int alState, bool abHandle, bool abDynamite, bool abBlown)
+{
+	int lState = alState;
+	if (abHandle) lState |= glBunkerVR_FinaleHandle | glBunkerVR_FinaleTight;
+	if (abDynamite) lState |= glBunkerVR_FinaleBundle | glBunkerVR_FinaleCable;
+	if (abBlown) lState |= glBunkerVR_FinaleFired;
+	return lState;
+}
+
+// The T-bar pushed down with all done: the push's own animation goes on from the bottom of its stroke, as the game's
+// push plays it (asCallback: the level's, at its end).
+void BunkerVR_FinaleFireDetonator(const tString &in asCallback)
+{
+	Entity_PlayAnimation("Detonator_Animated", "detonator_ignite", 0.0f, false, true, asCallback);
+	cLuxMap@ pMap = cLux_GetCurrentMap();
+	iLuxEntity@ pDetonator = pMap !is null ? pMap.GetEntityByName("Detonator_Animated") : null;
+	cAnimationState@ pState = pDetonator !is null && pDetonator.GetMeshEntity() !is null ? pDetonator.GetMeshEntity().GetAnimationStateFromName("detonator_ignite") : null;
+	if (pState is null) return;
+	pState.SetActive(true);
+	pState.SetPaused(false);
+	pState.SetSpeed(1.0f);
+	pState.SetTimePosition(gfBunkerVR_FinalePushTo);
+}
+
+// The T-bar pushed down without firing: with the handle in but no dynamite on the cable, sparks at the detonator and
+// at the dynamite's empty holder (as the flat game's plain detonator makes them, OnConnectionStateChange_Detonator_Trigger);
+// pushed too slowly with all done, only the clunk (the hands' side plays it).
+void BunkerVR_FinaleDud(int alState)
+{
+	if ((alState & glBunkerVR_FinaleCable) != 0) return;
+	ParticleSystem_CreateAtEntity("detonator_spark", "sparks_smaller.ps", "detonator_particle_origin", false);
+	ParticleSystem_CreateAtEntity("dynamite_holder_spark", "sparks_smaller.ps", "dynamite_holder_particle_origin", false);
+}

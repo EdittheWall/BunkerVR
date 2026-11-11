@@ -1,0 +1,40 @@
+BunkerVR patch 1
+file script/custom/modules/ItemHandler.hps
+from 587c5c3dca7b2191b548be4e64a1ba0c9f89d845fbd4b630ad2c8e533ef4b4ff 133743
+to ce836e5abe32c9e936b8bb09279bf5e5c07c68f2f5068164a80d6af6a0937672 135060
+=3715
++	// BunkerVR: is the VR mod running? It answers through the camera: after
++	// setting a special roll value, reading the camera's matrix returns the
++	// mod's data (12345 as its first number) instead. Without the mod the
++	// answer does not match and everything works as normal.
++	bool VRModActive()
++	{
++		cLuxPlayer@ pPlayer = cLux_GetPlayer();
++		cCamera@ pCam = pPlayer !is null ? pPlayer.GetCamera() : null;
++		if (pCam is null) return false;
++		
++		float fRealRoll = pCam.GetRoll();
++		pCam.SetRoll(7006.0f);
++		cVector3f vStatus = pCam.GetMatrix().GetTranslation();
++		pCam.SetRoll(fRealRoll);
++		
++		return vStatus.x > 12344.0f && vStatus.x < 12346.0f && vStatus.y > 0.5f;
++	}
++	
++	//------------------------------------------------------------
++	
+=89
++						
++						// BunkerVR: in VR the player's own hand replaces the
++						// animation, so the item is in the hand and ready at once.
++						if (VRModActive()) bAnimPlaying = false;
+=40
++						
++						// BunkerVR: put away at once, too.
++						if (VRModActive()) bAnimPlaying = false;
+=712
++			// BunkerVR: in the headset the bullet count is shown at the pouch by the mod, with this picture,
++			// instead of on the screen. The fuel's and the bottles' counts stay here.
++			if(cVR_Active() && msItemCountDisplay_ImageColor == "inventory_item_bullet") return;
++			
+end

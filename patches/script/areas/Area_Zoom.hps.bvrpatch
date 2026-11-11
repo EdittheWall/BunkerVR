@@ -1,0 +1,21 @@
+BunkerVR patch 1
+file script/areas/Area_Zoom.hps
+from 7d07f1c01b0bd3486f69b529c43d29fc3165fa30283bfcf64a982f9097339ea4 6020
+to 78057998bab6896e7ac53c9a822724d016c611f3f1c46964e379ec2abe38a4a3 6753
+=105
++		// BunkerVR: in a headset the map stays on the wall for the player to lean in to. The game's
++		// zoomed view moves the camera by itself, draws its labels where a flat screen would have them,
++		// and is left only by a button nothing names. What using it does in the game still runs: the
++		// level's own callback (the map found), and the one for coming up to it (a hint).
++		if(cVR_Active())
++		{
++			tString sVRMethod = "void " + msZoomedCallback + "(int alState)";
++			if(msZoomedCallback != "" && cLux_GetCurrentMap().ScriptMethodExists(sVRMethod) && cLux_GetCurrentMap().ScriptPrepare(sVRMethod))
++			{
++				cLux_GetCurrentMap().SetArgInt(0, 1);
++				cLux_GetCurrentMap().ScriptExecute();
++			}
++			return false;
++		}
++		
+end

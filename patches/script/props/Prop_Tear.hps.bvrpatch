@@ -1,0 +1,9 @@
+BunkerVR patch 1
+file script/props/Prop_Tear.hps
+from 29dfd700c863c638caa08a752dce991cd733301e83506ca30aec4aa92ca60368 25457
+to a63d6be7ab372d87b25132df18d766c862b48b76755b9258079499f84c957bd7 25679
+=65
++		// BunkerVR: stored on the object itself for a hand's own hold (VRUpdateFreeHand
++		// in PlayerBodyHandler.hps), which drags a heavy object as the grab does.
++		mBaseObj.SetVarBool("BunkerVR_IsHeavy", mbGrab_IsHeavy);
+end

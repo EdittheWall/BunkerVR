@@ -1,0 +1,35 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl"
+      },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+    },
+    {
+      "name": "player",
+      "inherits": "base",
+      "displayName": "Player build",
+      "description": "What BunkerVR Setup installs: no developer menu or keys, C runtime linked in.",
+      "cacheVariables": { "BUNKERVR_PLAYER_BUILD": "ON" }
+    },
+    {
+      "name": "dev",
+      "inherits": "base",
+      "displayName": "Developer build",
+      "description": "With the developer menu (Y) and the developer keys."
+    }
+  ],
+  "buildPresets": [
+    { "name": "player", "configurePreset": "player" },
+    { "name": "dev", "configurePreset": "dev" }
+  ]
+}

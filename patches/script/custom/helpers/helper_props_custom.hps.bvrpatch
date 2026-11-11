@@ -1,0 +1,18 @@
+BunkerVR patch 1
+file script/custom/helpers/helper_props_custom.hps
+from 84be37f32e9904180e5dde6019e1a4140f8798e924986897def7923f55440441 20292
+to 1511fdc84730ba98eeea19cc7cc15336436bb930e109e6e52ba814bd0559fa76 20912
+=628
++	// BunkerVR: in the headset, a fuse screwed into the box by hand
++	// (VRUpdateFit in PlayerBodyHandler.hps; "BunkerVR_FitIn") plays no scene
++	// (the scene takes over the body and screws the fuse in on its own). A
++	// moment later, on a timer outside the game's use as the scene's own timer
++	// does it, the box's own fuse is put where the held one is and the held one
++	// goes. With the use button the scene plays as usual.
++	if (cVR_Active() && cScript_GetGlobalVarInt("BunkerVR_FitIn") == 1)
++	{
++		pMap.AddTimer(Item_GetHeld(eItemHandlerHand_Right), 0.05f, "$_Fuse_OnTimer_PlaceInFuseBox");
++		return;
++	}
++	
+end

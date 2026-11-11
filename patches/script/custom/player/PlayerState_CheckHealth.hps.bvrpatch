@@ -1,0 +1,41 @@
+BunkerVR patch 1
+file script/custom/player/PlayerState_CheckHealth.hps
+from b82ab90f24549a9543633ce7833f679e08e6fbb1e1951cef55a7ec4cca09f103 21884
+to 6959f75e453b0384565b315cab8a25e825cd3de940ef9328f984225f5fc7d5d9 22979
+=133
++	// BunkerVR: is the VR mod running? It answers through the camera: after
++	// setting a special roll value, reading the camera's matrix returns the
++	// mod's data (12345 as its first number) instead.
++	bool VRCheckHealthModActive()
++	{
++		cLuxPlayer@ pVRPlayer = cLux_GetPlayer();
++		cCamera@ pVRCam = pVRPlayer !is null ? pVRPlayer.GetCamera() : null;
++		if (pVRCam is null) return false;
++		
++		float fVRRealRoll = pVRCam.GetRoll();
++		pVRCam.SetRoll(7006.0f);
++		cVector3f vVRStatus = pVRCam.GetMatrix().GetTranslation();
++		pVRCam.SetRoll(fVRRealRoll);
++		
++		return vVRStatus.x > 12344.0f && vVRStatus.x < 12346.0f;
++	}
++	
++	//------------------------------------------------------------
++	
+=18
+-3
++		// BunkerVR: not in the headset: its view cannot zoom, and the blur
++		// around the hand would blur the room in front of the eyes.
++		if (VRCheckHealthModActive() == false)
++		{
++			float fDesiredFOV = 1.019819f/cLux_GetPlayer().GetDefaultFOV(); //FOV 90=1.019819f 100=1.184201f
++			cLux_GetPlayer().FadeCameraFOVMulTo(ePlayerFOVMul_CheckHealth, fDesiredFOV, 1.f/(gfFadeInTime));
++			mlDofId = Effect_DoF_Start(0.f, 0.25f, 1.f, gfFadeInTime);
++		}
+=55
++		
++		// BunkerVR: the first-time animation moves the view by itself, which
++		// is no good in a headset. With the VR mod running it is left out.
++		if (VRCheckHealthModActive())
++			mbFirstTime = false;
+end

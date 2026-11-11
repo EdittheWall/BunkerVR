@@ -1,0 +1,429 @@
+BunkerVR patch 1
+file script/player/PlayerState_Interact_ReadDogTag.hps
+from ab9862d3d3aae3f1e46533665ea92e3792092466c028d5abcb03dce65a1f7a54 27914
+to 5536e91a000be8099878469c7a95c91cbb41ffaece5d0258ffad48278542b35a 46966
+=8
++#include "custom/helpers/helper_bunkervr.hps" // (BunkerVR: holding it in the hand)
+=30
++// BunkerVR: a dogtag held in the VR hand that took it (see VRSetupHeld).
++const float gfVRReadPinchMost = 0.06f;	// up to this tall to its center (meters, its own size) it is pinched (a dogtag); taller (the code sign), held in the whole hand
++const float gfVRReadHeldIn = 0.016f;	// a pinched one goes this far into the pinch (meters): about a quarter of it, the way a coin is held; much less and it stands off the fingertips
++const float gfVRReadPinchStale = 1.0f;	// where the pinch is (Prop_PlayerBody.hps VRNoteTagPinch) is believed for this long (seconds)
++const float gfVRReadBackNear = 0.4f;	// its back is read only when the eyes see it from nearer than this (meters)...
++const float gfVRReadBackLook = 0.5f;	// ...for this long (seconds)
++const float gfVRReadGlideIn = 0.2f;		// seconds to come from where it lay into the hand
++const float gfVRReadLightOff = 0.12f;	// the game's reading light this far from it, towards the eyes (meters)
++const float gfVRReadLetGoCurl = 0.3f;	// let go of when that hand's fingers open past this (0 open, 1 a fist)
++
+=77
+-1
++		// BunkerVR: no prompts while the tag is held in the VR hand, so only the
++		// hints show (its label says to turn it to read).
++		mReadable.SetupPrompts(!cVR_Active(), !cVR_Active(), !cVR_Active());
++		mbVRHeld = cVR_Active(); // BunkerVR: held in the VR hand
+=75
++
++		VRSetupHeld(); // BunkerVR
+=12
+-1
++		// (BunkerVR: no blur over both eyes in the headset.)
++		if(mbVRHeld == false)
++			mlDepthOfFieldID = Effect_DoF_Start(0, mfDistanceFromCamera * gfReadableDistScale + 0.075f, 1, 1);
+=75
+-1
++		// (BunkerVR: kept in the headset, since the tag is held well away from the eyes.)
++		if(mbVRHeld == false)
++			pCamera.SetNearClipPlane(gfReadableNearClipPlane);
+=7
+-1
++	{
+=1
++		if(mbVRHeld) cScript_SetGlobalVarInt("BunkerVR_TagHand", 0); // (BunkerVR: the hand's own fingers again)
++		if(mbVRHeld) cScript_SetGlobalVarInt("BunkerVR_ReadHeldHand", 0); // (BunkerVR: see VRSayHeldInPalm)
+=9
++		// (BunkerVR: with no blur, the field of view set when the dogtag was
++		// taken is put back here.)
++		else if(mbVRHeld)
++			Player_FadeFOVToDefault(4.0f);
+=108
++		// BunkerVR: held in the VR hand instead (its own turning and placing,
++		// the same sides read; see VRSetupHeld).
++		if(mbVRHeld)
++		{
++			VRUpdateHeld(afTimeStep);
++		}
++		else
++		{
+=16
++		}
+=244
++	//------------------------------------------------------------
++
++	/////////////////////////////////////////
++	// BunkerVR: held in the VR hand
++	/////////////////////////////////////////
++
++	// A dogtag taken with a VR hand is held in that hand as a physical
++	// object, not brought up before the eyes and moved with the head.
++	// Turning the hand over shows its back, which reads its code: the side
++	// the eyes see stands in for the game's turning by the mouse (mfRotX
++	// into UpdateRotation: front within 60 degrees, back past 120). Let go
++	// of (the grip), it goes back where it lay or, once read, shrinks into
++	// the hand as it goes into the pocket (the game keeps it then); the
++	// cancel and menu buttons do the same. No blur, and the near clip plane
++	// and the game's key hints are left alone. The other things read this
++	// way (the generator room's code sign) work the same.
++	// - It is held at its own size, as it lay.
++	// - A dogtag is pinched: the hand takes the pose "Holding a dogtag" (the
++	//   mod's hand poses tool) and the tag's lower edge goes where that
++	//   pose's thumb and first finger meet (Prop_PlayerBody.hps
++	//   VRNoteTagPinch), its front towards the thumb, its top out of the
++	//   hand. The code sign, a card, stands out of the fist.
++	// - The player walks and turns while holding it (the sticks are let
++	//   through; the body follows the head in this state, see
++	//   PlayerBodyHandler.hps VRFollowStateOk).
++	// - Its back counts as seen (its code read) once the eyes have seen it
++	//   from nearer than gfVRReadBackNear for gfVRReadBackLook, with a tick in
++	//   the hand.
++	void VRSetupHeld()
++	{
++		if(mbVRHeld == false) return;
++		cLuxProp@ pProp = cLux_ID_Prop(mPropID);
++		cLuxProp@ pOpenProp = cLux_ID_Prop(mOpenPropID);
++		if(pProp is null || pOpenProp is null)
++		{
++			mbVRHeld = false;
++			return;
++		}
++
++		mReadable.SetupPrompts(false, false, false);
++
++		// The hand that took it (the one squeezing; the right one if none is).
++		cVector3f vPalm;
++		mlVRHand = 1;
++		VRGrabbingHand(mlVRHand, vPalm);
++
++		// How big it is held (its own size: the game's own pop-up scale, 1 for
++		// all of them), and how tall it is (along its own z) from its body's
++		// own box.
++		mfVRScale = mfNoteScale > 0.1f ? mfNoteScale : 1.0f;
++		mfVRHalfHeight = 0.018f;
++		iPhysicsBody@ pBody = pOpenProp.GetBodyNum() > 0 ? pOpenProp.GetBody(0) : null;
++		cBoundingVolume@ pBox = pBody !is null ? pBody.GetBoundingVolume() : null;
++		if(pBox !is null)
++		{
++			float fHeight = cMath_Abs(pBox.GetLocalMax().z - pBox.GetLocalMin().z);
++			if(fHeight > 0.01f && fHeight < 0.6f) mfVRHalfHeight = fHeight * 0.5f;
++		}
++		mbVRPinched = mfVRHalfHeight * mfVRScale <= gfVRReadPinchMost;
++		mfVRBackTime = 0.0f;
++
++		// It starts where it lay, as big as it lay, and comes into the hand.
++		cMatrixf mtxLay = pProp.GetMatrix();
++		m_mtxVRLayTurn = VRPureTurn(mtxLay);
++		mvVRLayMiddle = mtxLay.GetTranslation();
++		m_mtxVRShownTurn = m_mtxVRLayTurn;
++		mvVRShownMiddle = mvVRLayMiddle;
++		mfVRShownScale = 1.0f;
++		m_mtxVRFromTurn = m_mtxVRShownTurn;
++		mvVRFromMiddle = mvVRShownMiddle;
++		mfVRFromScale = mfVRShownScale;
++		m_mtxVRHandTurn = m_mtxVRShownTurn;
++		mvVRHandMiddle = mvVRShownMiddle;
++		mbVRHandKnown = false;
++		mbVRPuttingAway = false;
++		mbVRBackSeen = false;
++		mfVRTimer = 0.0f;
++		VRShow(pOpenProp);
++		Log("BunkerVR: " + pProp.GetName() + " is taken in the " + (mlVRHand == 0 ? "left" : "right") + " hand, held at " +
++			int(mfVRScale * 100.0f + 0.5f) + "% of its size (" + int(mfVRHalfHeight * mfVRScale * 200.0f + 0.5f) + " cm tall), " +
++			(mbVRPinched ? "pinched" : "in the whole hand") + "\n");
++	}
++
++	// Each update while it is held (or put away), in place of the game's
++	// moving and turning of it.
++	void VRUpdateHeld(float afTimeStep)
++	{
++		cLuxProp@ pOpenProp = cLux_ID_Prop(mOpenPropID);
++		if(pOpenProp is null) return;
++		mfVRTimer += afTimeStep;
++
++		// Where the hand would hold it now (while its palm isn't tracked, it
++		// waits where it was last).
++		cMatrixf mtxPalm;
++		bool bPalm = VRReadPalm(mlVRHand, mtxPalm);
++		if(bPalm)
++		{
++			VRPlaceInHand(mlVRHand, mtxPalm, m_mtxVRHandTurn, mvVRHandMiddle);
++			mbVRHandKnown = true;
++			// Where it is held, in the palm's frame, for the hand poses tool
++			// (a custom placement starts from there: Prop_PlayerBody.hps
++			// VRTagPlacement).
++			if(mbVRPinched)
++			{
++				cMatrixf mtxToPalm = cMath_MatrixInverse(mtxPalm);
++				cScript_SetGlobalVarVector3f("BunkerVR_TagShownMiddle", cMath_MatrixMul(mtxToPalm, mvVRHandMiddle));
++				cScript_SetGlobalVarVector3f("BunkerVR_TagShownY", cMath_MatrixMul3x3(mtxToPalm, cMath_MatrixMul3x3(m_mtxVRHandTurn, cVector3f(0.0f, 1.0f, 0.0f))));
++				cScript_SetGlobalVarVector3f("BunkerVR_TagShownZ", cMath_MatrixMul3x3(mtxToPalm, cMath_MatrixMul3x3(m_mtxVRHandTurn, cVector3f(0.0f, 0.0f, 1.0f))));
++				cScript_SetGlobalVarFloat("BunkerVR_TagShownTime", float(cEngine_GetGameTime()));
++			}
++		}
++		cVector3f vEyes = VRHeadPosition();
++
++		// Put away (let go of below, or the game's cancel or menu button).
++		if(mbLeavingState)
++		{
++			VRUpdatePutAway(pOpenProp, vEyes, afTimeStep);
++			return;
++		}
++
++		// Pinched: the body script poses that hand for it and reports where
++		// the pinch is (Prop_PlayerBody.hps VRTagHand, VRNoteTagPinch).
++		if(mbVRPinched)
++		{
++			cScript_SetGlobalVarInt("BunkerVR_TagHand", mlVRHand + 1);
++			cScript_SetGlobalVarFloat("BunkerVR_TagTime", float(cEngine_GetGameTime()));
++		}
++
++		// Let go of (that hand's own fingers opened, whatever the other hand
++		// does; not the game's interact, which either hand can hold), once it
++		// has come into the hand: put away as the game does (LeaveState: its
++		// sound, its text hidden).
++		if(mbEnteringState == false && BunkerVR_HandCurl(mlVRHand) < gfVRReadLetGoCurl)
++		{
++			LeaveState();
++			VRUpdatePutAway(pOpenProp, vEyes, afTimeStep);
++			return;
++		}
++
++		// Coming into the hand, then held.
++		if(mbEnteringState)
++		{
++			float fT = cMath_Clamp(mfVRTimer / gfVRReadGlideIn, 0.0f, 1.0f);
++			VRBetween(m_mtxVRHandTurn, mvVRHandMiddle, mfVRScale, fT * fT * (3.0f - 2.0f * fT));
++			if(mfVRTimer >= gfVRReadGlideIn) mbEnteringState = false;
++		}
++		else
++		{
++			m_mtxVRShownTurn = m_mtxVRHandTurn;
++			mvVRShownMiddle = mvVRHandMiddle;
++			mfVRShownScale = mfVRScale;
++			if(bPalm) VRSayHeldInPalm(mtxPalm, pOpenProp);
++		}
++		VRShow(pOpenProp);
++		VRLight(vEyes);
++
++		// Which side the eyes see, as the game's turning by the mouse (its
++		// front while it comes). Its back counts once the eyes have seen it
++		// from near enough for long enough; until then it is shown to the game
++		// as edge on (neither side).
++		float fSide = mbEnteringState ? 0.0f : VRSideSeen(vEyes);
++		float fBack = cMath_ToRad(120.0f);
++		bool bBackNear = fSide > fBack && (vEyes - mvVRShownMiddle).Length() < gfVRReadBackNear;
++		mfVRBackTime = bBackNear ? mfVRBackTime + afTimeStep : 0.0f;
++		if(fSide > fBack && mfVRBackTime < gfVRReadBackLook) fSide = cMath_ToRad(90.0f);
++		mfRotX = fSide;
++		mfRotInputX = 0.0f;
++		mfRotInputY = 0.0f;
++		UpdateRotation(afTimeStep);
++		if(mbVRBackSeen == false && mfRotX > fBack)
++		{
++			mbVRBackSeen = true;
++			VRBuzzHand(mlVRHand, 0.02f, 0.35f);
++			Log("BunkerVR: its back is seen (read, as the game's turning of it)\n");
++		}
++	}
++
++	// Put away: back where it lay, or, read (the game keeps it: its code is
++	// in the sketchbook), shrinking into the hand; over the game's own time
++	// (gfReadablePropHideTime), then the game's way out of the state.
++	void VRUpdatePutAway(cLuxProp@ apOpenProp, const cVector3f &in avEyes, float afTimeStep)
++	{
++		if(mbVRPuttingAway == false)
++		{
++			mbVRPuttingAway = true;
++			cScript_SetGlobalVarInt("BunkerVR_TagHand", 0); // (the hand's own fingers again)
++			cScript_SetGlobalVarInt("BunkerVR_ReadHeldHand", 0); // (stop placing it in the hand after the arms: see VRSayHeldInPalm)
++			cLuxProp@ pProp = cLux_ID_Prop(mPropID);
++			cScript_RunGlobalFunc(pProp.GetName(), "cScrPropReadableDogTag", "_Global_GetItemRead");
++			mbVRKept = cScript_GetGlobalReturnBool();
++			m_mtxVRFromTurn = m_mtxVRShownTurn;
++			mvVRFromMiddle = mvVRShownMiddle;
++			mfVRFromScale = mfVRShownScale;
++			mfStateTimer = 0.0f;
++			Log("BunkerVR: " + pProp.GetName() + " is let go of" + (mbVRKept ? ": kept (read)" : ", and goes back where it lay (not read)") + "\n");
++		}
++		mfStateTimer += afTimeStep;
++		float fT = mfStateTimer / gfReadablePropHideTime;
++		if(fT >= 1.0f)
++		{
++			mBaseObj.mpPlayer.ChangeState(mlPreviousState);
++			return;
++		}
++		fT = fT * fT * (3.0f - 2.0f * fT);
++		if(mbVRKept)	VRBetween(m_mtxVRHandTurn, mvVRHandMiddle, 0.01f, fT);
++		else			VRBetween(m_mtxVRLayTurn, mvVRLayMiddle, 1.0f, fT);
++		VRShow(apOpenProp);
++		VRLight(avEyes);
++	}
++
++	// Shown part of the way (afT, 0 to 1) from where the glide began
++	// (m_mtxVRFromTurn...) to a_mtxTurn, avMiddle, afScale.
++	void VRBetween(const cMatrixf &in a_mtxTurn, const cVector3f &in avMiddle, float afScale, float afT)
++	{
++		m_mtxVRShownTurn = BunkerVR_Slerp(afT, m_mtxVRFromTurn, a_mtxTurn); // (BunkerVR_Slerp avoids the engine's NaN)
++		m_mtxVRShownTurn.SetTranslation(cVector3f(0.0f));
++		mvVRShownMiddle = mvVRFromMiddle + (avMiddle - mvVRFromMiddle) * afT;
++		mfVRShownScale = mfVRFromScale + (afScale - mfVRFromScale) * afT;
++	}
++
++	// How far its front (its own y) is turned from the eyes, where it is
++	// shown (radians, 0 to pi): the game's turning by the mouse, mfRotX.
++	float VRSideSeen(const cVector3f &in avEyes)
++	{
++		cVector3f vToEyes = avEyes - mvVRShownMiddle;
++		if(vToEyes.Length() < 0.01f) return 0.0f;
++		cVector3f vFront = cMath_MatrixMul3x3(m_mtxVRShownTurn, cVector3f(0.0f, 1.0f, 0.0f));
++		return cMath_ACos(cMath_Clamp(cMath_Vector3Dot(vFront, cMath_Vector3Normalize(vToEyes)), -1.0f, 1.0f));
++	}
++
++	// Reports where it is held, in the frame of the palm it was placed from
++	// (a_mtxPalm), for the body script to put it there again once the arms
++	// have been placed (Prop_PlayerBody.hps VRUpdateReadHeld). Placed only
++	// here, in this state's update, from the palm as the mod saw it then, it
++	// would trail an update's walk behind the drawn hand, which is placed
++	// after the game has moved the player. Only while it is held (not as it
++	// comes into the hand or is put away).
++	void VRSayHeldInPalm(const cMatrixf &in a_mtxPalm, cLuxProp@ apOpenProp)
++	{
++		cMatrixf mtxToPalm = cMath_MatrixInverse(a_mtxPalm);
++		cScript_SetGlobalVarID("BunkerVR_ReadHeldProp", apOpenProp.GetID());
++		cScript_SetGlobalVarVector3f("BunkerVR_ReadHeldMiddle", cMath_MatrixMul(mtxToPalm, mvVRShownMiddle));
++		cScript_SetGlobalVarVector3f("BunkerVR_ReadHeldY", cMath_MatrixMul3x3(mtxToPalm, cMath_MatrixMul3x3(m_mtxVRShownTurn, cVector3f(0.0f, 1.0f, 0.0f))));
++		cScript_SetGlobalVarVector3f("BunkerVR_ReadHeldZ", cMath_MatrixMul3x3(mtxToPalm, cMath_MatrixMul3x3(m_mtxVRShownTurn, cVector3f(0.0f, 0.0f, 1.0f))));
++		cScript_SetGlobalVarInt("BunkerVR_ReadHeldHand", mlVRHand + 1);
++		cScript_SetGlobalVarFloat("BunkerVR_ReadHeldTime", float(cEngine_GetGameTime()));
++	}
++
++	// Puts the held object (its open model) where it is shown.
++	void VRShow(cLuxProp@ apOpenProp)
++	{
++		apOpenProp.SetMeshScaleMul(cVector3f(mfVRShownScale));
++		cMatrixf mtx = m_mtxVRShownTurn;
++		mtx.SetTranslation(mvVRShownMiddle);
++		apOpenProp.SetMatrix(mtx);
++	}
++
++	// The game's reading light (made in OnEnterState) between it and the eyes.
++	void VRLight(const cVector3f &in avEyes)
++	{
++		iLight@ pLight = cLux_ID_Light(m_idLight);
++		if(pLight is null) return;
++		cVector3f vToEyes = avEyes - mvVRShownMiddle;
++		if(vToEyes.Length() > 0.01f) pLight.SetPosition(mvVRShownMiddle + cMath_Vector3Normalize(vToEyes) * gfVRReadLightOff);
++	}
++
++	// Where it is held in a hand whose palm is at a_mtxPalm. Pinched (a
++	// dogtag): its lower edge in the pinch the body script found, in the
++	// palm's frame (Prop_PlayerBody.hps VRNoteTagPinch), its front
++	// (its own y) towards the thumb, its top (its own z) out of the hand.
++	// Otherwise (the code sign; or a pinch not known yet): out of the top of
++	// the fist, its front out of the palm (helper_bunkervr.hps
++	// BunkerVR_ReadablePlaceInHand). At its held size.
++	void VRPlaceInHand(int alHand, const cMatrixf &in a_mtxPalm, cMatrixf &out a_mtxTurn, cVector3f &out avMiddle)
++	{
++		float fHalf = mfVRHalfHeight * mfVRScale;
++		float fNow = float(cEngine_GetGameTime());
++		// Its own placement from the hand poses tool, if one is set
++		// (Prop_PlayerBody.hps VRTagPlacement): its center and its own y and z
++		// in the palm's frame.
++		if(mbVRPinched && cMath_Abs(fNow - cScript_GetGlobalVarFloat("BunkerVR_TagGripTime" + alHand)) <= 0.25f)
++		{
++			cVector3f vY = cMath_MatrixMul3x3(a_mtxPalm, cScript_GetGlobalVarVector3f("BunkerVR_TagGripY" + alHand));
++			cVector3f vZ = cMath_MatrixMul3x3(a_mtxPalm, cScript_GetGlobalVarVector3f("BunkerVR_TagGripZ" + alHand));
++			if(vY.Length() > 0.5f && vZ.Length() > 0.5f)
++			{
++				vY.Normalize();
++				vZ.Normalize();
++				a_mtxTurn = cMath_MatrixUnitVectors(cMath_Vector3Cross(vY, vZ), vY, vZ, cVector3f(0.0f));
++				avMiddle = cMath_MatrixMul(a_mtxPalm, cScript_GetGlobalVarVector3f("BunkerVR_TagGripMiddle" + alHand));
++				return;
++			}
++		}
++		if(mbVRPinched && cMath_Abs(fNow - cScript_GetGlobalVarFloat("BunkerVR_TagPinchTime" + alHand)) <= gfVRReadPinchStale &&
++		   BunkerVR_TagPlaceInPinch(a_mtxPalm, cScript_GetGlobalVarVector3f("BunkerVR_TagPinch" + alHand), cScript_GetGlobalVarVector3f("BunkerVR_TagFace" + alHand),
++									cScript_GetGlobalVarVector3f("BunkerVR_TagOut" + alHand), fHalf, gfVRReadHeldIn, a_mtxTurn, avMiddle)) return;
++		BunkerVR_ReadablePlaceInHand(alHand, a_mtxPalm, fHalf, mfVRArmScale, a_mtxTurn, avMiddle);
++	}
++
++	// A matrix's rotation alone, made orthonormal again (helper_bunkervr.hps).
++	cMatrixf VRPureTurn(const cMatrixf &in a_mtx)
++	{
++		return BunkerVR_PureTurn(a_mtx);
++	}
++
++	// Where a VR palm is, as the drawn hand is, and how big the arms are drawn
++	// (helper_bunkervr.hps BunkerVR_ReadFollowedPalm). False when it isn't
++	// tracked.
++	bool VRReadPalm(int alHand, cMatrixf &out a_mtxPalm)
++	{
++		float fArmScale;
++		if(BunkerVR_ReadFollowedPalm(alHand, a_mtxPalm, fArmScale) == false) return false;
++		mfVRArmScale = fArmScale;
++		return true;
++	}
++
++	// Where the eyes are: the real head (the mod's roll 7006: is it tracked;
++	// 7005: where), else the game's camera.
++	cVector3f VRHeadPosition()
++	{
++		cLuxPlayer@ pPlayer = cLux_GetPlayer();
++		cCamera@ pCam = pPlayer !is null ? pPlayer.GetCamera() : null;
++		if(pCam is null) return mvVRShownMiddle;
++		cVector3f vHead = pCam.GetPosition();
++		float fRealRoll = pCam.GetRoll();
++		pCam.SetRoll(7006.0f);
++		cVector3f vStatus = pCam.GetMatrix().GetTranslation();
++		if(vStatus.x > 12344.0f && vStatus.x < 12346.0f && vStatus.y > 0.5f)
++		{
++			pCam.SetRoll(7005.0f);
++			vHead = pCam.GetMatrix().GetTranslation();
++		}
++		pCam.SetRoll(fRealRoll);
++		return vHead;
++	}
++
+=90
++			// (BunkerVR: held in the VR hand, it is turned by the hand alone,
++			// and the sticks walk and turn the player while it is held, as when
++			// the game puts it away above.)
++			if(mbVRHeld)
++				return true;
++
+=241
++	//////////////////////////////////////
++	// BunkerVR: held in the VR hand (see VRSetupHeld)
++	[nosave] bool mbVRHeld = false;				// held in a VR hand, not the game's way
++	[nosave] int mlVRHand = 1;					// which (0 left, 1 right)
++	[nosave] float mfVRTimer = 0.0f;			// seconds since it was taken
++	[nosave] float mfVRScale = 1.0f;			// how big it is held, times its own size
++	[nosave] float mfVRHalfHeight = 0.018f;		// half its own height (meters, along its own z)
++	[nosave] float mfVRArmScale = 1.0f;			// how big the arms are drawn (the mod's roll 7010)
++	[nosave] bool mbVRHandKnown = false;		// has its place in the hand been found yet?
++	[nosave] cMatrixf m_mtxVRHandTurn;			// its place in the hand: turned...
++	[nosave] cVector3f mvVRHandMiddle;			// ...and its middle
++	[nosave] cMatrixf m_mtxVRShownTurn;			// where it is shown: turned...
++	[nosave] cVector3f mvVRShownMiddle;			// ...its middle...
++	[nosave] float mfVRShownScale = 1.0f;		// ...and how big
++	[nosave] cMatrixf m_mtxVRFromTurn;			// where a glide began: turned...
++	[nosave] cVector3f mvVRFromMiddle;			// ...its middle...
++	[nosave] float mfVRFromScale = 1.0f;		// ...and how big
++	[nosave] cMatrixf m_mtxVRLayTurn;			// where it lay: turned...
++	[nosave] cVector3f mvVRLayMiddle;			// ...and its middle
++	[nosave] bool mbVRPuttingAway = false;		// being put away?
++	[nosave] bool mbVRKept = false;				// put away read (kept), not back where it lay?
++	[nosave] bool mbVRBackSeen = false;			// its back seen yet (noted in the log)?
++	[nosave] bool mbVRPinched = false;			// pinched (a dogtag), not in the whole hand
++	[nosave] float mfVRBackTime = 0.0f;			// seconds its back has been seen from near enough
++
+end

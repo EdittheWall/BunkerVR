@@ -1,0 +1,361 @@
+// BunkerVR: the shotgun worked by hand. The left hand on the pump steers the
+// aim, the pump is worked by hand after every shot, and shells come from the
+// hip pouch and are loaded into the loading port at any time, with no button.
+// Included by the shotgun's own script (Prop_Shotgun.hps), which places its
+// parts, and by the script tests. The game's shotgun (Prop_Shotgun.hps,
+// PlayerState_UsingShotgun_Aim.hps) is a pump action: 6 shells in its tube,
+// one in the chamber, 9 pellets a shot. Its own fire animations pump it by
+// themselves (the fore-end 8 cm back and forward, the spent shell thrown out,
+// the next one put in; even its "empty" one, after the hammer falls); in the
+// headset the hand does this instead. The action locks shut while there is
+// nothing for the pump to do, so it can't be pumped endlessly, and a shell
+// goes into the tube whenever there is room. Less than the full stroke opens
+// and shuts it (gfBunkerVR_PumpOpenAt, gfBunkerVR_PumpShutAt), and a hand
+// drifting slowly along the barrel (unseen: the drawn hand stays on the
+// fore-end) or a jump of the tracking doesn't work it.
+
+//------------------------------------------------------------
+
+const float gfBunkerVR_PumpTravel = 0.08f;		// the fore-end's travel back (8 cm: the game's fire animation, its j_pump)
+const float gfBunkerVR_PumpOpenAt = 0.65f;		// pulled this far back (of the travel): the action is open...
+const float gfBunkerVR_PumpShutAt = 0.3f;		// ...and pushed back to this: it is shut again, the fore-end home
+const float gfBunkerVR_PumpLockFelt = 0.025f;	// the hand pulling this far back on a locked fore-end feels it locked (meters)
+const float gfBunkerVR_PumpSlowest = 0.08f;		// the hand along the barrel slower than this (m/s, on average over...
+const float gfBunkerVR_PumpRateTime = 0.05f;	// ...about this long): a drift, which leaves the fore-end where it is
+const float gfBunkerVR_PumpFastest = 2.5f;		// faster than this from one step to the next (m/s): the tracking jumped, not the hand (left out)
+const float gfBunkerVR_PumpShortPull = 0.35f;	// a pull at least this far back that comes home again without opening is reported (glBunkerVR_PumpShortPull)
+const float gfBunkerVR_PumpCheckMost = 0.45f;	// a press-check (A held) draws the fore-end back at most this far (short of gfBunkerVR_PumpOpenAt)...
+const float gfBunkerVR_PumpCheckShows = 0.2f;	// ...and from this far back it shows the shells (the bullet counter above the gun)
+const int glBunkerVR_PumpMagazineMost = 6;		// the tube's shells (glShotgun_MagazineCapacity)
+const int glBunkerVR_PumpOpened = 1;		// events of a step (mlEvents): the action opened...
+const int glBunkerVR_PumpShut = 2;			// ...shut again...
+const int glBunkerVR_PumpEjectedLive = 4;	// ...a live shell thrown out of the chamber...
+const int glBunkerVR_PumpEjectedSpent = 8;	// ...a spent one...
+const int glBunkerVR_PumpChambered = 16;	// ...a shell from the tube put into the chamber...
+const int glBunkerVR_PumpBlocked = 32;		// ...the hand pulled on the fore-end while the action is locked...
+const int glBunkerVR_PumpJumped = 64;		// ...the hand's place jumped (left out)...
+const int glBunkerVR_PumpShortPull = 128;	// ...a pull came home without opening (how far: mfShortPullMost)
+const int glBunkerVR_PumpTriggerNothing = 0;	// the trigger pulled: nothing at all (the action open, or the hammer down)...
+const int glBunkerVR_PumpTriggerClick = 1;		// ...the hammer falls on an empty chamber...
+const int glBunkerVR_PumpTriggerFire = 2;		// ...it fires
+
+// The shotgun's action. The game keeps what is in the tube and whether a
+// live shell is in the chamber (Prop_Shotgun's mlMagazineCount and
+// mbChamberedShell: its script copies them in before a step and out after);
+// the rest is the hand's: where the fore-end is, a spent shell left in the
+// chamber, the hammer.
+class cBunkerVRPump
+{
+	float mfSlide = 0.0f;			// where the fore-end is: 0 shut, 1 all the way back
+	bool mbOpen = false;			// pulled all the way back since it was last shut
+	int mlMagazine = 0;				// shells in the tube
+	bool mbChamberLive = false;		// a live shell in the chamber...
+	bool mbChamberSpent = false;	// ...or a spent one (only one of the two)
+	bool mbCocked = true;			// the hammer: cocked by opening the action, down once the trigger has let it fall
+	int mlEvents = 0;				// what the last step did (glBunkerVR_Pump...)
+	bool mbHeld = false;			// the left hand holds the fore-end...
+	float mfAlongHeld = 0.0f;		// ...and where it was along the barrel at the last step (meters, + forward)
+	float mfLockPull = 0.0f;		// how far the hand has pulled back on the locked fore-end (meters)...
+	bool mbLockArmed = true;		// ...and whether the next pull is felt (once a pull, glBunkerVR_PumpBlocked)
+	float mfPullRate = 0.0f;		// how fast the hand moves back along the barrel, on average (m/s, + back)
+	float mfStrokeMost = 0.0f;		// the furthest back this pull has been (while not open)...
+	float mfShortPullMost = 0.0f;	// ...and of the last pull that came home without opening
+	bool mbCheck = false;			// A held (set by the caller before each Step): a press-check...
+	bool mbCheckWas = false;		// ...and at the last step
+
+	// Does the press-check show the shells now (A held and the fore-end drawn back
+	// gfBunkerVR_PumpCheckShows or more)? They show on the bullet counter above
+	// the gun.
+	bool CheckShows()
+	{
+		return mbCheck && mbOpen == false && mfSlide >= gfBunkerVR_PumpCheckShows;
+	}
+
+	// The left hand takes hold of the fore-end at afAlong (how far forwards
+	// along the barrel it is, from any point fixed on the gun).
+	void Hold(float afAlong)
+	{
+		mbHeld = true;
+		mfAlongHeld = afAlong;
+		mfPullRate = 0.0f;
+	}
+
+	// The left hand lets go: the fore-end stays where it is (it has no spring).
+	void LetGo()
+	{
+		mbHeld = false;
+	}
+
+	// One update, the left hand afAlong along the barrel (as for Hold; not
+	// used unless held), afSeconds since the last (0: not known, every move
+	// counts). The fore-end follows the hand back and forward, a step at a
+	// time, its ends stops (the hand slides on it past them); pulled back
+	// gfBunkerVR_PumpOpenAt of the way the action opens: what is in the chamber
+	// is thrown out and the hammer is cocked; pushed forward again it shuts (the
+	// fore-end home), and the tube's next shell goes into the chamber. While the
+	// action is locked (Locked) the fore-end stays home, and a pull on it is
+	// felt once (glBunkerVR_PumpBlocked). The hand moving slower than
+	// gfBunkerVR_PumpSlowest moves it not at all (a drift), nor a jump faster
+	// than gfBunkerVR_PumpFastest (the tracking). What happened is in mlEvents.
+	// A press-check (mbCheck): the action shut, the fore-end follows the
+	// hand back only as far as gfBunkerVR_PumpCheckMost (short of opening), locked or
+	// not, throwing nothing out and putting nothing in; let go of (A let go), it
+	// springs home.
+	void Step(float afAlong, float afSeconds)
+	{
+		mlEvents = 0;
+		bool bCheck = mbCheck && mbOpen == false;
+		if(mbCheckWas && bCheck == false && mbOpen == false) mfSlide = 0.0f;
+		mbCheckWas = bCheck;
+		bool bLocked = Locked() && bCheck == false;
+		if(bLocked) mfSlide = 0.0f;
+		if(mbHeld)
+		{
+			float fPull = mfAlongHeld - afAlong; // how far back the hand has come since the last step
+			mfAlongHeld = afAlong;
+			if(afSeconds > 0.0f)
+			{
+				if(cMath_Abs(fPull) > gfBunkerVR_PumpFastest * afSeconds + 0.005f)
+				{
+					mlEvents |= glBunkerVR_PumpJumped;
+					fPull = 0.0f;
+				}
+				else
+				{
+					mfPullRate += (fPull / afSeconds - mfPullRate) * cMath_Min(afSeconds / gfBunkerVR_PumpRateTime, 1.0f);
+					if(cMath_Abs(mfPullRate) < gfBunkerVR_PumpSlowest) fPull = 0.0f;
+				}
+			}
+			if(bLocked)
+			{
+				mfLockPull = cMath_Clamp(mfLockPull + fPull, 0.0f, 1.0f);
+				if(mbLockArmed && mfLockPull >= gfBunkerVR_PumpLockFelt)
+				{
+					mbLockArmed = false;
+					mlEvents |= glBunkerVR_PumpBlocked;
+				}
+				else if(mfLockPull <= gfBunkerVR_PumpLockFelt * 0.4f) mbLockArmed = true;
+			}
+			else mfSlide = cMath_Clamp(mfSlide + fPull / gfBunkerVR_PumpTravel, 0.0f, bCheck ? gfBunkerVR_PumpCheckMost : 1.0f);
+		}
+		else mfPullRate = 0.0f;
+		if(mbHeld == false || bLocked == false)
+		{
+			mfLockPull = 0.0f;
+			mbLockArmed = true;
+		}
+		if(bCheck)
+		{
+			mfStrokeMost = 0.0f; // (a press-check is no short pull)
+			return;
+		}
+		// A pull that comes home again without opening (reported, for the log).
+		if(mbOpen == false)
+		{
+			if(mfSlide > mfStrokeMost) mfStrokeMost = mfSlide;
+			if(mfSlide <= 0.1f)
+			{
+				if(mfStrokeMost >= gfBunkerVR_PumpShortPull && mfStrokeMost < gfBunkerVR_PumpOpenAt)
+				{
+					mfShortPullMost = mfStrokeMost;
+					mlEvents |= glBunkerVR_PumpShortPull;
+				}
+				mfStrokeMost = 0.0f;
+			}
+		}
+		else mfStrokeMost = 0.0f;
+		if(mbOpen == false && mfSlide >= gfBunkerVR_PumpOpenAt)
+		{
+			mbOpen = true;
+			mfStrokeMost = 0.0f;
+			mlEvents |= glBunkerVR_PumpOpened;
+			if(mbChamberLive) mlEvents |= glBunkerVR_PumpEjectedLive;
+			else if(mbChamberSpent) mlEvents |= glBunkerVR_PumpEjectedSpent;
+			mbChamberLive = false;
+			mbChamberSpent = false;
+			mbCocked = true;
+		}
+		else if(mbOpen && mfSlide <= gfBunkerVR_PumpShutAt)
+		{
+			mbOpen = false;
+			mfSlide = 0.0f;
+			mlEvents |= glBunkerVR_PumpShut;
+			if(mlMagazine > 0)
+			{
+				mlMagazine--;
+				mbChamberLive = true;
+				mlEvents |= glBunkerVR_PumpChambered;
+			}
+		}
+	}
+
+	// Is the action shut (the fore-end all the way forward, and not opened since)?
+	bool Shut()
+	{
+		return mbOpen == false && mfSlide <= gfBunkerVR_PumpShutAt;
+	}
+
+	// Is the action locked shut, the pump not moving? The pump only works when
+	// there is a shell to throw out or one to chamber. Locked when shut with a
+	// live shell in the chamber and the hammer cocked (as the real gun's slide
+	// lock, freed by the shot), or shut with nothing for the pump to do (the
+	// chamber and the tube empty). Free with a spent shell to throw out, or the
+	// chamber empty and a shell in the tube.
+	bool Locked()
+	{
+		if(Shut() == false) return false;
+		if(mbChamberLive) return mbCocked;
+		return mbChamberSpent == false && mlMagazine <= 0;
+	}
+
+	// The trigger pulled: what it does (glBunkerVR_PumpTrigger...). The hammer
+	// falls if it can; the chamber is left as it is (the shot itself turns the
+	// live shell into a spent one: Fired).
+	int Trigger()
+	{
+		if(Shut() == false || mbCocked == false) return glBunkerVR_PumpTriggerNothing;
+		mbCocked = false;
+		return mbChamberLive ? glBunkerVR_PumpTriggerFire : glBunkerVR_PumpTriggerClick;
+	}
+
+	// The shot has gone: the shell in the chamber is spent.
+	void Fired()
+	{
+		if(mbChamberLive)
+		{
+			mbChamberLive = false;
+			mbChamberSpent = true;
+		}
+	}
+
+	// Can a shell be pushed into the tube now? Only room in the tube counts:
+	// the action may be open, shut or part open.
+	bool CanLoad()
+	{
+		return mlMagazine < glBunkerVR_PumpMagazineMost;
+	}
+
+	// How many shells are in the gun: the tube's and a live one in the chamber.
+	int Loaded()
+	{
+		return mlMagazine + (mbChamberLive ? 1 : 0);
+	}
+}
+
+//------------------------------------------------------------
+
+const float gfBunkerVR_GunKickMost = 0.16f;		// a shot's kick: the muzzle thrown up this far (radians: 9 degrees)...
+const float gfBunkerVR_GunKickRise = 0.03f;		// ...in this long (seconds)...
+const float gfBunkerVR_GunKickSettle = 0.13f;	// ...then coming back down (falling to a third every this long)...
+const float gfBunkerVR_GunKickBack = 0.035f;	// ...and the gun pushed this far back into the hands at most (meters)
+
+// BunkerVR: how far a shot's kick has thrown the muzzle up afSince seconds
+// after the shot (radians; 0 before it and once it has settled, after a
+// second).
+float BunkerVR_GunKick(float afSince)
+{
+	if(afSince < 0.0f || afSince > 1.0f) return 0.0f;
+	if(afSince < gfBunkerVR_GunKickRise) return gfBunkerVR_GunKickMost * afSince / gfBunkerVR_GunKickRise;
+	return gfBunkerVR_GunKickMost * cMath_Pow(2.7182818f, -(afSince - gfBunkerVR_GunKickRise) / gfBunkerVR_GunKickSettle);
+}
+
+// BunkerVR: how far the kick has pushed the gun back into the hands afSince
+// seconds after the shot (meters; with the muzzle, BunkerVR_GunKick).
+float BunkerVR_GunKickPush(float afSince)
+{
+	return gfBunkerVR_GunKickBack * BunkerVR_GunKick(afSince) / gfBunkerVR_GunKickMost;
+}
+
+//------------------------------------------------------------
+
+const float gfBunkerVR_ShellFlight = 0.5f;				// a shell thrown out flies this long, then is gone (seconds)...
+const cVector3f gvBunkerVR_ShellThrow = cVector3f(1.6f, 1.4f, -0.4f);	// ...thrown out at this (m/s: to the gun's right, up, forward)...
+const float gfBunkerVR_ShellSpin = 14.0f;				// ...turning over at this (radians a second)
+
+// BunkerVR: where a shell thrown out of the ejection port is afSince seconds
+// after (meters from where it left, in the gun's terms as it was then: x to
+// its right, y up, z forward), falling under gravity.
+cVector3f BunkerVR_ShellFlightAt(float afSince)
+{
+	float fT = cMath_Clamp(afSince, 0.0f, gfBunkerVR_ShellFlight);
+	return cVector3f(gvBunkerVR_ShellThrow.x * fT, gvBunkerVR_ShellThrow.y * fT - 4.9f * fT * fT, gvBunkerVR_ShellThrow.z * fT);
+}
+
+//------------------------------------------------------------
+
+// The fore-end's middle on the gun (j_pump at rest), in meters in its model's
+// own terms (x towards the stock, y up): where the left hand takes the pump,
+// and what the body script aims through that hand.
+const cVector3f gvBunkerVR_ShotgunForeEnd = cVector3f(-0.1889f, 0.0126f, 0.0f);
+
+// The left hand on the fore-end: drawn fixed on it, as a grip has the fore-end
+// in the palm, so it doesn't spin, the fingers wrapped around it.
+// "Holding the shotgun's pump" (the mod's Grips page and hand poses tool) may
+// have a placement and fingers of its own; without them, these. Where the
+// fore-end's middle is in the palm's terms (the controller's: x right, y up, z
+// backwards; the left palm faces +x), and where the fore-end's own z (towards
+// the gun's left) and y (up) point. (The fore-end's own x is towards the stock.)
+// The drawn hand's fingers lie along the palm's -z dipped 20 degrees (-0.94 z
+// -0.34 y: gfVRHandForward, gfVRHandDip in Prop_PlayerBody.hps), so its forearm,
+// the wrist straight, runs back along 0.94 z + 0.34 y. That line is put 30
+// degrees off where the real forearm comes from (back 0.75, down 0.35, left 0.45
+// from the fore-end), the wrist bent that far: the fore-end lying across the
+// palm 66 degrees from the fist's own line, the palm under it facing up (0.79),
+// a little back (0.54) and to its right (0.28), the fingers running under it to
+// its right side (0.83 right, 0.55 forward) and around it, the thumb along its
+// left side, forward and up. Don't lay the fingers across the barrel with the
+// forearm's line forward, up and left: that is nearly the opposite of the real
+// forearm, and the wrist looks bent too far.
+const cVector3f gvBunkerVR_PumpGripAt = cVector3f(0.015f, 0.0f, 0.0f);
+const cVector3f gvBunkerVR_PumpGripZ = cVector3f(-0.280433f, 0.735750f, 0.616465f);
+const cVector3f gvBunkerVR_PumpGripY = cVector3f(0.794298f, 0.538466f, -0.281328f);
+// ...and the fingers (as the mod's poses: curls 0 straight to 1 closed, spreads
+// in degrees, + towards the little finger, the thumb's + out; the mod's own
+// start for that pose, grips.cpp FreshGrip, is the same). Closed firmly around
+// the fore-end, so the hand grips the pump rather than resting against it.
+const cVector3f gvBunkerVR_PumpCurlsA = cVector3f(0.68f, 0.86f, 0.90f);		// thumb, first, middle
+const cVector3f gvBunkerVR_PumpCurlsB = cVector3f(0.92f, 0.94f, 0.60f);		// ring, little, the palm's cup
+const cVector3f gvBunkerVR_PumpSpreadA = cVector3f(30.0f, -4.0f, 0.0f);		// thumb, first, middle
+const cVector3f gvBunkerVR_PumpSpreadB = cVector3f(3.0f, 6.0f, 0.0f);		// ring, little
+
+// BunkerVR: where the left palm is when the fore-end sits in it as a grip has
+// it. In: the fore-end's middle avMiddle and its own x, y and z
+// directions in the world (towards the stock, up, towards the gun's left:
+// square to each other, x by y is z); the grip's place avAt in the palm's terms
+// and the fore-end's own y and z there (avGripY, avGripZ). Out: the palm's place
+// and its x, y and z directions.
+void BunkerVR_PalmOnGrip(const cVector3f &in avMiddle, const cVector3f &in avOwnX, const cVector3f &in avOwnY, const cVector3f &in avOwnZ,
+						 const cVector3f &in avAt, const cVector3f &in avGripY, const cVector3f &in avGripZ,
+						 cVector3f &out avPalm, cVector3f &out avX, cVector3f &out avY, cVector3f &out avZ)
+{
+	cVector3f vGripX = cMath_Vector3Cross(avGripY, avGripZ);
+	avX = avOwnX * vGripX.x + avOwnY * avGripY.x + avOwnZ * avGripZ.x;
+	avY = avOwnX * vGripX.y + avOwnY * avGripY.y + avOwnZ * avGripZ.y;
+	avZ = avOwnX * vGripX.z + avOwnY * avGripY.z + avOwnZ * avGripZ.z;
+	avPalm = avMiddle - (avX * avAt.x + avY * avAt.y + avZ * avAt.z);
+}
+
+// BunkerVR: a point given in meters in the shotgun model's own terms, in the
+// world: a_mtxRoot is its root bone's world matrix (j_trench_shotgun), afUnit
+// how many meters one of the root's own units is in the model as made (the
+// model's are centimeters): the root's size in the world divided by the
+// size the gun is drawn at (held things can be drawn bigger).
+cVector3f BunkerVR_ShotgunPoint(const cMatrixf &in a_mtxRoot, float afUnit, const cVector3f &in avModel)
+{
+	return cMath_MatrixMul(a_mtxRoot, avModel * (1.0f / afUnit));
+}
+
+// BunkerVR: buzzes a controller (roll 7064): 0 left, 1 right.
+void BunkerVR_GunBuzz(int alHand, float afSeconds, float afStrength)
+{
+	cLuxPlayer@ pPlayer = cLux_GetPlayer();
+	cCamera@ pCam = pPlayer !is null ? pPlayer.GetCamera() : null;
+	if(pCam is null) return;
+	float fRealRoll = pCam.GetRoll();
+	cVector3f vRealPos = pCam.GetPosition();
+	pCam.SetPosition(cVector3f(float(alHand), afSeconds, afStrength));
+	pCam.SetRoll(7064.0f);
+	pCam.GetMatrix();
+	pCam.SetPosition(vRealPos);
+	pCam.SetRoll(fRealRoll);
+}

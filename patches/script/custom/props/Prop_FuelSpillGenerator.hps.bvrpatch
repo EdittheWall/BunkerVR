@@ -1,0 +1,19 @@
+BunkerVR patch 1
+file script/custom/props/Prop_FuelSpillGenerator.hps
+from 70c6c607196de2dae88deb3409c941f071cd0f2c2834944cfa0aef93383ca1d7 4076
+to edbc03762a77739c64a2ddf2f16fd8a2a07c0ddd55fd8810b4a53dc8b0d268e0 4588
+=7
++// BunkerVR: how many spill creations have been timed in the log (at most 20).
++int glVRSpillNotes = 0;
++
+=109
++			// BunkerVR: making the spill is timed for the log (a fuel bottle breaking
++			// can stall the game for about a second). 20 log lines at most.
++			uint lVRStart = cSystem_GetApplicationTime();
+=1
++			if (glVRSpillNotes < 20)
++			{
++				glVRSpillNotes++;
++				Log("BunkerVR: breaking: making the spill " + mBaseObj.GetName() + "_spill took " + (cSystem_GetApplicationTime() - lVRStart) + " ms\n");
++			}
+end

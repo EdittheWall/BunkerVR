@@ -1,0 +1,34 @@
+BunkerVR patch 1
+file script/custom/components/WoodenBreakableComponent.hps
+from 83e2dae14c4280a0c2ce849f633b172da68ec254d7cc0e093a08872cd9a70f0e 25041
+to 4487b794120cde8281c2d2109d6a674ffab1a0e0c1c8fb6a364be286d584554d 26386
+=40
++// BunkerVR: logs how long a bottle or molotov takes to break, step by step,
++// to track down stalls when one hits the floor. At most 20 breaks are logged.
++int glVRBreakNotes = 0;
++
+=317
++		// BunkerVR: timed for the log (bottles and molotovs only).
++		bool bVRTimeIt = glVRBreakNotes < 20 && (cString_GetFirstStringPos(msBrokenEntity, "bottle") >= 0 || cString_GetFirstStringPos(msBrokenEntity, "molotov") >= 0);
++		uint lVRStart = cSystem_GetApplicationTime();
++		uint lVRMade = lVRStart, lVRHeard = lVRStart;
+=125
++				uint lVRMakeStart = cSystem_GetApplicationTime();
+=1
++				lVRMade = cSystem_GetApplicationTime();
++				if (bVRTimeIt) Log("BunkerVR: breaking " + pProp.GetName() + ": making its broken pieces (" + msBrokenEntity + ") took " + (lVRMade - lVRMakeStart) + " ms\n");
+=42
++			uint lVRHearStart = cSystem_GetApplicationTime();
+=1
++			lVRHeard = cSystem_GetApplicationTime();
++			if (bVRTimeIt) Log("BunkerVR: breaking " + pProp.GetName() + ": telling the creatures it was heard took " + (lVRHeard - lVRHearStart) + " ms\n");
+=66
++
++		// BunkerVR: the whole break, for the log.
++		if (bVRTimeIt && mbBroken)
++		{
++			glVRBreakNotes++;
++			uint lVREnd = cSystem_GetApplicationTime();
++			Log("BunkerVR: breaking " + pProp.GetName() + ": the whole break took " + (lVREnd - lVRStart) + " ms (its sound and dust: " + (lVREnd - lVRHeard) + " ms)\n");
++		}
+end

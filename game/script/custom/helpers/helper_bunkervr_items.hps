@@ -1,0 +1,418 @@
+// BunkerVR: the hands-on items. Each item's profile: which of the mod's hand
+// moves it takes part in, and what they do with it. Read by the body script
+// (PlayerBodyHandler.hps, which tells the mod and acts on what the mod
+// detects) and by the item states (PlayerState_UsingThrowable.hps). The moves
+// are detected by the mod (vr.cpp) and acted on in the scripts, so an item is
+// given a move, or what a move does with it, by changing this file and the
+// scripts that act on it (reload them in the headset: Y, Testing, "Reload
+// scripts").
+
+//------------------------------------------------------------
+
+// The moves the mod watches the right hand for, as flags (sent to it with
+// roll 7093, along with the item's index in the game's item list):
+//   throw: pressing the right grip takes hold of the item to throw it; let
+//     go while the hand swings (at least as fast as the Feel page's throw
+//     speed, feel_throw_speed) and it is thrown with the hand's velocity
+//     (the mod sends command 7). Its trigger is then the hand's squeeze: the
+//     game's use of the item on things (the fuel tap, the save lamp), never
+//     the game's own throw.
+//   a still let-go puts it down: let go with the hand slower than that, and
+//     it is put down where it is in the hand (command 15); without this flag
+//     it stays in the hand.
+const int glBunkerVR_Move_Throw = 1;
+const int glBunkerVR_Move_LetGoPutsDown = 2;
+
+int BunkerVR_ItemMoves(const tString &in asType)
+{
+	// Bottles and molotovs: a still let-go keeps them in the hand, as they
+	// would break at the player's feet.
+	if(asType == "EmptyBottle" || asType == "FuelBottle" || asType == "EmptyMolotovCocktail" || asType == "MolotovCocktail")
+		return glBunkerVR_Move_Throw;
+	// Meat and the rabbit doll do not break: a still let-go puts them down
+	// where the hand is.
+	if(asType == "Meat" || asType == "RabbitDoll")
+		return glBunkerVR_Move_Throw | glBunkerVR_Move_LetGoPutsDown;
+	// The flare: thrown by hand, but only once its cord has been pulled (the
+	// body script reports no move to the mod while it is not lit: VRUpdateFlare
+	// in PlayerBodyHandler.hps); never the game's own throw.
+	if(asType == "Flare")
+		return glBunkerVR_Move_Throw;
+	return 0;
+}
+
+//------------------------------------------------------------
+
+// The item state whose script makes the thrown (or put down) thing, with its
+// _Global_VRThrowAs and _Global_VRPutDown (PlayerState_UsingThrowable.hps),
+// or "" for an item that is not thrown by hand. The grenades are thrown by a
+// move of their own (the left hand pulls the pin, then letting go of the
+// right hand's squeeze throws it; vr.cpp), sent as the same command 7.
+tString BunkerVR_ItemThrowState(const tString &in asType)
+{
+	if(asType == "EmptyBottle")				return "State_UsingEmptyBottle";
+	if(asType == "FuelBottle")				return "State_UsingFuelBottle";
+	if(asType == "EmptyMolotovCocktail")	return "State_UsingEmptyMolotovCocktail";
+	if(asType == "MolotovCocktail")			return "State_UsingMolotovCocktail";
+	if(asType == "Meat")					return "State_UsingMeat";
+	if(asType == "RabbitDoll")				return "State_UsingRabbitDoll";
+	if(asType == "Grenade")					return "State_UsingGrenade";
+	if(asType == "GasGrenade")				return "State_UsingGasGrenade";
+	if(asType == "Flare")					return "State_UsingFlare";
+	return "";
+}
+
+// What it is thrown as where its state does not know that before it is
+// entered (the empty bottle's state throws both kinds of bottle, and learns
+// which as it is entered), or "" for the state's own (its msThrowEnt).
+tString BunkerVR_ItemThrownAs(const tString &in asType)
+{
+	if(asType == "EmptyBottle")	return "empty_bottle_thrown.ent";
+	if(asType == "FuelBottle")	return "full_bottle_thrown.ent";
+	return "";
+}
+
+// The sound of its throw: the one the game's own throw plays for it (the
+// player's throw animations in player_bunker.ent; the rabbit doll's has
+// none), or "" for none. Without this, every hand throw would play the
+// grenade's.
+tString BunkerVR_ItemThrowSound(const tString &in asType)
+{
+	if(asType == "Meat" || asType == "EmptyBottle" || asType == "EmptyMolotovCocktail")	return "weapons/throwables/bottle/throw";
+	if(asType == "FuelBottle" || asType == "MolotovCocktail")								return "weapons/throwables/molotov/throw";
+	if(asType == "RabbitDoll")																return "";
+	if(asType == "Flare")																	return "weapons/throwables/flare/throw";
+	return "weapons/throwables/grenade/throw";
+}
+
+//------------------------------------------------------------
+
+// The flare's pull cord. Its model (flare.fbx, in cm) has a head at the top
+// (6 cm across, up to 22.1 cm), the handle below it (3.5 cm across) ending
+// 4.4 cm below the model's origin, and inside, along its axis, the cord: seven
+// bones from 12.9 cm down to -1.6 (j_string_00 to _06, 2.4 cm apart, each
+// with its piece of cord just below it) and the cap on its end (j_plug at
+// -4.0, the cap 1.8 cm long below that), which closes the handle's end. The
+// game's own throw pulls the cord out of the handle's end with the cap
+// (flare_throw.fbx). Here the left hand takes the cap and pulls: the cord
+// runs out of the handle to the fingers; pulled most of its length out, the
+// flare is lit.
+const tString[] gvBunkerVR_FlareCordBones = { "j_string_00", "j_string_01", "j_string_02", "j_string_03", "j_string_04", "j_string_05", "j_string_06", "j_plug" };
+const float[] gvBunkerVR_FlareCordArc = { 16.9f, 14.5f, 12.1f, 9.7f, 7.3f, 4.8f, 2.4f, 0.0f };	// each bone's place along the cord from the cap's bone (cm)
+const float gfBunkerVR_FlareExit = -4.4f;		// where the cord comes out: the handle's end (cm up the model)
+const float gfBunkerVR_FlareCapAt = -4.0f;		// the cap's bone at rest (cm up the model: 0.4 inside the end)
+const float gfBunkerVR_FlareCapHalf = 0.9f;		// the cap's middle from its bone, along the cord (cm)
+const float gfBunkerVR_FlareCordTake = 0.09f;	// the left palm this near the cap's middle takes the cord (meters)
+const float gfBunkerVR_FlareLightAt = 14.0f;	// pulled out this far (the cap's bone from the end, cm of the model; the cord is 16.9): lit
+// The burning flare is the game's thrown one (flare_thrown.dae: 36 cm long, its
+// middle at its origin), 28% longer than the one in the hand (flare.fbx: 28 cm,
+// from 5.8 below its origin to 22.1 above). While held, its own model is hidden
+// and the hand's shown, so it doesn't grow when lit; its flame, light and smoke
+// are lifted this far up the hand's flare, putting its burning end (18.8 above
+// its origin) at the hand flare's (meters of the model).
+const float gfBunkerVR_FlareLitLift = 0.033f;
+
+// How far the cap's bone is out of the handle's end (cm of the model; less
+// than 0 inside it) with the fingers holding the cap afPinchOut cm from the
+// end: the cap's middle in the fingers, no further in than at rest, and no
+// further out than the cord's length (its top piece stays in).
+float BunkerVR_FlareCapOut(float afPinchOut)
+{
+	return cMath_Clamp(afPinchOut - gfBunkerVR_FlareCapHalf, gfBunkerVR_FlareExit - gfBunkerVR_FlareCapAt, gvBunkerVR_FlareCordArc[0] - 0.5f);
+}
+
+// How far along the cord out of the handle's end a bone of it is (cm; less
+// than 0: still inside, that far above the end), with the cap's bone afCapOut
+// out (BunkerVR_FlareCapOut).
+float BunkerVR_FlareBoneOut(int alBone, float afCapOut)
+{
+	if(alBone < 0 || alBone >= int(gvBunkerVR_FlareCordArc.length())) return 0.0f;
+	return afCapOut - gvBunkerVR_FlareCordArc[alBone];
+}
+
+// The turn that brings direction avFrom onto direction avTo by the shortest
+// way (about avAxisIfOpposite when they point exactly opposite ways). Same
+// as VRStringTurn in Prop_DynamoLantern.hps: both turn directions are built
+// and the one that really brings avFrom onto avTo is kept.
+cMatrixf BunkerVR_TurnOnto(const cVector3f &in avFrom, const cVector3f &in avTo, const cVector3f &in avAxisIfOpposite)
+{
+	cVector3f vA = cMath_Vector3Normalize(avFrom);
+	cVector3f vB = cMath_Vector3Normalize(avTo);
+	cVector3f vAxis = cMath_Vector3Cross(vA, vB);
+	float fSin = vAxis.Length();
+	float fCos = cMath_Vector3Dot(vA, vB);
+	if(fSin < 0.0001f)
+	{
+		if(fCos > 0.0f) return cMatrixf_Identity;
+		vAxis = cMath_Vector3Normalize(avAxisIfOpposite);
+		fSin = 0.0f;
+	}
+	else
+	{
+		vAxis = vAxis * (1.0f / fSin);
+	}
+	float fAngle = cMath_ATan2(fSin, fCos);
+	cQuaternion qOneWay;
+	qOneWay.FromAngleAxis(fAngle, vAxis);
+	cMatrixf mtxOneWay = cMath_MatrixQuaternion(qOneWay);
+	cQuaternion qOtherWay;
+	qOtherWay.FromAngleAxis(-fAngle, vAxis);
+	cMatrixf mtxOtherWay = cMath_MatrixQuaternion(qOtherWay);
+	if(cMath_Vector3Dot(cMath_MatrixMul3x3(mtxOneWay, vA), vB) >= cMath_Vector3Dot(cMath_MatrixMul3x3(mtxOtherWay, vA), vB))
+		return mtxOneWay;
+	return mtxOtherWay;
+}
+
+//------------------------------------------------------------
+
+// Fuel thrown from the open can by a shove. The game's own throw
+// (PlayerState_UsingFuel.hps) splashes it three times, each a spill on the
+// ground up to 4 m ahead of the eyes, at least 0.75 m from the one before,
+// then the can is used up. By hand, each shove of the open can splashes once,
+// the way the can was going, as far as it was fast; after
+// glBunkerVR_FuelSplashes the can is empty, as in the game.
+// The can is held in both hands, the left on its bottom or its end
+// (VRUpdateFuelHands in PlayerBodyHandler.hps; the game's own throw has the
+// left palm flat on the spout's end), pushed out 15 cm or more at 1.8 m/s or
+// more at its fastest (the game's own shove moves it at 1.5 to 2.9 m/s), and
+// stopped. A one-handed swing throws nothing, and no wrist twist is needed.
+// The right hand is followed as the game's own camera sees it, level
+// (VRUpdateFuelSplash in PlayerBodyHandler.hps), so walking, running and
+// turning don't move it; its speed is taken over the last few updates
+// (cBunkerVRFuelShove). A shove starts once that speed passes
+// gfBunkerVR_FuelSwingStart and ends as it slows to gfBunkerVR_FuelThrowStop of
+// its fastest: as a pushed can is stopped, the fuel flies on. It throws, the
+// way the can was going fastest, if at its fastest it was
+// gfBunkerVR_FuelThrowSpeed or more, going mostly level (not just lifted or
+// dropped), and the can ended gfBunkerVR_FuelThrowTravel or more from where the
+// shove began (a straight distance, not a path length, which a shake back and
+// forth or a tracking slip could add up). A shove shorter than
+// gfBunkerVR_FuelSwingShortest or longer than gfBunkerVR_FuelSwingLongest throws
+// nothing, and none counts in the first gfBunkerVR_FuelLidCalm after the lid
+// comes off, while the left hand comes away from it.
+const float gfBunkerVR_FuelSwingStart = 1.0f;		// a shove starts this fast (meters a second)...
+const float gfBunkerVR_FuelThrowSpeed = 1.8f;		// ...throws if at its fastest it was this fast...
+const float gfBunkerVR_FuelThrowTravel = 0.15f;	// ...and the can ended this far from where the shove began (meters)...
+const float gfBunkerVR_FuelThrowStop = 0.5f;		// ...when it has slowed to this share of its fastest
+const float gfBunkerVR_FuelSwingShortest = 0.08f;	// a shove shorter than this (seconds) throws nothing: a jolt
+const float gfBunkerVR_FuelSwingLongest = 0.6f;	// a shove this long (seconds) throws nothing: a carry
+const float gfBunkerVR_FuelLidCalm = 0.3f;			// no throw this long (seconds) after the lid comes off
+const float gfBunkerVR_FuelThrowGap = 0.6f;		// at most one throw in this long (seconds)
+const float gfBunkerVR_FuelSplashNear = 1.5f;		// a throw at gfBunkerVR_FuelThrowSpeed lands this far from the can (meters)...
+const float gfBunkerVR_FuelSplashFar = 4.0f;		// ...at most this far (the game's gfUsingFuel_MaxThrowDist)...
+const float gfBunkerVR_FuelSplashPerSpeed = 1.5f;	// ...this much further for each meter a second faster
+const int glBunkerVR_FuelSplashes = 3;				// splashes in a can (the game's three)
+
+// The fuel can's left-hand hold (VRUpdateFuelHands): the can's box in the hand model's terms
+// (25.5 x 31.2 x 15.7 cm, its bottom at 0); the left palm this near its side, end or bottom (not
+// its top, where the bar and the spout are) takes it on a squeeze, and is drawn with its center
+// this far off the surface, flat against it (the game's own throw: 0 to 1 cm).
+const cVector3f gvBunkerVR_FuelLow = cVector3f(-0.127f, 0.0f, -0.078f);
+const cVector3f gvBunkerVR_FuelHigh = cVector3f(0.127f, 0.312f, 0.078f);
+const float gfBunkerVR_FuelLeftReach = 0.09f;
+const float gfBunkerVR_FuelLeftTopMost = 0.27f;	// (the hold must be lower than this: the bar is at 30.8 cm)
+const float gfBunkerVR_FuelPalmOff = 0.01f;
+
+// The nearest point to avAt (in the can's own terms) on the surface of the can's box, from inside
+// or outside, and the outward direction there (avOut: a unit vector along one of its axes).
+cVector3f BunkerVR_FuelNearestOnCan(const cVector3f &in avAt, cVector3f &out avOut)
+{
+	cVector3f vLow = gvBunkerVR_FuelLow;
+	cVector3f vHigh = gvBunkerVR_FuelHigh;
+	bool bInside = avAt.x >= vLow.x && avAt.x <= vHigh.x && avAt.y >= vLow.y && avAt.y <= vHigh.y && avAt.z >= vLow.z && avAt.z <= vHigh.z;
+	cVector3f vOn = cVector3f(cMath_Clamp(avAt.x, vLow.x, vHigh.x), cMath_Clamp(avAt.y, vLow.y, vHigh.y), cMath_Clamp(avAt.z, vLow.z, vHigh.z));
+	if(bInside == false)
+	{
+		// (Outside: the face it is furthest beyond, of those it is beyond.)
+		cVector3f vBeyond = avAt - vOn;
+		float fX = cMath_Abs(vBeyond.x);
+		float fY = cMath_Abs(vBeyond.y);
+		float fZ = cMath_Abs(vBeyond.z);
+		if(fX >= fY && fX >= fZ) avOut = cVector3f(vBeyond.x > 0.0f ? 1.0f : -1.0f, 0.0f, 0.0f);
+		else if(fY >= fZ) avOut = cVector3f(0.0f, vBeyond.y > 0.0f ? 1.0f : -1.0f, 0.0f);
+		else avOut = cVector3f(0.0f, 0.0f, vBeyond.z > 0.0f ? 1.0f : -1.0f);
+		return vOn;
+	}
+	// (Inside: out through the nearest face.)
+	float[] vGap = { avAt.x - vLow.x, vHigh.x - avAt.x, avAt.y - vLow.y, vHigh.y - avAt.y, avAt.z - vLow.z, vHigh.z - avAt.z };
+	int lBest = 0;
+	for(int i = 1; i < 6; ++i) if(vGap[i] < vGap[lBest]) lBest = i;
+	if(lBest == 0) { avOut = cVector3f(-1.0f, 0.0f, 0.0f); vOn.x = vLow.x; }
+	else if(lBest == 1) { avOut = cVector3f(1.0f, 0.0f, 0.0f); vOn.x = vHigh.x; }
+	else if(lBest == 2) { avOut = cVector3f(0.0f, -1.0f, 0.0f); vOn.y = vLow.y; }
+	else if(lBest == 3) { avOut = cVector3f(0.0f, 1.0f, 0.0f); vOn.y = vHigh.y; }
+	else if(lBest == 4) { avOut = cVector3f(0.0f, 0.0f, -1.0f); vOn.z = vLow.z; }
+	else { avOut = cVector3f(0.0f, 0.0f, 1.0f); vOn.z = vHigh.z; }
+	return vOn;
+}
+
+// Does a shove that was at most afPeak fast (meters a second, moving at
+// avPeakVelocity then) and went afTravel (meters) throw fuel?
+bool BunkerVR_FuelThrown(float afPeak, float afTravel, const cVector3f &in avPeakVelocity)
+{
+	float fLevel = cVector3f(avPeakVelocity.x, 0.0f, avPeakVelocity.z).Length();
+	return afPeak >= gfBunkerVR_FuelThrowSpeed && afTravel >= gfBunkerVR_FuelThrowTravel && fLevel >= 0.5f * afPeak;
+}
+
+// How far a throw at afSpeed lands (meters).
+float BunkerVR_FuelSplashReach(float afSpeed)
+{
+	return cMath_Clamp(gfBunkerVR_FuelSplashNear + (afSpeed - gfBunkerVR_FuelThrowSpeed) * gfBunkerVR_FuelSplashPerSpeed, gfBunkerVR_FuelSplashNear, gfBunkerVR_FuelSplashFar);
+}
+
+// Tracks the can's shove, update by update (see above).
+class cBunkerVRFuelShove
+{
+	cVector3f[] mvPlace = {cVector3f(0.0f), cVector3f(0.0f), cVector3f(0.0f), cVector3f(0.0f)};	// the right palm as the game's level camera sees it, the last four updates (oldest first)
+	float[] mvTime = {0.0f, 0.0f, 0.0f, 0.0f};	// ...when (seconds on this one's own clock)
+	int mlKnown = 0;			// how many of them there are
+	float mfClock = 0.0f;
+	bool mbSwinging = false;
+	float mfSwingTime = 0.0f;	// the shove so far: how long...
+	float mfPeak = 0.0f;		// ...its fastest...
+	cVector3f mvPeakVelocity = cVector3f(0.0f);	// ...going this way then...
+	float mfTravel = 0.0f;		// ...how far the can is from where the shove began (a straight distance)
+	cVector3f mvSwingFrom = cVector3f(0.0f);	// ...where it began
+	bool mbSpent = false;		// a shove went on too long: none starts until the can slows
+
+	// Starts over (a new can, the lid on, a jump of the view).
+	void Reset()
+	{
+		mlKnown = 0;
+		mbSwinging = false;
+		mbSpent = false;
+	}
+
+	// The palm is at avPlace (the level camera's terms) afStep seconds after
+	// the last update. True when that throws: avThrow is then its velocity
+	// (meters a second, the same terms).
+	bool Add(const cVector3f &in avPlace, float afStep, cVector3f &out avThrow)
+	{
+		avThrow = cVector3f(0.0f);
+		if(afStep <= 0.0f) return false;
+		mfClock += afStep;
+		if(mbSwinging) mfTravel = (avPlace - mvSwingFrom).Length();
+		for(int i = 0; i < 3; ++i)
+		{
+			mvPlace[i] = mvPlace[i + 1];
+			mvTime[i] = mvTime[i + 1];
+		}
+		mvPlace[3] = avPlace;
+		mvTime[3] = mfClock;
+		if(mlKnown < 4) mlKnown++;
+		if(mlKnown < 4) return false;
+		float fSpan = mvTime[3] - mvTime[0];
+		if(fSpan < 0.0001f) return false;
+		cVector3f vVelocity = (mvPlace[3] - mvPlace[0]) * (1.0f / fSpan);
+		float fSpeed = vVelocity.Length();
+		if(mbSwinging == false)
+		{
+			if(fSpeed < gfBunkerVR_FuelSwingStart)
+			{
+				mbSpent = false;
+				return false;
+			}
+			if(mbSpent) return false;
+			mbSwinging = true;
+			mfSwingTime = 0.0f;
+			mfPeak = 0.0f;
+			mvSwingFrom = mvPlace[0];
+			mfTravel = (mvPlace[3] - mvSwingFrom).Length();
+		}
+		mfSwingTime += afStep;
+		if(fSpeed > mfPeak)
+		{
+			mfPeak = fSpeed;
+			mvPeakVelocity = vVelocity;
+		}
+		if(mfSwingTime > gfBunkerVR_FuelSwingLongest)
+		{
+			mbSwinging = false;
+			mbSpent = true;
+			return false;
+		}
+		if(fSpeed >= gfBunkerVR_FuelSwingStart && fSpeed > mfPeak * gfBunkerVR_FuelThrowStop) return false; // (still going)
+		mbSwinging = false;
+		if(mfSwingTime < gfBunkerVR_FuelSwingShortest) return false; // (a jolt, or a tracking slip)
+		if(BunkerVR_FuelThrown(mfPeak, mfTravel, mvPeakVelocity) == false) return false;
+		avThrow = mvPeakVelocity;
+		return true;
+	}
+}
+
+//------------------------------------------------------------
+
+// The fit (cBunkerVRFit in helper_bunkervr.hps, VRUpdateFit in
+// PlayerBodyHandler.hps): an item pushed into the thing the game says it is
+// used on, then (for some) turned. True for such an item, with: avTip, its
+// working end, and avPoints, the direction it points as it goes in (both in
+// its own terms); afDepth, how far its tip goes in past the face of the
+// game's "use" box around what it fits; afTurn, how far it is then turned
+// for its bolt to go (radians; + to the right, as seen from behind it, - to
+// the left; 0: used once it is all the way in); afThread, for an item that
+// screws in, how much of afDepth its turn takes it in (it goes in by itself
+// only to afDepth less that; 0: it does not screw in); asSoundBolt, played
+// as the bolt goes (for a screw: as it comes tight), and asSoundForced, as
+// it is forced the wrong way ("" for none; both play at what it fits).
+bool BunkerVR_ItemFit(const tString &in asType, cVector3f &out avTip, cVector3f &out avPoints, float &out afDepth, float &out afTurn,
+					  float &out afThread, tString &out asSoundBolt, tString &out asSoundForced)
+{
+	avTip = cVector3f(0.0f);
+	avPoints = cVector3f(0.0f, 0.0f, 1.0f);
+	afDepth = 0.0f;
+	afTurn = 0.0f;
+	afThread = 0.0f;
+	asSoundBolt = "";
+	asSoundForced = "";
+	// The keys (the pillbox's in maintenance, the communications room's in
+	// soldier quarters): 17.5 cm long, the bow at the origin, where the hand
+	// holds it, the bit at the far end, 15.4 cm along its -z (its model: a
+	// flat bow 7 cm tall at one end, a bit 2.6 cm wide at the other). The
+	// game's own used key in each lock ("UsedKey", put at the held key as its
+	// scene ends) sits with its bow about 1 cm inside the face of the lock's
+	// use box, so its tip is 16.5 cm in. Then it is turned to the right only:
+	// the bolt goes at 50 degrees of the key's own turn (with its stiffness,
+	// about 74 degrees of the wrist's; see BunkerVR_FitKeyTurn). The sounds are
+	// the game's own door locks': the button lock's unlocking as the bolt goes,
+	// a locked door's rattle when forced the wrong way. The game's key scene
+	// sound ("extra/key/use") is not used: it is one recording of the whole
+	// scene, its clunk not in time with the hand's turn.
+	if(asType == "PillboxKey" || asType == "CommunicationsKey")
+	{
+		avTip = cVector3f(0.0f, 0.0f, -0.154f);
+		avPoints = cVector3f(0.0f, 0.0f, -1.0f);
+		afDepth = 0.165f;
+		afTurn = 0.87f; // (50 degrees, to the right)
+		asSoundBolt = "level_entity_shared/doors/button_lock/unlock";
+		asSoundForced = "level_entity_shared/doors/home_door/locked";
+		return true;
+	}
+	// The fuse: round about its own z, 6.9 cm long: its narrow end (the
+	// contact, 2.3 cm across) at the origin, then its threaded body (6.3 cm
+	// across), then its cap (7.4 cm across) at z -6.9 cm. (Its model is
+	// "Z up", which the game turns to y up.) It goes into the fuse box narrow
+	// end first, along its +z. The levels' box takes it in a "use" area
+	// (FuseBox_InteractArea in maintenance, 6.7 cm deep); the game's scene
+	// leaves it screwed in with its tip 7.35 cm past that area's face (the
+	// box's own fuse is put where the held one is as the scene ends:
+	// FuseBox_Fuse_Pickup sits there). The scene (its arm animation,
+	// player_fuse_use_medium.fbx) pushes it in to 0.9 cm short of that, then
+	// screws it the last 0.9 cm by turning it 147 degrees clockwise as the
+	// player sees it, in five twists of the wrist (33, 69, 10, 18, 20
+	// degrees), the hand taking a new hold between them. So here: in by
+	// itself to 6.45 cm, then 149 degrees to the right screws it in the last
+	// 0.9 cm (BunkerVR_FitScrewGive: stiffer near the end), and once tight,
+	// the game's own sound of the fuse locking in (which its box plays again
+	// as its lever is pulled the first time).
+	if(asType == "Fuse")
+	{
+		avTip = cVector3f(0.0f);
+		avPoints = cVector3f(0.0f, 0.0f, 1.0f);
+		afDepth = 0.0735f;
+		afTurn = 2.6f; // (149 degrees, to the right)
+		afThread = 0.009f;
+		asSoundBolt = "update/player/fuse_lock";
+		return true;
+	}
+	return false;
+}

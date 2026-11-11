@@ -1,0 +1,2087 @@
+#include "custom/helpers/helper_bunkervr_maths.hps" // BunkerVR_IsNumber, BunkerVR_Slerp
+// BunkerVR: helpers shared by the VR mod's scripts.
+
+//------------------------------------------------------------
+
+// BunkerVR: where a thing held in a hand can be put, on its way to where the
+// hand wants it (a_mtxWanted: its position and rotation there).
+//
+// Held things are moved by giving them the velocity that brings them to their
+// target by the next update. If that target is inside a table or a wall (the
+// real hand pressed into it), the thing is driven into it every update and
+// thrown back out by the physics, so it shakes and bounces. So the target is
+// first found the way the hands' is (see VRHandBlock in Prop_PlayerBody.hps):
+// from where the thing is now, turned the wanted way, it moves towards the
+// wanted place in steps of at most 4 cm, each pushed back out of the world's
+// static geometry (anything that doesn't move) with the engine's own check and
+// the thing's own shape. A step that can't be pushed clear isn't taken. A thing
+// pressed onto a table comes to rest on it and slides along it, and never goes
+// through. Things that move are left to the physics.
+// Where it was pushed out of something, it is kept 3 mm off it, so it doesn't
+// shake as it rubs along a surface and catches.
+cVector3f BunkerVR_HoldPlace(iPhysicsBody@ apBody, const cMatrixf &in a_mtxWanted)
+{
+	cVector3f vWanted = a_mtxWanted.GetTranslation();
+	if(apBody is null) return vWanted;
+	cLuxMap@ pMap = cLux_GetCurrentMap();
+	iPhysicsWorld@ pPhysics = pMap !is null ? pMap.GetPhysicsWorld() : null;
+	iCollideShape@ pShape = apBody.GetShape();
+	if(pPhysics is null || pShape is null) return vWanted;
+
+	cMatrixf mtxTry = a_mtxWanted;
+	cVector3f vAt = apBody.GetLocalPosition();
+	cVector3f vLastOut = cVector3f(0.0f); // how the last step was pushed out of something
+	for(int i = 0; i < 8; ++i)
+	{
+		cVector3f vLeft = vWanted - vAt;
+		float fLeft = vLeft.Length();
+		if(fLeft < 0.0005f) break;
+		cVector3f vTry = vAt + vLeft * (cMath_Min(fLeft, 0.04f) / fLeft);
+		cVector3f vStepOut = cVector3f(0.0f);
+		bool bClear = false;
+		for(int k = 0; k < 4; ++k)
+		{
+			mtxTry.SetTranslation(vTry);
+			cVector3f vPush = cVector3f(0.0f);
+			if(pPhysics.CheckShapeWorldCollision(vPush, pShape, mtxTry, apBody, false, true, false, false) == false || vPush.Length() < 0.002f)
+			{
+				bClear = true;
+				break;
+			}
+			vTry = vTry + vPush;
+			vStepOut = vStepOut + vPush;
+		}
+		if(bClear == false) break;			// cannot get clear there: stay
+		vLastOut = vStepOut;
+		if((vTry - vAt).Length() < 0.0005f) break;	// pressed against something: no way on
+		vAt = vTry;
+	}
+
+	// 3 mm off what it was pushed out of (if that is clear).
+	if(vLastOut.Length() > 0.0005f)
+	{
+		cVector3f vOff = vAt + vLastOut * (0.003f / vLastOut.Length());
+		mtxTry.SetTranslation(vOff);
+		cVector3f vPush = cVector3f(0.0f);
+		if(pPhysics.CheckShapeWorldCollision(vPush, pShape, mtxTry, apBody, false, true, false, false) == false || vPush.Length() < 0.002f)
+			vAt = vOff;
+	}
+	return vAt;
+}
+
+// BunkerVR: is a thing at a_mtxAt clear of the world's static geometry (pushed
+// out of it by less than 2 mm, the same check as above)? For carrying a held
+// thing along with the player's own movement (cBunkerVRWeight).
+bool BunkerVR_PlaceClear(iPhysicsBody@ apBody, const cMatrixf &in a_mtxAt)
+{
+	cLuxMap@ pMap = cLux_GetCurrentMap();
+	iPhysicsWorld@ pPhysics = pMap !is null ? pMap.GetPhysicsWorld() : null;
+	iCollideShape@ pShape = apBody !is null ? apBody.GetShape() : null;
+	if(pPhysics is null || pShape is null) return false;
+	cVector3f vPush = cVector3f(0.0f);
+	return pPhysics.CheckShapeWorldCollision(vPush, pShape, a_mtxAt, apBody, false, true, false, false) == false || vPush.Length() < 0.002f;
+}
+
+// BunkerVR: a thing held in one hand caught on something, which would draw the
+// hand fixed to it away from the real hand. Returns how far the drawn hand,
+// fixed to the thing at the spot where the hand holds it (avSpot, in the
+// thing's local space), is from the real hand (avHand): the stretch the player
+// sees. Measured from the thing as it really is, not from the carried place:
+// that includes the thing's sag and tip, which a chair on the floor or a thing
+// on a table can't reach, so it would let go as soon as such a thing is taken.
+float BunkerVR_HoldStretch(iPhysicsBody@ apBody, const cVector3f &in avSpot, const cVector3f &in avHand)
+{
+	if(apBody is null) return 0.0f;
+	return (cMath_MatrixMul(apBody.GetLocalMatrix(), avSpot) - avHand).Length();
+}
+
+// ...and how long it has been caught (seconds), from that stretch (afOff) and
+// the time so far (afCaughtFor): over gfBunkerVR_HoldCaughtTime and it is let
+// go. Further off than gfBunkerVR_HoldCaughtMost it is let go at once (the
+// result is then over that time); further than gfBunkerVR_HoldCaughtFrom the
+// time runs on; nearer, it starts again. Not across a jump of the view (a
+// snap turn it couldn't be carried through: it is sent after the view).
+// Used by both holds with one hand (two hands, and a heavy thing dragged, have
+// their own rules).
+float BunkerVR_HoldCaughtFor(float afOff, float afCaughtFor, float afTimeStep)
+{
+	if(BunkerVR_ViewJumped(afTimeStep)) return 0.0f;
+	if(afOff > gfBunkerVR_HoldCaughtMost) return gfBunkerVR_HoldCaughtTime + 1.0f;
+	if(afOff > gfBunkerVR_HoldCaughtFrom) return afCaughtFor + afTimeStep;
+	return 0.0f;
+}
+
+//------------------------------------------------------------
+
+// BunkerVR: holding a thing in a hand, the same for both hands in feel and in
+// what they can do. The game's grab (PlayerState_Interact_Grab.hps, the first
+// hand to squeeze) and a hand's own hold (VRUpdateFreeHand in
+// PlayerBodyHandler.hps, the other hand) both use these.
+const float gfBunkerVR_HoldFollow = 0.9f;			// how much of the way to its place a held thing is sent each update (1 = all of it)
+const float gfBunkerVR_HoldFollowHeavy = 0.45f;		// the same for a heavy thing
+const float gfBunkerVR_HoldMaxSpeed = 12.0f;		// the fastest it is moved (meters per second)...
+const float gfBunkerVR_HoldMaxSpin = 25.0f;			// ...and turned (radians per second)
+const float gfBunkerVR_HoldHeavyShare = 0.4f;		// a heavy thing dragged with one hand: at most this share of those
+const float gfBunkerVR_HoldSpinShare = 0.6f;		// how much of the turn still needed it is turned by the next update (times the follow)
+const float gfBunkerVR_HoldLetGoDistance = 0.35f;	// held back this far from its place in the hand...
+const float gfBunkerVR_HoldStuckSpeed = 1.0f;		// ...while moving slower than this (meters per second)...
+const float gfBunkerVR_HoldLetGoTime = 0.3f;		// ...for this long (seconds): it is let go (not thrown)
+const float gfBunkerVR_HoldCaughtFrom = 0.25f;		// held in one hand, the drawn hand fixed to it this far from the real hand... (see BunkerVR_HoldStretch)
+const float gfBunkerVR_HoldCaughtTime = 0.3f;		// ...for this long (seconds): it is let go (caught on something, and the hand gone on without it)...
+const float gfBunkerVR_HoldCaughtMost = 0.40f;		// ...and this far: let go at once (so the drawn hand is never drawn out further)
+const float gfBunkerVR_HoldReachLeast = 0.18f;		// a held thing's middle may always be this far from the hand (see BunkerVR_HoldReachLimit)
+const float gfBunkerVR_ThrowMaxSpeed = 14.0f;		// a thing let go of leaves at most this fast (meters per second; a heavy one half)...
+const float gfBunkerVR_ThrowMaxSpin = 4.0f;			// ...and spins at most this fast (radians per second; a heavy one 30%: the game's own limits)
+
+//------------------------------------------------------------
+
+// BunkerVR: weight. Held things carry weight, in the style of physics-based VR
+// games, instead of following the hand rigidly.
+//
+// The carried place (cBunkerVRWeight). A held thing is held steadily at its
+// place, but that place is not exactly where the hand has it: a copy of it,
+// the carried place, follows the hand as a weight on a spring and a damper
+// would. Its weight decides how quickly it responds: a light thing at once, a
+// heavy one lags behind a quick move and sags a little. The damper brakes it
+// towards 70% of the hand's own speed, which keeps it from ever swinging
+// further than the hand, however hard it is shaken. (A spring alone, limited
+// to the hand's strength, lets a heavy thing swing well past the hand: it is
+// still pulling the old way when the hand has already turned back.) It turns
+// the same way, as quickly as the wrist can turn it given how hard it is to
+// turn about the spot where it is held (a long or heavy thing held by its end
+// turns more slowly). It never goes more than a few millimeters past the hand.
+// It is worked out in the player's own frame (BunkerVR_PlayerFrame): walking,
+// and turning with the stick, carry it along at once; only the arms' own moves
+// lag. The hand is drawn where it holds the thing as the thing really is, and
+// turned with it (one hand; see BunkerVR_HoldGlue). A thing too heavy for one
+// hand (BunkerVR_TooHeavyForOneHand) is dragged instead. gbBunkerVR_Weight:
+// false for no weight.
+//
+// Turning is a trade-off. A stiffer wrist keeps a thing such as the workshop
+// hammer, held by its handle, from lagging behind a quick wrist turn and then
+// turning on after the wrist stops; but it lets through more of the
+// controllers' tracking jitter, most of it through the hand's spin (worked out
+// from one update to the next and fed to the damper). So the hand's spin is
+// fed to the damper only in part below gfBunkerVR_TurnFeedFull and not at all
+// below gfBunkerVR_TurnFeedFrom: a hand held still, or hardly turning, is
+// mostly jitter. (Smoothing the hand's spin over time instead makes the thing
+// turn on past the end of a wrist turn, by 3 to 7 degrees.)
+//
+// The values marked "(Feel)" below can be changed while playing on the "Feel"
+// page of the mod's menu (Y), and are read from the mod every update
+// (BunkerVR_ReadFeel). The values here are the defaults, kept if the mod
+// doesn't answer.
+bool gbBunkerVR_Weight = true;					// (Feel) weight on held things
+float gfBunkerVR_HandStiffness = 1500.0f;		// (Feel) newtons a hand holds a thing at its place with, for each meter off it
+float gfBunkerVR_WristStiffness = 50.0f;		// (Feel) newton meters a wrist turns it with, for each radian off
+float gfBunkerVR_WeightQuickest = 40.0f;		// (Feel) how quickly the carried place responds (radians per second), at most: a light thing, moving...
+float gfBunkerVR_TurnQuickest = 35.0f;			// (Feel) ...and turning...
+float gfBunkerVR_TurnFeedFrom = 0.3f;			// (Feel: a quarter of the next) the hand's spin (radians per second) is fed to the turning damper not at all below this...
+float gfBunkerVR_TurnFeedFull = 1.2f;			// (Feel) ...in full above this, and smoothly more and more between (0: always in full)
+bool gbBunkerVR_HandOnThing = true;				// (Feel) the drawn hand fixed to what it holds (BunkerVR_HoldGlue)
+bool gbBunkerVR_EvenTurn = true;				// (Feel) the stick's smooth turn made even while holding (VRDoSnapTurn in PlayerBodyHandler.hps)
+const float gfBunkerVR_WeightSlowest = 8.0f;	// ...and at least, moving...
+const float gfBunkerVR_TurnSlowest = 10.0f;		// ...and turning (kept low: at 20 a chair held by its back turns as freely as a tin; small things still turn at the quickest)...
+const float gfBunkerVR_WeightStepLimit = 0.6f;	// ...and never more than this over one update (27 at 45 updates a second: any quicker and the following below overshoots)
+const float gfBunkerVR_WeightDamping = 1.0f;	// how hard the damper brakes, moving (1: just enough not to swing past)...
+const float gfBunkerVR_WeightShare = 0.7f;		// ...towards this share of the hand's own speed (at most the square root of 1 - 1 / (2 x damping x damping): more, and it can swing further than the hand)
+const float gfBunkerVR_TurnDamping = 1.3f;		// the same for turning (a little harder: less lag, still no swinging past)...
+const float gfBunkerVR_TurnShare = 0.83f;		// ...(at most 0.839 with damping 1.3)
+const float gfBunkerVR_GripDamping = 0.4f;		// at the hand's or the wrist's strength, a lighter damper on top, as a share of the springs' own (see cBunkerVRWeight.Step)
+float gfBunkerVR_WeightDrop = 1.0f;				// (Feel) how much of its weight pulls on the carried place, as a force (1: all of it; 0: none; see cBunkerVRWeight.Step)
+float gfBunkerVR_WristStrength = 10.0f;			// (Feel) newton meters one wrist can turn a held thing with, at most (a chair held level by its edge needs 12; see cBunkerVRWeight.Step)
+const float gfBunkerVR_WeightStep = 0.0028f;	// worked out in steps of at most this (seconds; 1/360)
+const float gfBunkerVR_HandForce = 160.0f;		// newtons one hand holds a thing up with (BunkerVR_TooHeavyForOneHand)
+const float gfBunkerVR_Gravity = 9.8f;			// (meters per second squared)
+
+// BunkerVR: a thing too heavy for one hand to hold up (over
+// gfBunkerVR_HandForce / gfBunkerVR_Gravity, about 16 kg: the sledgehammer)?
+// It is then dragged, as heavy things are. afMass: its real weight (kg).
+bool BunkerVR_TooHeavyForOneHand(float afMass)
+{
+	return gbBunkerVR_Weight && afMass * gfBunkerVR_Gravity > gfBunkerVR_HandForce;
+}
+
+// BunkerVR: the Feel page's numbers (the mod's menu, Y, "Feel"), read from
+// the mod (rolls 7080 to 7082, see camera.cpp) into the "(Feel)" globals
+// above. Each script that holds things reads them once an update (each has
+// its own copy of them). Without the mod's answer they stay as they are.
+void BunkerVR_ReadFeel(cCamera@ apCam)
+{
+	if(apCam is null) return;
+	float fRealRoll = apCam.GetRoll();
+	apCam.SetRoll(7080.0f);
+	cVector3f vSwitches = apCam.GetMatrix().GetTranslation();
+	apCam.SetRoll(7081.0f);
+	cVector3f vTurning = apCam.GetMatrix().GetTranslation();
+	apCam.SetRoll(7082.0f);
+	cVector3f vMore = apCam.GetMatrix().GetTranslation();
+	apCam.SetRoll(fRealRoll);
+	if(vSwitches.x < 12344.0f || vSwitches.x > 12346.0f) return;
+	int lSwitches = int(vSwitches.y + 0.5f);
+	gbBunkerVR_Weight = (lSwitches & 1) != 0;
+	gbBunkerVR_HandOnThing = (lSwitches & 2) != 0;
+	gbBunkerVR_EvenTurn = (lSwitches & 4) != 0;
+	gfBunkerVR_HandStiffness = cMath_Clamp(vSwitches.z, 200.0f, 10000.0f);
+	gfBunkerVR_WristStiffness = cMath_Clamp(vTurning.x, 5.0f, 400.0f);
+	gfBunkerVR_WeightQuickest = cMath_Clamp(vTurning.y, 10.0f, 60.0f);
+	gfBunkerVR_TurnQuickest = cMath_Clamp(vTurning.z, 10.0f, 60.0f);
+	gfBunkerVR_WeightDrop = cMath_Clamp(vMore.x, 0.0f, 2.0f);
+	if(vMore.z > 0.5f) gfBunkerVR_WristStrength = cMath_Clamp(vMore.z, 1.0f, 60.0f); // (a mod DLL without this setting returns 0 there)
+	gfBunkerVR_TurnFeedFull = cMath_Clamp(vMore.y, 0.0f, 4.0f);
+	gfBunkerVR_TurnFeedFrom = gfBunkerVR_TurnFeedFull * 0.25f;
+}
+
+// BunkerVR: the Feel numbers in use, as a line for the log.
+tString BunkerVR_FeelText()
+{
+	return "weight " + (gbBunkerVR_Weight ? "on" : "off") + ", hand stiffness " + int(gfBunkerVR_HandStiffness + 0.5f) +
+		   ", wrist stiffness " + int(gfBunkerVR_WristStiffness + 0.5f) + ", light things follow " + int(gfBunkerVR_WeightQuickest + 0.5f) +
+		   " moving, " + int(gfBunkerVR_TurnQuickest + 0.5f) + " turning, weight shown " + int(gfBunkerVR_WeightDrop * 100.0f + 0.5f) +
+		   "%, wrist strength " + int(gfBunkerVR_WristStrength + 0.5f) + " N m, still hand steadied below " + BunkerVR_Fixed(gfBunkerVR_TurnFeedFull, 1) + " rad/s, hand fixed to the thing " +
+		   (gbBunkerVR_HandOnThing ? "on" : "off") + ", smooth turn evened " + (gbBunkerVR_EvenTurn ? "on" : "off");
+}
+
+// BunkerVR: a number as text with alDecimals digits after the point (the
+// scripts' string concatenation only writes whole numbers).
+tString BunkerVR_Fixed(float afValue, int alDecimals)
+{
+	int lScale = 1;
+	for(int i = 0; i < alDecimals; ++i) lScale *= 10;
+	int lAll = int(cMath_Abs(afValue) * float(lScale) + 0.5f);
+	tString sOut = (afValue < 0.0f && lAll > 0) ? "-" : "";
+	sOut += "" + (lAll / lScale);
+	if(alDecimals > 0)
+	{
+		tString sFraction = "" + (lAll % lScale);
+		while(int(sFraction.length()) < alDecimals) sFraction = "0" + sFraction;
+		sOut += "." + sFraction;
+	}
+	return sOut;
+}
+
+// BunkerVR: a ring buffer holding the last few seconds of some numbers, for a
+// mark (the left stick held in and the right stick clicked, to log what just
+// happened; see VRMark in PlayerBodyHandler.hps). Each record is alFields
+// numbers, the first of them the game's time.
+const int glBunkerVR_RingSize = 300;	// records kept (one per update: over 3 seconds at 90 updates a second)
+class cBunkerVRRing
+{
+	int mlFields = 1;
+	array<float> mvData;
+	int mlNext = 0;
+	int mlCount = 0;
+
+	// Room for a new record of alFields numbers: where it starts in mvData.
+	int Add(int alFields)
+	{
+		if(mlFields != alFields || int(mvData.length()) != alFields * glBunkerVR_RingSize)
+		{
+			mlFields = alFields;
+			mvData.resize(uint(alFields * glBunkerVR_RingSize));
+			mlNext = 0;
+			mlCount = 0;
+		}
+		int lAt = mlNext * mlFields;
+		mlNext = (mlNext + 1) % glBunkerVR_RingSize;
+		if(mlCount < glBunkerVR_RingSize) mlCount++;
+		return lAt;
+	}
+
+	// Where the i-th oldest record kept starts (0: the oldest).
+	int At(int i)
+	{
+		return ((mlNext - mlCount + i + glBunkerVR_RingSize * 2) % glBunkerVR_RingSize) * mlFields;
+	}
+}
+
+// BunkerVR: how quickly a carried place responds, moving (radians per second):
+// as a weight of afMass (kg) on alHands hands' springs, the square root of
+// stiffness x hands / weight, between gfBunkerVR_WeightSlowest and
+// gfBunkerVR_WeightQuickest (1 kg: 39; 3 kg: 22; 8 kg: 14; 16 kg: 10), and
+// never more than gfBunkerVR_WeightStepLimit over an update of afTimeStep.
+float BunkerVR_WeightMoveSpeed(float afMass, int alHands, float afTimeStep)
+{
+	float fW = gfBunkerVR_WeightQuickest;
+	if(afMass > 0.0f && alHands >= 1)
+		fW = cMath_Clamp(cMath_Sqrt(gfBunkerVR_HandStiffness * float(alHands) / afMass), gfBunkerVR_WeightSlowest, gfBunkerVR_WeightQuickest);
+	if(afTimeStep > 0.0001f) fW = cMath_Min(fW, gfBunkerVR_WeightStepLimit / afTimeStep);
+	return fW;
+}
+
+// BunkerVR: ...and turning: for how hard apBody is to turn about the spot
+// where it is held (avSpot, in the world): as a solid box of its weight and
+// its own size, about its center, plus its weight times how far its center
+// is from the spot, squared (with the default wrist: the workshop hammer held
+// by its handle 16-35; the crate, the broom, the stool held by an end: 10);
+// turned by alHands wrists, and with two hands afLever meters apart also by
+// the hands pushing and pulling (each hand's stiffness, half the lever out);
+// between gfBunkerVR_TurnSlowest and gfBunkerVR_TurnQuickest.
+float BunkerVR_WeightTurnSpeed(iPhysicsBody@ apBody, const cVector3f &in avSpot, float afMass, int alHands, float afLever, float afTimeStep)
+{
+	float fW = gfBunkerVR_TurnQuickest;
+	cBoundingVolume@ pBox = apBody !is null ? apBody.GetBoundingVolume() : null;
+	if(pBox !is null && afMass > 0.0f && alHands >= 1)
+	{
+		cVector3f vSize = pBox.GetLocalMax() - pBox.GetLocalMin();
+		if(vSize.Length() < 0.001f) vSize = pBox.GetMax() - pBox.GetMin();
+		float fHardToTurn = BunkerVR_HardToTurn(afMass, vSize, pBox.GetWorldCenter() - avSpot);
+		if(fHardToTurn > 0.000001f) fW = cMath_Clamp(cMath_Sqrt(BunkerVR_TurnStiffness(alHands, afLever) / fHardToTurn), gfBunkerVR_TurnSlowest, gfBunkerVR_TurnQuickest);
+	}
+	if(afTimeStep > 0.0001f) fW = cMath_Min(fW, gfBunkerVR_WeightStepLimit / afTimeStep);
+	return fW;
+}
+
+// BunkerVR: how hard a thing is to turn about the spot where it is held (its
+// moment of inertia, kg m2): as a solid box of its weight (afMass) and its own
+// size (avSize), about its center, plus its weight times how far its center is
+// from the spot (avOut), squared.
+float BunkerVR_HardToTurn(float afMass, const cVector3f &in avSize, const cVector3f &in avOut)
+{
+	return afMass * (cMath_Vector3Dot(avSize, avSize) / 18.0f + cMath_Vector3Dot(avOut, avOut));
+}
+
+// BunkerVR: how stiffly alHands wrists turn a held thing (newton meters per
+// radian off): gfBunkerVR_WristStiffness each, and with two hands afLever
+// meters apart also the hands pushing and pulling (each hand's stiffness,
+// half the lever out).
+float BunkerVR_TurnStiffness(int alHands, float afLever)
+{
+	float fStiff = gfBunkerVR_WristStiffness * float(alHands);
+	if(alHands >= 2) fStiff += gfBunkerVR_HandStiffness * afLever * afLever * 0.5f;
+	return fStiff;
+}
+
+// BunkerVR: ...and how strongly at most (newton meters): the Feel page's
+// gfBunkerVR_WristStrength each, and with two hands afLever meters apart
+// also each hand's strength (gfBunkerVR_HandForce) half the lever out.
+// A 4 kg chair held level by its edge, its middle 30 cm out, needs 12: with
+// one wrist of 10 it tips to about 30 degrees, with both hands 40 cm apart
+// (84) it comes level.
+float BunkerVR_TurnStrength(int alHands, float afLever)
+{
+	float fMost = gfBunkerVR_WristStrength * float(alHands);
+	if(alHands >= 2) fMost += gfBunkerVR_HandForce * afLever;
+	return fMost;
+}
+
+// BunkerVR: how far a carried place sags below the hand held still (meters):
+// its weight (times the Feel page's gfBunkerVR_WeightDrop) on the hand's
+// spring, as quickly as it responds moving (BunkerVR_WeightMoveSpeed): 1 kg 7
+// mm, 4 kg (a chair) 3 cm, 8 kg 5 cm, 16 kg 10 cm. For the log only: the
+// carried place itself is pulled down by its weight (cBunkerVRWeight.Step).
+float BunkerVR_WeightSag(float afMass, int alHands)
+{
+	if(afMass <= 0.0f || alHands < 1) return 0.0f;
+	float fW = BunkerVR_WeightMoveSpeed(afMass, alHands, 0.0f);
+	return gfBunkerVR_Gravity * gfBunkerVR_WeightDrop / (fW * fW);
+}
+
+// BunkerVR: the player's own frame: where the game itself has the camera,
+// level, without the head's movement (the mod's answer to roll 7007, the base
+// the hands are placed in the world from), as a matrix. It moves and turns
+// as the player walks and turns (with the stick, or a snap turn), not as the
+// head or the hands do.
+cMatrixf BunkerVR_PlayerFrame(cCamera@ apCam)
+{
+	if(apCam is null) return cMatrixf_Identity;
+	float fRealRoll = apCam.GetRoll();
+	apCam.SetRoll(7007.0f);
+	cMatrixf mtxLevel = apCam.GetMatrix();
+	apCam.SetRoll(fRealRoll);
+	return mtxLevel;
+}
+
+// BunkerVR: the rotation that BunkerVR_TurnVector would give as avTurn (along
+// its axis, as long as its angle), as a matrix. (Which way round a positive
+// angle turns, for cQuaternion, is found the first time by asking
+// BunkerVR_TurnVector: math libraries differ.)
+int glBunkerVR_TurnByWay = 0;
+int glBunkerVR_WalkNotes = 0; // (cBunkerVRWeight's notes for the log, walking with a thing in hand)
+int glBunkerVR_TurnNotes = 0; // (and turning with it)
+int glBunkerVR_CarryNotes = 0; // (and not carried along with the player's move)
+cMatrixf BunkerVR_TurnBy(const cVector3f &in avTurn)
+{
+	float fAngle = avTurn.Length();
+	if(fAngle < 0.0000001f) return cMatrixf_Identity;
+	if(glBunkerVR_TurnByWay == 0)
+	{
+		cQuaternion qTest;
+		qTest.FromAngleAxis(0.5f, cVector3f(0.0f, 0.0f, 1.0f));
+		glBunkerVR_TurnByWay = BunkerVR_TurnVector(cMatrixf_Identity, cMath_MatrixQuaternion(qTest), cVector3f(0.0f)).z > 0.0f ? 1 : -1;
+	}
+	cQuaternion qTurn;
+	qTurn.FromAngleAxis(fAngle * float(glBunkerVR_TurnByWay), avTurn / fAngle);
+	return cMath_MatrixQuaternion(qTurn);
+}
+
+// BunkerVR: a held thing's carried place (see gbBunkerVR_Weight). Each hold
+// keeps one. Update is given, every update, where the hand (or both hands)
+// wants the thing, and returns where it is to be held; Reset when the hold
+// starts again (taken hold of, or dragged as a heavy thing).
+class cBunkerVRWeight
+{
+	bool mbKnown = false;
+	cVector3f mvSpot = cVector3f(0.0f);				// the spot where it is held, in its local space
+	cVector3f mvAt = cVector3f(0.0f);				// where the carried place has that spot, in the player's own frame (BunkerVR_PlayerFrame)...
+	cVector3f mvSpeed = cVector3f(0.0f);			// ...how fast it moves...
+	cMatrixf m_mtxTurn = cMatrixf_Identity;			// ...how it is turned...
+	cVector3f mvSpin = cVector3f(0.0f);				// ...and how fast it turns (the same frame)
+	cVector3f mvHandWas = cVector3f(0.0f);			// where the hand had the spot at the last update (the same frame)...
+	cMatrixf m_mtxHandTurnWas = cMatrixf_Identity;	// ...and how it had it turned
+	cMatrixf m_mtxFrameWas = cMatrixf_Identity;		// the player's own frame at the last update
+	cVector3f mvFeed = cVector3f(0.0f);				// how fast the carried place moves the thing's center now, in the world...
+	cVector3f mvSpinFeed = cVector3f(0.0f);			// ...and turns it (for the hold's feed)
+	float mfLag = 0.0f;								// how far the carried place is from where the hand has the spot (meters; for the log)
+	cVector3f mvMiddle = cVector3f(0.0f);			// the thing's center, in its local space (where its weight pulls)...
+	cVector3f mvSize = cVector3f(0.0f);				// ...and its size (how hard it is to turn)
+	bool mbCarried = false;							// was it carried along with the player's own walking and turning in this update?
+	bool mbHeldBack = false;						// ...and was the carried place drawn to where the thing is held back?
+
+	void Reset()
+	{
+		mbKnown = false;
+		mvFeed = cVector3f(0.0f);
+		mvSpinFeed = cVector3f(0.0f);
+		mfLag = 0.0f;
+		mbCarried = false;
+		mbHeldBack = false;
+	}
+
+	// apCam: the player's camera; apBody: the held thing; a_mtxWanted: where
+	// the hand(s) want it; avSpot: the spot where it is held, in its local
+	// space (one hand: the hand; two: the midpoint between their places on it);
+	// afMass: its real weight (kg); alHands: by how many hands; afLever: with
+	// two, how far apart their places on it are (meters); abCarry: may it be
+	// carried along with the player's own walking and turning (not while it
+	// glides into the hand, touches another thing or settles back);
+	// abGliding: is it gliding into the hand (then the carried place is not
+	// drawn to where it is).
+	cMatrixf Update(cCamera@ apCam, iPhysicsBody@ apBody, const cMatrixf &in a_mtxWanted, const cVector3f &in avSpot,
+					float afMass, int alHands, float afLever, float afTimeStep, bool abCarry, bool abGliding)
+	{
+		mvFeed = cVector3f(0.0f);
+		mvSpinFeed = cVector3f(0.0f);
+		mbCarried = false;
+		mbHeldBack = false;
+		if(gbBunkerVR_Weight == false || afMass <= 0.0f || alHands < 1)
+		{
+			Reset();
+			return a_mtxWanted;
+		}
+		cMatrixf mtxFrame = BunkerVR_PlayerFrame(apCam);
+		cMatrixf mtxLocal = cMath_MatrixMul(cMath_MatrixInverse(mtxFrame), a_mtxWanted);	// where the hand(s) want it, in the player's own frame
+		cVector3f vHand = cMath_MatrixMul(mtxLocal, avSpot);
+		cMatrixf mtxHandTurn = mtxLocal.GetRotation();
+
+		// Just taken hold of (or after a pause of a tenth of a second or
+		// more): it starts where the hand has it.
+		if(mbKnown == false || afTimeStep < 0.0001f || afTimeStep > 0.1f)
+		{
+			int lTenths = int(afMass * 10.0f + 0.5f);
+			bool bFirst = mbKnown == false;
+			if(bFirst)
+				Log("BunkerVR: weight: a " + (lTenths / 10) + "." + (lTenths % 10) + " kg thing in " + (alHands >= 2 ? "both hands" : "one hand") +
+					": it answers at " + int(BunkerVR_WeightMoveSpeed(afMass, alHands, 0.0f) + 0.5f) + " moving, " +
+					int(BunkerVR_WeightTurnSpeed(apBody, cMath_MatrixMul(a_mtxWanted, avSpot), afMass, alHands, afLever, 0.0f) + 0.5f) +
+					" turning (radians a second), and sags " + int(BunkerVR_WeightSag(afMass, alHands) * 1000.0f + 0.5f) + " mm\n");
+			mbKnown = true;
+			iLuxEntity@ pThing = apBody !is null ? cLux_GetBodyEntity(apBody) : null;
+			msThing = "a thing";
+			if(pThing !is null) msThing = pThing.GetName();
+			mfThingMass = afMass;
+			mvMiddle = cVector3f(0.0f);
+			mvSize = cVector3f(0.0f);
+			cBoundingVolume@ pBox = apBody !is null ? apBody.GetBoundingVolume() : null;
+			if(pBox !is null)
+			{
+				mvMiddle = cMath_MatrixMul(cMath_MatrixInverse(apBody.GetLocalMatrix()), pBox.GetWorldCenter());
+				mvSize = pBox.GetLocalMax() - pBox.GetLocalMin();
+				if(mvSize.Length() < 0.001f) mvSize = pBox.GetMax() - pBox.GetMin();
+			}
+			if(bFirst)
+			{
+				// (How much its weight turns it about the hand as held now, against what the wrist can do.)
+				cVector3f vOutNow = cMath_MatrixMul3x3(mtxHandTurn, mvMiddle - avSpot);
+				float fLevelPull = afMass * gfBunkerVR_Gravity * gfBunkerVR_WeightDrop * cMath_Sqrt(vOutNow.x * vOutNow.x + vOutNow.z * vOutNow.z);
+				Log("BunkerVR: weight: its middle " + int((mvMiddle - avSpot).Length() * 100.0f + 0.5f) + " cm from the hand; as held now its weight turns it with " +
+					BunkerVR_Fixed(fLevelPull, 1) + " N m, the wrist" + (alHands >= 2 ? "s and hands" : "") + " at most " + BunkerVR_Fixed(BunkerVR_TurnStrength(alHands, afLever), 1) + "\n");
+			}
+			mvSpot = avSpot;
+			mvAt = vHand;
+			mvSpeed = cVector3f(0.0f);
+			m_mtxTurn = mtxHandTurn;
+			mvSpin = cVector3f(0.0f);
+			mvHandWas = vHand;
+			m_mtxHandTurnWas = mtxHandTurn;
+			m_mtxFrameWas = mtxFrame;
+			mfLag = 0.0f;
+			return a_mtxWanted;
+		}
+
+		// Held at another spot now (the other hand took hold, or let go): the
+		// carried place is moved to that spot, as it is turned, without a jump.
+		if((avSpot - mvSpot).Length() > 0.0005f)
+		{
+			cVector3f vShift = cMath_MatrixMul3x3(m_mtxTurn, avSpot - mvSpot);
+			mvAt = mvAt + vShift;
+			mvSpeed = mvSpeed + cMath_Vector3Cross(mvSpin, vShift);
+			mvHandWas = mvHandWas + cMath_MatrixMul3x3(m_mtxHandTurnWas, avSpot - mvSpot);
+			mvSpot = avSpot;
+		}
+
+		// Carried along with the player's own walking and turning, at once: the
+		// thing is moved and turned by as much as the player's own frame moved
+		// since the last update, before the hold sends it on to its place. If
+		// that move went into the feed instead (the velocity given for the next
+		// update, taken from the last update's move), the thing would run on for
+		// an update whenever a turn stops (4 to 5 cm ahead at 45 updates a
+		// second) and be left behind whenever one starts. The game moves things
+		// before it runs the scripts, and this update's turn is made before the
+		// holds (VRDoSnapTurn in PlayerBodyHandler.hps), so the thing goes exactly
+		// as the view does, at any update rate. Not when abCarry is false, nor
+		// where it would be inside static geometry (BunkerVR_PlaceClear), nor
+		// across a jump of more than a quarter turn or 1.5 m, nor for a body held
+		// by a joint or attached to another (moved at once, it would fight the
+		// joint): then the move goes into the feed.
+		float fCarryMove = (mtxFrame.GetTranslation() - m_mtxFrameWas.GetTranslation()).Length();
+		float fCarryTurn = BunkerVR_TurnVector(m_mtxFrameWas, mtxFrame, cVector3f(0.0f)).Length();
+		if(abCarry && apBody !is null && apBody.GetJointNum() == 0 && apBody.HasParent() == false)
+		{
+			if(fCarryMove < 0.0001f && fCarryTurn < 0.0001f) mbCarried = true; // (nothing to carry)
+			else if(fCarryMove < 1.5f && fCarryTurn < 1.6f)
+			{
+				cMatrixf mtxCarry = cMath_MatrixMul(mtxFrame, cMath_MatrixInverse(m_mtxFrameWas));
+				cMatrixf mtxBody = cMath_MatrixMul(mtxCarry, apBody.GetLocalMatrix());
+				if(BunkerVR_PlaceClear(apBody, mtxBody))
+				{
+					cMatrixf mtxCarryTurn = mtxCarry.GetRotation();
+					cVector3f vSpeedNow = apBody.GetLinearVelocity();
+					cVector3f vSpinNow = apBody.GetAngularVelocity();
+					apBody.SetMatrix(mtxBody);
+					apBody.SetLinearVelocity(cMath_MatrixMul3x3(mtxCarryTurn, vSpeedNow));
+					apBody.SetAngularVelocity(cMath_MatrixMul3x3(mtxCarryTurn, vSpinNow));
+					mbCarried = true;
+				}
+				else if(glBunkerVR_CarryNotes < 6)
+				{
+					glBunkerVR_CarryNotes++;
+					Log("BunkerVR: weight: " + msThing + " not carried with the player's move this update: its place there is in something solid (" +
+						glBunkerVR_CarryNotes + " of 6)\n");
+				}
+			}
+		}
+
+		// Held back by the world: the thing is not where the carried place was
+		// going (more than 4 cm off at the hand's spot, or turned more than about
+		// 14 degrees; tighter limits catch a thing that is only following a hard
+		// shake at 45 updates a second): resting on the floor or a table, pressed
+		// on a wall. The carried place, which knows nothing of the world, is
+		// drawn half the way to where the thing really is, and its speeds halved,
+		// so it doesn't swing on into a place the thing can't reach: a chair
+		// lifted by its edge from the floor stands on it until it comes up, and
+		// only then tips by its weight. Not while it glides into the hand, nor
+		// when the player moved or turned and it wasn't carried along: it is then
+		// an update behind the view by that move, which is not the world holding
+		// it back.
+		if(apBody !is null && abGliding == false && (mbCarried || (fCarryMove < 0.001f && fCarryTurn < 0.002f)))
+		{
+			cMatrixf mtxThingHere = cMath_MatrixMul(cMath_MatrixInverse(mtxFrame), apBody.GetLocalMatrix()); // (where it is, in the player's own frame)
+			cMatrixf mtxTurnExpected = cMath_MatrixMul(BunkerVR_TurnBy(mvSpin * afTimeStep), m_mtxTurn);
+			cVector3f vSpotHere = cMath_MatrixMul(mtxThingHere, mvSpot);
+			float fTurnOff = BunkerVR_TurnVector(mtxTurnExpected, mtxThingHere.GetRotation(), cVector3f(0.0f)).Length();
+			if((vSpotHere - (mvAt + mvSpeed * afTimeStep)).Length() > 0.04f || fTurnOff > 0.25f)
+			{
+				mvAt = mvAt + (vSpotHere - mvAt) * 0.5f;
+				m_mtxTurn = BunkerVR_Slerp(0.5f, m_mtxTurn, mtxThingHere.GetRotation()); // (BunkerVR_Slerp avoids the engine's NaN: this turn is kept, so a NaN would stay)
+				mvSpeed = mvSpeed * 0.5f;
+				mvSpin = mvSpin * 0.5f;
+				mbHeldBack = true;
+			}
+		}
+
+		// The hand's own speed and spin over this update (no faster than the
+		// feed's limits: no hand moves or turns faster), how quickly the
+		// carried place answers, and how far it sags.
+		cVector3f vHandSpeed = cMath_Vector3MaxLength((vHand - mvHandWas) / afTimeStep, gfBunkerVR_FeedMaxSpeed);
+		cVector3f vHandSpin = cMath_Vector3MaxLength(BunkerVR_TurnVector(m_mtxHandTurnWas, mtxHandTurn, cVector3f(0.0f)) / afTimeStep, gfBunkerVR_FeedMaxSpin);
+		// (Fed to the turning damper only in part when the hand hardly turns,
+		// not at all when it is still: then it is mostly the controller's
+		// tracking jitter. See gfBunkerVR_TurnFeedFrom.)
+		float fHandSpin = vHandSpin.Length();
+		float fSpinFed = 1.0f; // (steadying set to 0 on the Feel page: always in full)
+		if(gfBunkerVR_TurnFeedFull - gfBunkerVR_TurnFeedFrom > 0.001f)
+			fSpinFed = cMath_Clamp((fHandSpin - gfBunkerVR_TurnFeedFrom) / (gfBunkerVR_TurnFeedFull - gfBunkerVR_TurnFeedFrom), 0.0f, 1.0f);
+		vHandSpin = vHandSpin * (fSpinFed * fSpinFed * (3.0f - 2.0f * fSpinFed));
+		// For the log, the first times the player turns with a thing in hand:
+		// how far the player's own frame turns from one update to the next
+		// (even steps, or not: see VRDoSnapTurn in PlayerBodyHandler.hps).
+		float fFrameTurn = BunkerVR_TurnVector(m_mtxFrameWas, mtxFrame, cVector3f(0.0f)).Length();
+		if(glBunkerVR_TurnNotes < 16 && fFrameTurn > 0.002f && BunkerVR_ViewJumped(afTimeStep) == false)
+		{
+			glBunkerVR_TurnNotes++;
+			int lHundredths = int(fFrameTurn * 57.29578f * 100.0f + 0.5f);
+			Log("BunkerVR: weight, turning with it (" + glBunkerVR_TurnNotes + " of 16): the player turned " + (lHundredths / 100) + "." +
+				(lHundredths % 100 < 10 ? "0" : "") + (lHundredths % 100) + " degrees this update (" + int(afTimeStep * 10000.0f + 0.5f) + " tenths of a ms)\n");
+		}
+		// For the log, the first times the player walks with a thing in hand:
+		// how fast the hand moves in the player's own frame, update by update,
+		// against how fast the player moves (the hands are placed from the
+		// game's camera; if they were placed from where it was an update
+		// before, this would show as the hand's speed coming and going with
+		// the walking, and the thing would shake while walking).
+		float fFrameSpeed = (mtxFrame.GetTranslation() - m_mtxFrameWas.GetTranslation()).Length() / afTimeStep;
+		if(glBunkerVR_WalkNotes < 12 && fFrameSpeed > 1.0f && fFrameSpeed < 8.0f && BunkerVR_ViewJumped(afTimeStep) == false)
+		{
+			glBunkerVR_WalkNotes++;
+			Log("BunkerVR: weight, walking with it (" + glBunkerVR_WalkNotes + " of 12): the player moves at " + int(fFrameSpeed * 100.0f + 0.5f) +
+				" cm a second, the hand in the player's own terms at " + int((vHand - mvHandWas).Length() / afTimeStep * 100.0f + 0.5f) + "\n");
+		}
+		float fW = BunkerVR_WeightMoveSpeed(afMass, alHands, afTimeStep);
+		float fTurnW = BunkerVR_WeightTurnSpeed(apBody, cMath_MatrixMul(a_mtxWanted, avSpot), afMass, alHands, afLever, afTimeStep);
+		// (How hard it is to turn about the spot, for the steps below: at least
+		// the wrists' stiffness over that speed squared, so a small thing
+		// responds no quicker than fTurnW; then the most the hands can pull
+		// with, and the wrists turn with.)
+		float fTurnHard = cMath_Max(BunkerVR_HardToTurn(afMass, mvSize, mvMiddle - mvSpot), BunkerVR_TurnStiffness(alHands, afLever) / (fTurnW * fTurnW));
+		float fForceMost = cMath_Max(gfBunkerVR_HandForce * float(alHands), afMass * gfBunkerVR_Gravity * gfBunkerVR_WeightDrop * 1.25f); // (at least a quarter over its weight, so the hands can lift whatever they may hold)
+		float fTwistMost = BunkerVR_TurnStrength(alHands, afLever);
+
+		// The carried place worked out in small steps, the hand going from
+		// where it was to where it is now (see Step).
+		int lSteps = int(afTimeStep / gfBunkerVR_WeightStep + 0.999f);
+		if(lSteps < 1) lSteps = 1;
+		if(lSteps > 12) lSteps = 12;
+		float fStep = afTimeStep / float(lSteps);
+		for(int i = 1; i <= lSteps; ++i)
+		{
+			float fT = float(i) / float(lSteps);
+			Step(mvHandWas + (vHand - mvHandWas) * fT, vHandSpeed, BunkerVR_Slerp(fT, m_mtxHandTurnWas, mtxHandTurn), vHandSpin,
+				 afMass, fW, fTurnW, fTurnHard, fForceMost, fTwistMost, fStep);
+		}
+		m_mtxTurn = cMath_MatrixQuaternion(cMath_QuaternionNormalize(cMath_QuaternionMatrix(m_mtxTurn))); // (kept a true turn)
+		mvHandWas = vHand;
+		m_mtxHandTurnWas = mtxHandTurn;
+		mfLag = (mvAt - vHand).Length();
+
+		// Where the thing is to be: turned as the carried place is, with the
+		// spot where it is held at the carried place.
+		cMatrixf mtxCarried = m_mtxTurn;
+		mtxCarried.SetTranslation(mvAt - cMath_MatrixMul3x3(m_mtxTurn, mvSpot));
+		// How fast that moves the thing's middle, and turns it, now (for the
+		// hold's feed): its own speed and spin, in the world, plus the
+		// player's own walking and turning over the last update when it was
+		// not carried along with them (above; not across a jump of the view,
+		// a snap turn).
+		cVector3f vMiddle = mtxCarried.GetTranslation();
+		mvFeed = cMath_MatrixMul3x3(mtxFrame, mvSpeed + cMath_Vector3Cross(mvSpin, vMiddle - mvAt));
+		mvSpinFeed = cMath_MatrixMul3x3(mtxFrame, mvSpin);
+		if(mbCarried == false && BunkerVR_ViewJumped(afTimeStep) == false)
+		{
+			mvFeed = mvFeed + (cMath_MatrixMul(mtxFrame, vMiddle) - cMath_MatrixMul(m_mtxFrameWas, vMiddle)) / afTimeStep;
+			mvSpinFeed = mvSpinFeed + BunkerVR_TurnVector(m_mtxFrameWas, mtxFrame, cVector3f(0.0f)) / afTimeStep;
+		}
+		mvFeed = cMath_Vector3MaxLength(mvFeed, gfBunkerVR_FeedMaxSpeed);
+		mvSpinFeed = cMath_Vector3MaxLength(mvSpinFeed, gfBunkerVR_FeedMaxSpin);
+		cMatrixf mtxOut = cMath_MatrixMul(mtxFrame, mtxCarried);
+
+		// Kept for a mark (see DumpForMark): this update's numbers.
+		if(apBody !is null)
+		{
+			int lAt = mRing.Add(15);
+			mRing.mvData[lAt] = float(cEngine_GetGameTime());
+			mRing.mvData[lAt + 1] = afTimeStep;
+			mRing.mvData[lAt + 2] = vHandSpeed.Length();
+			mRing.mvData[lAt + 3] = fHandSpin;
+			mRing.mvData[lAt + 4] = mfLag;
+			mRing.mvData[lAt + 5] = BunkerVR_TurnVector(mtxHandTurn, m_mtxTurn, cVector3f(0.0f)).Length();
+			mRing.mvData[lAt + 6] = (apBody.GetLocalPosition() - mtxOut.GetTranslation()).Length();
+			mRing.mvData[lAt + 7] = BunkerVR_TurnVector(apBody.GetLocalMatrix(), mtxOut, cVector3f(0.0f)).Length();
+			mRing.mvData[lAt + 8] = apBody.GetLinearVelocity().Length();
+			mRing.mvData[lAt + 9] = apBody.GetAngularVelocity().Length();
+			mRing.mvData[lAt + 10] = fFrameTurn;
+			mRing.mvData[lAt + 11] = (mtxFrame.GetTranslation() - m_mtxFrameWas.GetTranslation()).Length();
+			mRing.mvData[lAt + 12] = fW;
+			mRing.mvData[lAt + 13] = fTurnW;
+			mRing.mvData[lAt + 14] = (mbCarried ? 1.0f : 0.0f) + (mbHeldBack ? 2.0f : 0.0f);
+		}
+		m_mtxFrameWas = mtxFrame;
+		return mtxOut;
+	}
+
+	// One small step (afStep seconds) of the carried place, which is a solid
+	// thing of its own, held at its spot by the hand, so a thing has weight and
+	// a center of gravity: a chair can't be lifted by its edge and waved around.
+	// The strength limits act on the carried place, in small steps, in the
+	// player's own frame (walking and turning carry it along at once), and the
+	// thing follows it. (Applied to the held thing itself, in the world, at the
+	// game's 45 or 90 updates a second, they make it wobble, overshoot and
+	// swing hard.)
+	// - The hand: a spring and a damper pull the spot towards where the hand
+	//   has it (avTarget, as quickly as afMoveW; its damper towards a share of
+	//   the hand's own speed, avHandSpeed), held to the hand's strength
+	//   (afForceMost newtons); its weight pulls it down (gfBunkerVR_Gravity
+	//   times the Feel page's gfBunkerVR_WeightDrop). So it sags a little under
+	//   its weight, and a heavy one is slow to lift fast.
+	// - The wrist: a spring and a damper turn it towards how the hand has it
+	//   (a_mtxTarget, avHandSpin; as quickly as afTurnW, as hard to turn as
+	//   afTurnHard), held to the wrist's strength (afTwistMost newton meters).
+	// - About the spot it turns by whatever the hand's pull does to its center
+	//   (mvMiddle, out from the spot): holding its weight up, that is its weight
+	//   turning it down (a chair held by its edge tips until the wrist can hold
+	//   it); moving it fast, it swings round its center and goes on swinging.
+	//   (In the spot's own frame, its weight and the push of the spot's
+	//   acceleration add up to the hand's pull, in the opposite direction.) A
+	//   small thing held near its center still turns as quickly as afTurnW.
+	// - At its strength, the hand's or the wrist's, the spring's own damper is
+	//   limited with the rest, and a thing held at the edge of what the wrist
+	//   can do would bob on and on: so a lighter grip damper
+	//   (gfBunkerVR_GripDamping) works on top, and it settles in a second or so.
+	void Step(const cVector3f &in avTarget, const cVector3f &in avHandSpeed, const cMatrixf &in a_mtxTarget, const cVector3f &in avHandSpin,
+			  float afMass, float afMoveW, float afTurnW, float afTurnHard, float afForceMost, float afTwistMost, float afStep)
+	{
+		cVector3f vSpeedOff = avHandSpeed * gfBunkerVR_WeightShare - mvSpeed;
+		cVector3f vPull = (avTarget - mvAt) * (afMoveW * afMoveW) + vSpeedOff * (2.0f * gfBunkerVR_WeightDamping * afMoveW);
+		float fPullMost = afForceMost / afMass; // (the hand's pull as an acceleration: m/s2 = newtons per kilogram)
+		if(vPull.Length() > fPullMost) vPull = cMath_Vector3MaxLength(vPull, fPullMost) + vSpeedOff * (2.0f * gfBunkerVR_GripDamping * afMoveW);
+		mvSpeed = mvSpeed + (vPull + cVector3f(0.0f, -gfBunkerVR_Gravity * gfBunkerVR_WeightDrop, 0.0f)) * afStep;
+		mvAt = mvAt + mvSpeed * afStep;
+		cVector3f vTurnOff = BunkerVR_TurnVector(m_mtxTurn, a_mtxTarget, mvSpin);
+		cVector3f vSpinOff = avHandSpin * gfBunkerVR_TurnShare - mvSpin;
+		cVector3f vTwist = (vTurnOff * (afTurnW * afTurnW) + vSpinOff * (2.0f * gfBunkerVR_TurnDamping * afTurnW)) * afTurnHard;
+		if(vTwist.Length() > afTwistMost) vTwist = cMath_Vector3MaxLength(vTwist, afTwistMost) + vSpinOff * (2.0f * gfBunkerVR_GripDamping * afTurnW * afTurnHard);
+		cVector3f vOut = cMath_MatrixMul3x3(m_mtxTurn, mvMiddle - mvSpot);
+		cVector3f vSwing = cMath_Vector3Cross(vOut, vPull * (-afMass));
+		mvSpin = mvSpin + (vTwist + vSwing) * (afStep / afTurnHard);
+		m_mtxTurn = cMath_MatrixMul(BunkerVR_TurnBy(mvSpin * afStep), m_mtxTurn);
+	}
+
+	// For a mark: writes what was kept of the last gfBunkerVR_MarkSeconds
+	// (afNow: the game's time now) to the log, one line per update, with the
+	// mark's number and whose hold this is (asWhose).
+	cBunkerVRRing mRing;
+	tString msThing = "";
+	float mfThingMass = 0.0f;
+	void DumpForMark(int alMark, const tString &in asWhose, float afNow)
+	{
+		int lFirst = -1;
+		for(int i = 0; i < mRing.mlCount; ++i)
+		{
+			if(mRing.mvData[mRing.At(i)] >= afNow - gfBunkerVR_MarkSeconds)
+			{
+				lFirst = i;
+				break;
+			}
+		}
+		if(lFirst < 0)
+		{
+			Log("BunkerVR: MARK " + alMark + ", " + asWhose + ": held nothing with weight in the last " + int(gfBunkerVR_MarkSeconds) + " seconds\n");
+			return;
+		}
+		Log("BunkerVR: MARK " + alMark + ", " + asWhose + ": " + msThing + " (" + BunkerVR_Fixed(mfThingMass, 1) + " kg), each update: " +
+			"seconds before the mark | the update | the hand's speed and spin | the carried place off the hand | the thing off the carried place, " +
+			"its speed and spin | the player's own turn and move | how quickly the carried place answers, moving and turning | carried with the player's move (held back by the world)\n");
+		for(int i = lFirst; i < mRing.mlCount; ++i)
+		{
+			int lAt = mRing.At(i);
+			Log("BunkerVR: MARK " + alMark + " " + BunkerVR_Fixed(mRing.mvData[lAt] - afNow, 3) + " s | " + BunkerVR_Fixed(mRing.mvData[lAt + 1] * 1000.0f, 1) +
+				" ms | hand " + BunkerVR_Fixed(mRing.mvData[lAt + 2], 2) + " m/s " + BunkerVR_Fixed(mRing.mvData[lAt + 3], 2) +
+				" rad/s | carried " + int(mRing.mvData[lAt + 4] * 1000.0f + 0.5f) + " mm " + BunkerVR_Fixed(mRing.mvData[lAt + 5] * 57.29578f, 1) +
+				" deg | thing " + int(mRing.mvData[lAt + 6] * 1000.0f + 0.5f) + " mm " + BunkerVR_Fixed(mRing.mvData[lAt + 7] * 57.29578f, 1) +
+				" deg, " + BunkerVR_Fixed(mRing.mvData[lAt + 8], 2) + " m/s " + BunkerVR_Fixed(mRing.mvData[lAt + 9], 2) +
+				" rad/s | player " + BunkerVR_Fixed(mRing.mvData[lAt + 10] * 57.29578f, 2) + " deg " + int(mRing.mvData[lAt + 11] * 1000.0f + 0.5f) +
+				" mm | " + int(mRing.mvData[lAt + 12] + 0.5f) + " " + int(mRing.mvData[lAt + 13] + 0.5f) + " | " + (int(mRing.mvData[lAt + 14] + 0.5f) % 2 == 1 ? "yes" : "no") +
+				(mRing.mvData[lAt + 14] > 1.5f ? " (held back)" : "") + "\n");
+		}
+	}
+}
+const float gfBunkerVR_MarkSeconds = 3.0f; // (how many of the last seconds a mark writes out)
+
+// BunkerVR: how firmly a held thing is sent to its place: less so (60%)
+// while it is kept out of something (pressed on a table, against a wall), so
+// that it settles there instead of trembling. afFollow: the usual share.
+float BunkerVR_HoldFollow(float afFollow, const cVector3f &in avPlace, const cVector3f &in avWanted)
+{
+	if((avPlace - avWanted).Length() > 0.002f) return afFollow * 0.6f;
+	return afFollow;
+}
+
+//------------------------------------------------------------
+
+// BunkerVR: is a held thing, at the place the hand wants it (a_mtxWanted),
+// in another thing that moves? A held thing sent to its place by the next
+// update, whatever is there, is driven into the other one again and again, and
+// the physics kicks them apart violently. So the caller then sends the held
+// thing more softly (gfBunkerVR_TouchFollow, gfBunkerVR_TouchMaxSpeed) and
+// with only so much strength (BunkerVR_HoldLimitChange), so that the two only
+// touch and the physics pushes the other one as hard as the held one really
+// presses. Loose ones (not held, not on a hinge or a rail) are woken, so that
+// they can be pushed. Returns true while it is in another thing.
+// Don't push loose things out of the way here as fast as the held thing is
+// sent: that flings them. The physics does the pushing.
+// The test covers the whole way there, not only the place (up to 8 spots, 3
+// cm apart or more, the place first). Held back by another thing that moves,
+// a held thing falls behind the hand; pushed on, the hand's place for it can
+// go right through the other thing and out beyond it, where it touches
+// nothing, and testing only there would send it at full speed through the
+// other thing, launching both.
+bool BunkerVR_HoldTouch(iPhysicsBody@ apBody, const cMatrixf &in a_mtxWanted, float afTimeStep)
+{
+	if(apBody is null || afTimeStep < 0.0001f) return false;
+	cLuxMap@ pMap = cLux_GetCurrentMap();
+	iPhysicsWorld@ pPhysics = pMap !is null ? pMap.GetPhysicsWorld() : null;
+	iCollideShape@ pShape = apBody.GetShape();
+	if(pPhysics is null || pShape is null) return false;
+	iLuxEntity@ pOwnEntity = cLux_GetBodyEntity(apBody);
+
+	// Where it is and where it wants to be: the box round both, and a bit.
+	cVector3f vNow = apBody.GetLocalPosition();
+	cVector3f vWanted = a_mtxWanted.GetTranslation();
+	cVector3f vMove = vWanted - vNow;
+	cBoundingVolume@ pBounds = apBody.GetBoundingVolume();
+	if(pBounds is null) return false;
+	cVector3f vLow = pBounds.GetMin();
+	cVector3f vHigh = pBounds.GetMax();
+	vLow = cVector3f(cMath_Min(vLow.x, vLow.x + vMove.x), cMath_Min(vLow.y, vLow.y + vMove.y), cMath_Min(vLow.z, vLow.z + vMove.z)) - cVector3f(0.05f, 0.05f, 0.05f);
+	vHigh = cVector3f(cMath_Max(vHigh.x, vHigh.x + vMove.x), cMath_Max(vHigh.y, vHigh.y + vMove.y), cMath_Max(vHigh.z, vHigh.z + vMove.z)) + cVector3f(0.05f, 0.05f, 0.05f);
+	array<iPhysicsBody@> vNear;
+	pPhysics.GetBodiesInAABB(vLow, vHigh, true, false, vNear);
+
+	// The spots on the way (the place itself is the last).
+	int lSpots = 1 + int(vMove.Length() / 0.03f);
+	if(lSpots > 8) lSpots = 8;
+
+	bool bTouching = false;
+	for(uint i = 0; i < vNear.length(); ++i)
+	{
+		iPhysicsBody@ pOther = vNear[i];
+		if(pOther is null || pOther.GetID() == apBody.GetID()) continue;
+		if(pOther.IsCharacter() || pOther.GetCollide() == false || pOther.GetMass() <= 0.0f) continue;
+		iLuxEntity@ pEntity = cLux_GetBodyEntity(pOther);
+		if(pEntity is null) continue;
+		if(pOwnEntity !is null && pEntity.GetID() == pOwnEntity.GetID()) continue; // (another part of the same thing)
+		bool bIn = false;
+		for(int s = lSpots; s >= 1 && bIn == false; --s)
+		{
+			cMatrixf mtxAt = a_mtxWanted;
+			mtxAt.SetTranslation(vNow + vMove * (float(s) / float(lSpots)));
+			if(pEntity.CheckShapeCollision(pShape, mtxAt, pMap)) bIn = true;
+		}
+		if(bIn == false) continue;
+		bTouching = true;
+
+		// Held by the other hand (gravity off), or on a hinge or a rail: left as it is.
+		if(pOther.GetGravity() == false || pOther.GetJointNum() > 0) continue;
+		pOther.Enable();
+	}
+	return bTouching;
+}
+
+// BunkerVR: how firmly, and at most how fast, a held thing is sent to its
+// place while it is in another thing that moves (see BunkerVR_HoldTouch):
+// a third as firmly, at most 1.5 m/s, so that the two touch and push instead
+// of being kicked apart. (Its place only: it is turned as firmly as ever,
+// see gfBunkerVR_TouchTwist.)
+const float gfBunkerVR_TouchFollow = 0.35f;
+const float gfBunkerVR_TouchMaxSpeed = 1.5f;
+
+// BunkerVR: and how quickly its speed (m/s per second) may change meanwhile.
+// A held thing is moved by giving it a velocity; set outright, whatever is in
+// its way, it pushes with no limit at all: a copper urn or a concrete block is
+// flung as if it were light, and things pressed together bounce. So, while it
+// touches another thing that moves, it may only speed up so quickly, and it
+// pushes as hard as that takes for its own weight (a 1 kg thing about 50
+// newtons; a 25 kg block on the floor takes some 120 to slide). The physics
+// works out the rest, with both weights.
+const float gfBunkerVR_TouchAccel = 50.0f;
+
+// BunkerVR: and how hard the hand twists it meanwhile (newton meters; a firm
+// wrist). The limit on its spin comes from how hard the thing is to turn
+// (BunkerVR_HoldSpinChange), not from a fixed rate: a fixed limit is far too
+// little for small things, which are very easy to turn, so whatever they
+// touch turns them (things pressed together spin around each other). A can or
+// a cup is held at its angle at once; a broom or a fuel can can't be twisted
+// into an urn with more than a hand's strength (15 N m: 12 to 25 newtons at a
+// broom's end). Turning is not made softer while touching
+// (gfBunkerVR_TouchFollow is for moving only).
+const float gfBunkerVR_TouchTwist = 15.0f;
+
+// BunkerVR: a speed (or spin) on its way from avNow to avWanted, changed by at
+// most afMaxChange (see gfBunkerVR_TouchAccel).
+cVector3f BunkerVR_HoldLimitChange(const cVector3f &in avNow, const cVector3f &in avWanted, float afMaxChange)
+{
+	cVector3f vChange = avWanted - avNow;
+	float fChange = vChange.Length();
+	if(fChange <= afMaxChange || fChange < 0.0001f) return avWanted;
+	return avNow + vChange * (afMaxChange / fChange);
+}
+
+// BunkerVR: how much a held thing's spin (radians per second) may change in one
+// update of afTimeStep while it touches another thing that moves: as much as
+// the hand's twist (gfBunkerVR_TouchTwist) gives it. How hard it is to turn
+// is taken as for a solid box of its weight and the size of the box round it
+// (the average of the three ways a box turns: weight x (x^2 + y^2 + z^2) / 18).
+// (At 60 updates a second: a 1 kg can, about 180 radians per second each
+// update, so no limit at all; a 1 kg broom 1.2 m long, about 3; the 3 kg
+// fuel can, about 6.)
+float BunkerVR_HoldSpinChange(iPhysicsBody@ apBody, float afTimeStep)
+{
+	if(apBody is null) return 1000.0f;
+	float fMass = apBody.GetMass();
+	cBoundingVolume@ pBounds = apBody.GetBoundingVolume();
+	if(pBounds is null || fMass <= 0.0f) return 1000.0f;
+	cVector3f vSize = pBounds.GetMax() - pBounds.GetMin();
+	float fHardToTurn = fMass * (vSize.x * vSize.x + vSize.y * vSize.y + vSize.z * vSize.z) / 18.0f;
+	if(fHardToTurn < 0.000001f) return 1000.0f;
+	return gfBunkerVR_TouchTwist / fHardToTurn * afTimeStep;
+}
+
+// BunkerVR: after touching another thing that moves, a held thing is some way
+// behind the hand (it was held back). Sent back at full strength the moment it
+// touches nothing, it would get there within an update, at up to 12 m/s, into
+// whatever is there, and things would launch. Instead it settles back until it
+// is within gfBunkerVR_SettledDistance of its place: never faster than it could
+// still stop in the distance left (slowing at gfBunkerVR_TouchAccel), nor than
+// gfBunkerVR_SettleMaxSpeed, and its speed changing by at most
+// gfBunkerVR_TouchAccel. (Fast enough to keep up with a hand moving at 1.5 m/s
+// with 3 cm to spare.) avNow: its speed now; avWanted: the speed that would
+// take it there; afError: how far it is from its place.
+const float gfBunkerVR_SettledDistance = 0.03f;
+const float gfBunkerVR_SettleMaxSpeed = 4.0f;
+cVector3f BunkerVR_HoldSettleSpeed(const cVector3f &in avNow, const cVector3f &in avWanted, float afError, float afTimeStep)
+{
+	float fMax = cMath_Min(gfBunkerVR_SettleMaxSpeed, cMath_Sqrt(2.0f * gfBunkerVR_TouchAccel * cMath_Max(afError, 0.0f)));
+	return BunkerVR_HoldLimitChange(avNow, cMath_Vector3MaxLength(avWanted, fMax), gfBunkerVR_TouchAccel * afTimeStep);
+}
+
+// BunkerVR: how far the hand is to be drawn from the real one while it holds
+// a thing (sent to the arms' code as "BunkerVR_HoldBack0/1"; see VRHandBlock
+// in Prop_PlayerBody.hps). Normally as far as the thing's place was kept out
+// of a table or a wall (avPlace - avWanted). While the thing touches another
+// that moves it may be held back by it (a heavy one doesn't give way): then
+// the hand is drawn where the thing really is (as far as
+// gfBunkerVR_HandOffMost), so that it stays on the thing instead of going on
+// through it. (abTouching is also true while it settles back afterwards, so
+// that the hand goes back with it instead of jumping.)
+cVector3f BunkerVR_HoldBack(iPhysicsBody@ apBody, const cVector3f &in avPlace, const cVector3f &in avWanted, bool abTouching)
+{
+	cVector3f vBack = avPlace - avWanted;
+	if(abTouching == false || apBody is null) return vBack;
+	cVector3f vReal = apBody.GetLocalPosition() - avWanted;
+	if(vReal.Length() < gfBunkerVR_HandOffMost) return vReal;
+	return vBack;
+}
+
+// BunkerVR: a hand holding a thing is drawn on it as long as that is no
+// further than this from the real hand; further, at the real hand (some-
+// thing has gone wrong: no arm reaches that far). It must be well over 50 cm:
+// a real hand pushed on into a wall gets that far, and the drawn hand would
+// snap off the thing. The arms' code has the same number (gfVRHandOnThingMost
+// in Prop_PlayerBody.hps).
+const float gfBunkerVR_HandOffMost = 1.0f;
+
+// BunkerVR: a hand holding a thing is drawn fixed to it, so it never falls
+// slightly behind the thing as the hand turns or moves. The hold-back above is
+// worked out by the holding code from where the thing was at its update, and
+// the arms' code (Prop_PlayerBody.hps, after the body's animation) may pose
+// the arms with the thing already moved on by the physics. So the holding
+// code says where on the thing the palm is (alHand: 0 left, 1 right;
+// a_mtxPalmOnIt: the palm in the thing's local space; "BunkerVR_HoldBody0/1",
+// "BunkerVR_HoldPalm0/1"), and the arms' code puts the palm there on the thing
+// as the thing is when the arms are posed: turned with it too (abTurn: one
+// hand, with weight), or only moved with it (the hand drawn on its place on a
+// heavy thing, or one held with both hands). apBody null: not fixed (the
+// hold-back is used). Also where the holding code saw the thing
+// ("BunkerVR_HoldSeen0/1"), for the log (see VRGlueToHeld in
+// Prop_PlayerBody.hps).
+void BunkerVR_HoldGlue(int alHand, iPhysicsBody@ apBody, const cMatrixf &in a_mtxPalmOnIt, bool abTurn)
+{
+	if(alHand < 0 || alHand > 1) return;
+	cScript_SetGlobalVarID("BunkerVR_HoldBody" + alHand, apBody !is null ? apBody.GetID() : tID_Invalid);
+	cScript_SetGlobalVarMatrix("BunkerVR_HoldPalm" + alHand, a_mtxPalmOnIt);
+	cScript_SetGlobalVarBool("BunkerVR_HoldGlueTurn" + alHand, abTurn);
+	cScript_SetGlobalVarMatrix("BunkerVR_HoldSeen" + alHand, apBody !is null ? apBody.GetLocalMatrix() : cMatrixf_Identity);
+}
+
+// BunkerVR: a held thing may spin as fast as the hand turns it. A thing's own
+// spin limit (MaxAngularSpeed in its .ent: most things 20 rad/s, the workshop
+// hammer and the sledgehammer 10, some less) holds it back from a quick turn of
+// the wrist, which it then finishes after the wrist has stopped. Like its speed
+// limit (in the game's grab), it is raised while held (gfBunkerVR_HoldMaxSpin
+// + 2), and its own is put back when it is let go: kept on its entity
+// ("BunkerVR_OwnMaxSpin"), so that whichever hand lets go of it last puts it
+// back.
+void BunkerVR_HoldRaiseSpinLimit(iPhysicsBody@ apBody)
+{
+	if(apBody is null) return;
+	float fWanted = gfBunkerVR_HoldMaxSpin + 2.0f;
+	if(apBody.GetMaxAngularSpeed() >= fWanted) return;
+	iLuxEntity@ pEntity = cLux_GetBodyEntity(apBody);
+	if(pEntity is null) return;
+	if(pEntity.GetVarFloat("BunkerVR_OwnMaxSpin") <= 0.0f) pEntity.SetVarFloat("BunkerVR_OwnMaxSpin", apBody.GetMaxAngularSpeed());
+	apBody.SetMaxAngularSpeed(fWanted);
+}
+
+void BunkerVR_HoldRestoreSpinLimit(iPhysicsBody@ apBody)
+{
+	if(apBody is null) return;
+	iLuxEntity@ pEntity = cLux_GetBodyEntity(apBody);
+	if(pEntity is null) return;
+	float fOwn = pEntity.GetVarFloat("BunkerVR_OwnMaxSpin");
+	if(fOwn <= 0.0f) return;
+	apBody.SetMaxAngularSpeed(fOwn);
+	pEntity.SetVarFloat("BunkerVR_OwnMaxSpin", 0.0f);
+}
+
+//------------------------------------------------------------
+
+// BunkerVR: where a thing that a hand has just taken hold of is to sit in it.
+// The hand finds things with short rays from inside it, reaching some way past
+// the fingers, so a thing left where it was found could be held in the air up
+// to 18 or 20 cm from the hand. Instead it is drawn into the hand: the spot the
+// ray touched (avTouched) is brought to within 2 cm of the center of the
+// hand's grip (avGrip, where the controller's handle is), and the thing with
+// it, without turning. Returns where its center (avBodyPos) is to be. (A spot
+// more than 60 cm off is not trusted: the thing stays where it is.)
+const float gfBunkerVR_GripRoom = 0.02f;
+cVector3f BunkerVR_HoldPull(const cVector3f &in avBodyPos, const cVector3f &in avTouched, const cVector3f &in avGrip)
+{
+	cVector3f vPull = avGrip - avTouched;
+	float fPull = vPull.Length();
+	if(fPull <= gfBunkerVR_GripRoom || fPull > 0.6f) return avBodyPos;
+	return avBodyPos + vPull * ((fPull - gfBunkerVR_GripRoom) / fPull);
+}
+
+// BunkerVR: the furthest a held thing's center may be from the hand that
+// takes hold of it (meters): half the size of the box round it, plus 10 cm,
+// and at least afLeast (the caller's fixed limit, for small things). A fixed
+// limit would draw a big thing taken by its edge (the crate, the stool) in
+// until its center reached that limit, and it would glide towards the hand
+// by its center instead of staying held where it was taken. A hand takes hold
+// only of what it touches, so the thing is already at the hand where it is
+// held.
+float BunkerVR_HoldReachLimit(iPhysicsBody@ apBody, float afLeast)
+{
+	if(apBody is null) return afLeast;
+	cBoundingVolume@ pBox = apBody.GetBoundingVolume();
+	if(pBox is null) return afLeast;
+	return cMath_Max(afLeast, (pBox.GetMax() - pBox.GetMin()).Length() * 0.5f + 0.1f);
+}
+
+// BunkerVR: a thing just taken hold of glides into the hand instead of
+// jumping there by the next update (see BunkerVR_HoldPull). It goes along
+// with the hand, and on top of that towards its place in the hand at a speed
+// that grows and shrinks smoothly: gaining at most gfBunkerVR_PullAccel each
+// second, never more than it could still shed in the distance left, nor than
+// gfBunkerVR_PullMaxSpeed, nor past its place. afPullSpeed: that speed at the
+// last update (the caller keeps it); returns the new one. The thing is then
+// given the hand's speed plus (the way to its place) x the returned speed. It
+// is in the hand when closer than gfBunkerVR_PullDone (or after
+// gfBunkerVR_PullMaxTime, or when it touches something that moves): from then
+// on it is held normally. (About 0.2 s for 25 cm.)
+const float gfBunkerVR_PullAccel = 30.0f;
+const float gfBunkerVR_PullMaxSpeed = 2.5f;
+const float gfBunkerVR_PullDone = 0.015f;
+const float gfBunkerVR_PullMaxTime = 0.6f;
+float BunkerVR_HoldPullSpeed(float afPullSpeed, float afError, float afTimeStep)
+{
+	if(afTimeStep < 0.0001f || afError <= 0.0f) return 0.0f;
+	float fSpeed = afPullSpeed + gfBunkerVR_PullAccel * afTimeStep;
+	fSpeed = cMath_Min(fSpeed, cMath_Sqrt(2.0f * gfBunkerVR_PullAccel * afError));
+	fSpeed = cMath_Min(fSpeed, gfBunkerVR_PullMaxSpeed);
+	fSpeed = cMath_Min(fSpeed, afError / afTimeStep);
+	return cMath_Max(fSpeed, 0.0f);
+}
+
+// BunkerVR: the center of a hand's grip (alHand: 0 left, 1 right; rolls 7011
+// and 7012), where the game's arms draw the palm from, moved as far as the
+// drawn hand is held back ("BunkerVR_HandBack0/1"). avNear: where that hand
+// points from (moved the same way); the grip is only trusted within 30 cm of
+// it. (When the mod doesn't know the palm it leaves the camera's own matrix,
+// which is nowhere near.) False if it is not known.
+bool BunkerVR_GetGripPoint(cCamera@ apCam, int alHand, const cVector3f &in avNear, cVector3f &out avGrip)
+{
+	avGrip = cVector3f(0.0f);
+	if(apCam is null || alHand < 0 || alHand > 1) return false;
+	float fRealRoll = apCam.GetRoll();
+	apCam.SetRoll(alHand == 0 ? 7011.0f : 7012.0f);
+	avGrip = apCam.GetMatrix().GetTranslation();
+	apCam.SetRoll(fRealRoll);
+	cVector3f vBack = cScript_GetGlobalVarVector3f(alHand == 0 ? "BunkerVR_HandBack0" : "BunkerVR_HandBack1");
+	if(vBack.Length() < 0.6f) avGrip = avGrip + vBack;
+	return (avGrip - avNear).Length() < 0.3f;
+}
+
+// BunkerVR: a hand's palm (alHand: 0 left, 1 right), as a hand's own hold
+// reads it (VRUpdateFreeHands in PlayerBodyHandler.hps): the palm's matrix,
+// moved as far as the drawn hand is held back ("BunkerVR_HandBack0/1").
+// Trusted only within 15 cm of avNear (where that hold last reported the hand
+// was, an update ago at most; a palm the mod doesn't know comes back as
+// the camera's own matrix, which is further off). False if not: a_mtxPalm
+// is then not to be used. (The game's grab reads the helping hand itself, so
+// that both hands are from the same update; see the grab.)
+bool BunkerVR_GetPalm(cCamera@ apCam, int alHand, const cVector3f &in avNear, cMatrixf &out a_mtxPalm)
+{
+	a_mtxPalm = cMatrixf_Identity;
+	if(apCam is null || alHand < 0 || alHand > 1) return false;
+	float fRealRoll = apCam.GetRoll();
+	apCam.SetRoll(alHand == 0 ? 7011.0f : 7012.0f);
+	a_mtxPalm = apCam.GetMatrix();
+	apCam.SetRoll(fRealRoll);
+	cVector3f vBack = cScript_GetGlobalVarVector3f(alHand == 0 ? "BunkerVR_HandBack0" : "BunkerVR_HandBack1");
+	if(vBack.Length() < 0.6f) a_mtxPalm.SetTranslation(a_mtxPalm.GetTranslation() + vBack);
+	return (a_mtxPalm.GetTranslation() - avNear).Length() < 0.15f;
+}
+
+// BunkerVR: the real head (the mod's roll 7006: is it tracked; 7005:
+// where), as a matrix; false when it is not tracked (for the ladder; the
+// same as PlayerBodyHandler.hps VRReadRealHead).
+bool BunkerVR_ReadRealHead(cCamera@ apCam, cMatrixf &out a_mtxHead)
+{
+	a_mtxHead = cMatrixf_Identity;
+	if(apCam is null) return false;
+	float fRealRoll = apCam.GetRoll();
+	apCam.SetRoll(7006.0f);
+	cVector3f vStatus = apCam.GetMatrix().GetTranslation();
+	bool bHead = vStatus.x > 12344.0f && vStatus.x < 12346.0f && vStatus.y > 0.5f;
+	if(bHead)
+	{
+		apCam.SetRoll(7005.0f);
+		a_mtxHead = apCam.GetMatrix();
+	}
+	apCam.SetRoll(fRealRoll);
+	return bHead;
+}
+
+// BunkerVR: which way a head faces, level, a unit long, or zero (the same
+// as PlayerBodyHandler.hps VRHeadFacing): its forward axis laid flat, with
+// its top's share added as far as it is tipped, so that it is known however
+// far the head looks down or up.
+cVector3f BunkerVR_HeadFacing(const cMatrixf &in a_mtxHead)
+{
+	cVector3f vFwd = cMath_MatrixMul3x3(a_mtxHead, cVector3f(0.0f, 0.0f, -1.0f));
+	cVector3f vUp = cMath_MatrixMul3x3(a_mtxHead, cVector3f(0.0f, 1.0f, 0.0f));
+	cVector3f vFacing = cVector3f(vFwd.x - vFwd.y * vUp.x, 0.0f, vFwd.z - vFwd.y * vUp.z);
+	if(vFacing.Length() < 0.3f) return cVector3f(0.0f);
+	vFacing.Normalize();
+	return vFacing;
+}
+
+// BunkerVR: a palm the mod is tracking right now (its roll 7010: which palms
+// are tracked, and how big the arms are drawn, afArmScale; 7011 / 7012:
+// where), moved as the drawn hand is when held back off a wall
+// ("BunkerVR_HandBack0/1", as BunkerVR_GetPalm). False when it is not tracked
+// (a_mtxPalm and afArmScale are then not to be used). Shared by the things
+// held to be read (see BunkerVR_ReadablePlaceInHand).
+bool BunkerVR_ReadFollowedPalm(int alHand, cMatrixf &out a_mtxPalm, float &out afArmScale)
+{
+	a_mtxPalm = cMatrixf_Identity;
+	afArmScale = 1.0f;
+	cLuxPlayer@ pPlayer = cLux_GetPlayer();
+	cCamera@ pCam = pPlayer !is null ? pPlayer.GetCamera() : null;
+	if(pCam is null || alHand < 0 || alHand > 1) return false;
+	float fRealRoll = pCam.GetRoll();
+	pCam.SetRoll(7010.0f);
+	cVector3f vStatus = pCam.GetMatrix().GetTranslation();
+	bool bFollowed = false;
+	if(vStatus.x > 12344.0f && vStatus.x < 12346.0f)
+	{
+		int lPalms = int(vStatus.y + 0.5f) % 4; // (4 is added when the mod wants the arms' notes)
+		bFollowed = (lPalms & (alHand == 0 ? 1 : 2)) != 0;
+		if(vStatus.z > 0.5f && vStatus.z < 3.0f) afArmScale = vStatus.z;
+	}
+	if(bFollowed)
+	{
+		pCam.SetRoll(alHand == 0 ? 7011.0f : 7012.0f);
+		a_mtxPalm = pCam.GetMatrix();
+	}
+	pCam.SetRoll(fRealRoll);
+	if(bFollowed == false) return false;
+	cVector3f vBack = cScript_GetGlobalVarVector3f(alHand == 0 ? "BunkerVR_HandBack0" : "BunkerVR_HandBack1");
+	if(vBack.Length() < 0.6f) a_mtxPalm.SetTranslation(a_mtxPalm.GetTranslation() + vBack);
+	return true;
+}
+
+// BunkerVR: how far a hand's fingers are closed, as the mod draws them (its
+// roll 7013: 0 open to 1 a fist; the grip or the trigger, whichever is
+// squeezed more, each hand its own). A thing held to be read is let go of as
+// this opens, whatever the other hand does.
+float BunkerVR_HandCurl(int alHand)
+{
+	cLuxPlayer@ pPlayer = cLux_GetPlayer();
+	cCamera@ pCam = pPlayer !is null ? pPlayer.GetCamera() : null;
+	if(pCam is null) return 0.0f;
+	float fRealRoll = pCam.GetRoll();
+	pCam.SetRoll(7013.0f);
+	cVector3f vCurl = pCam.GetMatrix().GetTranslation();
+	pCam.SetRoll(fRealRoll);
+	return alHand == 0 ? vCurl.x : vCurl.y;
+}
+
+// BunkerVR: a thing held in the hand to be read (in
+// PlayerState_Interact_ReadDogTag.hps: the code sign and the like; a dogtag
+// is pinched instead, see BunkerVR_TagPlaceInPinch; notes are not held but go
+// straight into the sketchbook, as the game takes them), held in a hand whose
+// palm is at a_mtxPalm (the controller's directions: x right, y up, z
+// backwards; a right palm faces its -x, a left one its +x). Turned so that
+// its own y (its front, as the game's reading shows it) points out of the
+// palm and its own z (its top) out of the top of the fist, its own x across
+// (y crossed with z, as in the game's own display of it: x to the left of the
+// eyes, y towards them, z up). Its center (avMiddle) above the fist by
+// afHalfHeight (half its height, as held) and gfBunkerVR_ReadFistTop, a
+// little ahead and out of the palm (those three times afArmScale: how big
+// the arms are drawn). Script test: test_reading.hps.
+const float gfBunkerVR_ReadFistTop = 0.04f;		// its lower edge this far above the palm (meters, at the arms' own size)...
+const float gfBunkerVR_ReadAhead = 0.02f;		// ...this far ahead of it, towards the fingers...
+const float gfBunkerVR_ReadOffPalm = 0.01f;		// ...and this far out of the palm
+void BunkerVR_ReadablePlaceInHand(int alHand, const cMatrixf &in a_mtxPalm, float afHalfHeight, float afArmScale, cMatrixf &out a_mtxTurn, cVector3f &out avMiddle)
+{
+	cVector3f vUp = cMath_Vector3Normalize(cMath_MatrixMul3x3(a_mtxPalm, cVector3f(0.0f, 1.0f, 0.0f)));
+	cVector3f vOut = cMath_Vector3Normalize(cMath_MatrixMul3x3(a_mtxPalm, cVector3f(alHand == 0 ? 1.0f : -1.0f, 0.0f, 0.0f)));
+	cVector3f vAhead = cMath_Vector3Normalize(cMath_MatrixMul3x3(a_mtxPalm, cVector3f(0.0f, 0.0f, -1.0f)));
+	cVector3f vZ = cMath_Vector3Normalize(vUp - vOut * cMath_Vector3Dot(vUp, vOut));
+	a_mtxTurn = cMath_MatrixUnitVectors(cMath_Vector3Cross(vOut, vZ), vOut, vZ, cVector3f(0.0f));
+	avMiddle = a_mtxPalm.GetTranslation() + vUp * (gfBunkerVR_ReadFistTop * afArmScale + afHalfHeight) +
+			   vAhead * (gfBunkerVR_ReadAhead * afArmScale) + vOut * (gfBunkerVR_ReadOffPalm * afArmScale);
+}
+
+// BunkerVR: a dogtag pinched in a hand whose palm is at a_mtxPalm
+// (PlayerState_Interact_ReadDogTag.hps VRPlaceInHand), by the pinch the body
+// script found in the palm's local space (Prop_PlayerBody.hps
+// VRNoteTagPinch): avPinch where the thumb and first finger meet, avFace
+// towards the thumb, avOut out of the hand through the pinch. Its front (its
+// own y) looks towards the thumb, its top (its own z) points out of the hand,
+// its own x across (y crossed with z); its lower edge afHeldIn into the
+// pinch, so its center (avMiddle) is afHalfHeight less that out of the pinch.
+// False (nothing set) if the directions are not known. Script test:
+// test_reading.hps.
+bool BunkerVR_TagPlaceInPinch(const cMatrixf &in a_mtxPalm, const cVector3f &in avPinch, const cVector3f &in avFace, const cVector3f &in avOut,
+							  float afHalfHeight, float afHeldIn, cMatrixf &out a_mtxTurn, cVector3f &out avMiddle)
+{
+	a_mtxTurn = cMatrixf_Identity;
+	avMiddle = cVector3f(0.0f);
+	cVector3f vFace = cMath_MatrixMul3x3(a_mtxPalm, avFace);
+	cVector3f vOut = cMath_MatrixMul3x3(a_mtxPalm, avOut);
+	if(vFace.Length() < 0.5f || vOut.Length() < 0.5f) return false;
+	vFace.Normalize();
+	vOut = vOut - vFace * cMath_Vector3Dot(vOut, vFace);
+	if(vOut.Length() < 0.1f) return false;
+	vOut.Normalize();
+	a_mtxTurn = cMath_MatrixUnitVectors(cMath_Vector3Cross(vFace, vOut), vFace, vOut, cVector3f(0.0f));
+	avMiddle = cMath_MatrixMul(a_mtxPalm, avPinch) + vOut * (afHalfHeight - afHeldIn);
+	return true;
+}
+
+// BunkerVR: a matrix's rotation alone, made orthonormal again (a thing in a
+// map may be drawn bigger or smaller: its matrix then holds that scale too).
+cMatrixf BunkerVR_PureTurn(const cMatrixf &in a_mtx)
+{
+	cVector3f vX = cMath_Vector3Normalize(cMath_MatrixMul3x3(a_mtx, cVector3f(1.0f, 0.0f, 0.0f)));
+	cVector3f vY = cMath_MatrixMul3x3(a_mtx, cVector3f(0.0f, 1.0f, 0.0f));
+	vY = cMath_Vector3Normalize(vY - vX * cMath_Vector3Dot(vY, vX));
+	return cMath_MatrixUnitVectors(vX, vY, cMath_Vector3Cross(vX, vY), cVector3f(0.0f));
+}
+
+//------------------------------------------------------------
+
+// BunkerVR: a held thing keeps up with the hand instead of floating behind it.
+// A held thing is given the speed that takes it most of the way to its place
+// in the hand (gfBunkerVR_HoldFollow, 90%) by the next update. But the game
+// moves things (and the player) before it runs the scripts, so on its own it
+// gets there only as the hand moves on again: it trails the hand by about an
+// update's move, or more (2 to 4 cm walking at 2 m/s, twice that at 45 updates
+// a second). So it is also given the speed its place moves at ("the feed",
+// from its last two places), and sent to where its place will be by the next
+// update. (Not on a hold's first update or the first after a change of hold,
+// abKnown false; not after a jump of the view, a snap turn, which
+// PlayerBodyHandler.hps records as "BunkerVR_ViewJumpTime"; nor for a place
+// moving faster than gfBunkerVR_FeedMaxSpeed, which no hand holding a thing
+// does: that too is a jump.) gfBunkerVR_FeedShare: how much of it is given
+// (1: all).
+const float gfBunkerVR_FeedMaxSpeed = 6.0f;
+const float gfBunkerVR_FeedShare = 1.0f;
+cVector3f BunkerVR_HoldFeed(const cVector3f &in avPlaceWas, const cVector3f &in avPlaceNow, float afTimeStep, bool abKnown)
+{
+	if(abKnown == false || afTimeStep < 0.0001f || BunkerVR_ViewJumped(afTimeStep)) return cVector3f(0.0f);
+	cVector3f vFeed = (avPlaceNow - avPlaceWas) / afTimeStep;
+	vFeed = cMath_Vector3MaxLength(vFeed, gfBunkerVR_FeedMaxSpeed); // (capped, not dropped above it: dropping it makes the feed come and go in a fast shake)
+	return vFeed * gfBunkerVR_FeedShare;
+}
+
+// BunkerVR: has the view jumped (a snap turn, "BunkerVR_ViewJumpTime") in
+// this update or the two before? (Either a hold may see the turned view
+// first.)
+bool BunkerVR_ViewJumped(float afTimeStep)
+{
+	float fJumpAge = float(cEngine_GetGameTime()) - cScript_GetGlobalVarFloat("BunkerVR_ViewJumpTime");
+	return fJumpAge > -0.001f && fJumpAge < afTimeStep * 2.5f;
+}
+
+// BunkerVR: the feed for turning: the speed a held thing's wanted rotation
+// changes at (radians per second, about its axis), from how it was wanted
+// at the last update (a_mtxWas) and now (a_mtxNow), so that it turns as fast
+// as the hand does, instead of an update behind it (a quick twist of the
+// wrist, or turning round with the stick). The same rules as the feed above;
+// at most gfBunkerVR_FeedMaxSpin (no wrist turns faster).
+const float gfBunkerVR_FeedMaxSpin = 15.0f;
+cVector3f BunkerVR_HoldSpinFeed(const cMatrixf &in a_mtxWas, const cMatrixf &in a_mtxNow, float afTimeStep, bool abKnown)
+{
+	if(abKnown == false || afTimeStep < 0.0001f || BunkerVR_ViewJumped(afTimeStep)) return cVector3f(0.0f);
+	cVector3f vSpin = BunkerVR_TurnVector(a_mtxWas, a_mtxNow, cVector3f(0.0f)) / afTimeStep;
+	vSpin = cMath_Vector3MaxLength(vSpin, gfBunkerVR_FeedMaxSpin); // (capped, not dropped above it: dropping it makes things like a hammer overshoot their turn when shaken)
+	return vSpin * gfBunkerVR_FeedShare;
+}
+
+// BunkerVR: has a held thing already gone past where it is wanted, the way
+// the feed (avFeed) would send it on? avBehind: from where it is to where it
+// is wanted (a place, or a turn as from BunkerVR_TurnVector). More than half
+// an update's feed ahead: the feed is not given. The feed is the way its
+// place moved over the last update; when the hand turns back (a shake), it
+// still points the old way, and given anyway it would carry the thing on past
+// the hand for an update before it comes back: an overshoot.
+bool BunkerVR_FeedOvershoots(const cVector3f &in avFeed, const cVector3f &in avBehind, float afTimeStep)
+{
+	return cMath_Vector3Dot(avBehind, avFeed) < -0.5f * cMath_Vector3Dot(avFeed, avFeed) * afTimeStep;
+}
+
+// BunkerVR: the rotation that takes a thing turned as a_mtxNow to being turned
+// as a_mtxWanted (their rotation parts only), the shortest way round, as one
+// vector: along the axis it turns about (the direction the physics' spin
+// uses, as for SetAngularVelocity), as long as the angle (radians, up to half
+// a turn). Worked out from where the thing's three axes point now and where
+// they should: added up, their cross products give the axis (twice the sine
+// of the angle long) and their dot products the cosine; right for any angle.
+// Very nearly half a turn, where the axis can't be read from the cross
+// products, it is found from the rotation itself, and taken the way avPrefer
+// points (the way it spins now: it keeps going round the same way). Don't
+// work the turn out from two axes alone ("up" and "right", each normalized):
+// that is right for small turns only, and half a turn off the way round
+// becomes a guess that changes from one update to the next, so a thing held
+// with both hands that has fallen far behind its turn whirls about.
+cVector3f BunkerVR_TurnVector(const cMatrixf &in a_mtxNow, const cMatrixf &in a_mtxWanted, const cVector3f &in avPrefer)
+{
+	cVector3f[] vNow = {cVector3f(0.0f), cVector3f(0.0f), cVector3f(0.0f)};
+	cVector3f[] vWanted = {cVector3f(0.0f), cVector3f(0.0f), cVector3f(0.0f)};
+	cVector3f vSin = cVector3f(0.0f);	// the axis, twice the sine of the angle long
+	float fTrace = 0.0f;				// one plus twice the cosine of the angle
+	for(int i = 0; i < 3; ++i)
+	{
+		cVector3f vAxis = cVector3f(i == 0 ? 1.0f : 0.0f, i == 1 ? 1.0f : 0.0f, i == 2 ? 1.0f : 0.0f);
+		vNow[i] = cMath_Vector3Normalize(cMath_MatrixMul3x3(a_mtxNow, vAxis));
+		vWanted[i] = cMath_Vector3Normalize(cMath_MatrixMul3x3(a_mtxWanted, vAxis));
+		vSin += cMath_Vector3Cross(vNow[i], vWanted[i]);
+		fTrace += cMath_Vector3Dot(vNow[i], vWanted[i]);
+	}
+	float fSinLength = vSin.Length();
+	float fAngle = cMath_ATan2(fSinLength * 0.5f, cMath_Clamp((fTrace - 1.0f) * 0.5f, -1.0f, 1.0f));
+	if(fAngle < 0.000001f) return cVector3f(0.0f);
+	if(fSinLength > 0.1f || fAngle < 1.5f) return vSin * (fAngle / fSinLength); // (all but the last 3 degrees or so short of half a turn; a small turn always this way, the least way round)
+
+	// Very nearly half a turn: the rotation's symmetric part ((R + R^T) / 2),
+	// less the cosine of the angle times the identity, is the axis's outer
+	// product with itself times (1 - the cosine); its longest column lies
+	// along the axis.
+	float fCos = cMath_Clamp((fTrace - 1.0f) * 0.5f, -1.0f, 1.0f);
+	cVector3f vBest = cVector3f(0.0f);
+	for(int j = 0; j < 3; ++j)
+	{
+		cVector3f vColumn = cVector3f(j == 0 ? -fCos : 0.0f, j == 1 ? -fCos : 0.0f, j == 2 ? -fCos : 0.0f);
+		for(int i = 0; i < 3; ++i)
+		{
+			float fNowPart = j == 0 ? vNow[i].x : (j == 1 ? vNow[i].y : vNow[i].z);
+			float fWantedPart = j == 0 ? vWanted[i].x : (j == 1 ? vWanted[i].y : vWanted[i].z);
+			vColumn += (vWanted[i] * fNowPart + vNow[i] * fWantedPart) * 0.5f;
+		}
+		if(vColumn.Length() > vBest.Length()) vBest = vColumn;
+	}
+	if(vBest.Length() < 0.0001f) return cVector3f(0.0f);
+	vBest.Normalize();
+	if(cMath_Vector3Dot(vBest, avPrefer) < 0.0f) vBest = vBest * -1.0f;
+	else if(cMath_Vector3Dot(vBest, avPrefer) == 0.0f && cMath_Vector3Dot(vBest, vSin) < 0.0f) vBest = vBest * -1.0f;
+	// (The way it spins now may be the longer way round, by a little: then
+	// the angle that way.)
+	if(cMath_Vector3Dot(vBest, vSin) < 0.0f) return vBest * (6.2831853f - fAngle);
+	return vBest * fAngle;
+}
+
+//------------------------------------------------------------
+
+// BunkerVR: a heavy thing (the urn, the concrete block) held in one hand is
+// dragged along the floor, not lifted, and the hand stays on it, drawn on
+// the spot where it holds it, instead of rising far above the thing it still
+// holds. The real hand risen more than this above that spot: the thing slips
+// out of the hand (also when the thing drops away below the hand: let go by
+// the other hand of two, it falls, unless the hand goes down with it).
+// (Meters.)
+const float gfBunkerVR_HeavySlip = 0.25f;
+
+//------------------------------------------------------------
+
+// BunkerVR: holding one thing with both hands: both hands steer it, two hands
+// lift a heavy thing, and letting go with one leaves it in the other.
+// The first hand holds it with the game's grab and moves it; the other hand,
+// squeezing on that thing (within gfBunkerVR_TwoHandReach of where its rays
+// start, 5 cm behind the palm), helps: its own hold (PlayerBodyHandler.hps)
+// records where on the thing it holds and tells the grab, and moves nothing
+// itself. The grab then places the thing so that the midpoint between the two
+// places where the hands hold it is at the midpoint between the hands, turned
+// as the two hands' own rotations have it (half and half: the first hand's
+// alone would tip a lifted urn with its wrist), then turned (the shortest
+// way) so that the line from the first hand's place on it to the second's
+// runs along the line between the hands. Each hand is drawn on its place on
+// the thing. Those places are where the hands were when both took hold, so
+// nothing jumps then.
+const float gfBunkerVR_TwoHandReach = 0.12f; // (the hand holds it where the hand is, so it must be at it)
+// The places where the two hands hold it closer together than the first of
+// these: the line between them doesn't turn it (with the hands a few cm
+// apart, the slightest move of one would turn it right round: a tin mug held
+// in both hands would flip about); from there up to the second, more and
+// more; beyond it, fully.
+const float gfBunkerVR_TwoHandSteerFrom = 0.10f;
+const float gfBunkerVR_TwoHandSteerFull = 0.25f;
+// Held with both hands, a thing left further than this behind where the
+// hands want it (they moved too fast for its weight) is lost by both hands
+// and falls, instead of gliding on after hands that are drawn on their own
+// again. The grab says when ("BunkerVR_TwoHandDropTime"), so that the other
+// hand doesn't keep it.
+const float gfBunkerVR_TwoHandLetGo = 0.4f;
+// During a swing (the hand faster than gfBunkerVR_TwoHandSwing over its last
+// three updates), its turn may fall further behind (this hand's place on it
+// as far as gfBunkerVR_TwoHandLetGoSwinging from the hand) before both hands
+// lose it; and lost while the hand is faster than
+// gfBunkerVR_TwoHandSwingThrow, it flies on with the hand's speed then
+// (thrown, its energy limited as any throw's), instead of dropping. (The
+// trenches' 25 kg block, swung to be thrown, lags 40 to 55 cm off the hands
+// in its turn: with the normal limit it would drop from most swings.)
+const float gfBunkerVR_TwoHandSwing = 1.0f;
+const float gfBunkerVR_TwoHandLetGoSwinging = 0.8f;
+const float gfBunkerVR_TwoHandSwingThrow = 2.0f;
+
+// Held with both hands, the hands further apart (or nearer together) than
+// their places on the thing by more than this: the second hand slips off.
+// Otherwise, stretched far, each hand would be drawn off its place by half
+// the stretch, and past 50 cm off the thing entirely, while it hangs between
+// them. The grab says when ("BunkerVR_HelperLetGoTime"); the helping hand
+// then lets go.
+const float gfBunkerVR_TwoHandStretch = 0.25f;
+
+// BunkerVR: a throw gives a thing at most so much energy (joules), so heavy
+// things leave slowly instead of with the hand's own speed. afMass: its real
+// weight (kg). Up to 8 kg the limit is 60 J (a strong throw: a 1 kg can at
+// most about 11 m/s, the 3 kg fuel can about 6); above that it grows with the
+// weight, to 450 J at 25 kg (a heave with both arms gives a heavy thing more
+// than a throw gives a can): the 15 kg urn at most about 5.4 m/s, the 25 kg
+// concrete block about 6.0. The block in the trenches has to break a wooden
+// door (WoodenBreakableComponent: two hits of over 100 J, its speed against
+// the door cut to 72% by rock on wood's bounce and softness, so at least about
+// 4 m/s straight on); at 6.0 m/s it hits with 233 J straight on, and with over
+// 100 J up to about 50 degrees off it.
+const float gfBunkerVR_ThrowEnergy = 60.0f;
+const float gfBunkerVR_ThrowEnergyFrom = 8.0f;
+const float gfBunkerVR_ThrowEnergyHeavy = 450.0f;
+const float gfBunkerVR_ThrowEnergyTo = 25.0f;
+float BunkerVR_ThrowEnergyFor(float afMass)
+{
+	float fT = cMath_Clamp((afMass - gfBunkerVR_ThrowEnergyFrom) / (gfBunkerVR_ThrowEnergyTo - gfBunkerVR_ThrowEnergyFrom), 0.0f, 1.0f);
+	return gfBunkerVR_ThrowEnergy + (gfBunkerVR_ThrowEnergyHeavy - gfBunkerVR_ThrowEnergy) * fT;
+}
+cVector3f BunkerVR_ThrowLimit(const cVector3f &in avThrow, float afMass)
+{
+	if(afMass <= 0.0f) return avThrow;
+	return cMath_Vector3MaxLength(avThrow, cMath_Sqrt(2.0f * BunkerVR_ThrowEnergyFor(afMass) / afMass));
+}
+
+// How the thing is turned is worked out a little at a time: each update,
+// both hands' own rotations since the last update, half and half (a small
+// turn, BunkerVR_TwoHandStep), are given to the thing; and a second copy of
+// it is also turned, the shortest way, so that the line between the places
+// where the hands hold it runs along the line between the hands
+// (BunkerVR_TwoHandSteer); the thing is turned between the two as
+// BunkerVR_TwoHandSteerShare says. Don't work the turn out afresh each update
+// from how it was when both took hold: turned or pivoted far, the line
+// between the hands can come to point nearly the other way from where the
+// wrists alone have it, and the shortest turn between the two then flips
+// from one side to the other, spinning the thing off the hands.
+
+// The turn the two hands have made since the last update, half and half:
+// a_mtxTurn1Was, a_mtxTurn2Was: how each hand was turned then; a_mtxTurn1,
+// a_mtxTurn2: now. (Each a small turn, so halfway between them is always
+// clear.)
+cMatrixf BunkerVR_TwoHandStep(const cMatrixf &in a_mtxTurn1Was, const cMatrixf &in a_mtxTurn1, const cMatrixf &in a_mtxTurn2Was, const cMatrixf &in a_mtxTurn2)
+{
+	cMatrixf mtxStep1 = cMath_MatrixMul(a_mtxTurn1, cMath_MatrixInverse(a_mtxTurn1Was));
+	cMatrixf mtxStep2 = cMath_MatrixMul(a_mtxTurn2, cMath_MatrixInverse(a_mtxTurn2Was));
+	return BunkerVR_Slerp(0.5f, mtxStep1, mtxStep2); // (without the engine's NaN)
+}
+
+// How much the line between the hands turns it, by how far apart the places
+// where the hands hold it are (avGrip1, avGrip2, in the thing's local space):
+// 0 to 1 (see gfBunkerVR_TwoHandSteerFrom).
+float BunkerVR_TwoHandSteerShare(const cVector3f &in avGrip1, const cVector3f &in avGrip2)
+{
+	return cMath_Clamp(((avGrip2 - avGrip1).Length() - gfBunkerVR_TwoHandSteerFrom) / (gfBunkerVR_TwoHandSteerFull - gfBunkerVR_TwoHandSteerFrom), 0.0f, 1.0f);
+}
+
+// a_mtxTurn (a thing's rotation) turned the shortest way, so that the line
+// between the places where the hands hold it (avGrip1, avGrip2, in its local
+// space) runs along the line between the hands (avHand1, avHand2). Kept as it
+// is with the hands within 3 cm of each other, or when the line between them
+// points more than a quarter turn away from the thing's (the hands passed
+// through each other: no clear way round).
+cMatrixf BunkerVR_TwoHandSteer(const cMatrixf &in a_mtxTurn, const cVector3f &in avGrip1, const cVector3f &in avGrip2,
+							   const cVector3f &in avHand1, const cVector3f &in avHand2)
+{
+	cVector3f vAlong = cMath_MatrixMul3x3(a_mtxTurn, avGrip2 - avGrip1); // the line between the places on the thing, as turned
+	cVector3f vHands = avHand2 - avHand1;
+	if(vAlong.Length() < 0.01f || vHands.Length() < 0.03f || cMath_Vector3Dot(vAlong, vHands) <= 0.0f) return a_mtxTurn;
+	cVector3f vSide = cMath_Vector3Cross(vAlong, cVector3f(0.0f, 1.0f, 0.0f));
+	if(vSide.Length() < 0.01f) vSide = cMath_Vector3Cross(vAlong, cVector3f(1.0f, 0.0f, 0.0f));
+	return cMath_MatrixMul(BunkerVR_TurnBetween(vAlong, vHands, vSide), a_mtxTurn);
+}
+
+// a_mtxTurn: how the thing is to be turned; avGrip1, avGrip2: where on the
+// thing each hand holds it (in the thing's local space); avHand1, avHand2:
+// where the hands are. Returns where the thing is to be (the midpoint between
+// the places on it at the midpoint between the hands), and how turned.
+cMatrixf BunkerVR_TwoHandPlace(const cMatrixf &in a_mtxTurn, const cVector3f &in avGrip1, const cVector3f &in avGrip2,
+							   const cVector3f &in avHand1, const cVector3f &in avHand2)
+{
+	cMatrixf mtxPlace = a_mtxTurn;
+	mtxPlace.SetTranslation((avHand1 + avHand2) * 0.5f - cMath_MatrixMul3x3(a_mtxTurn, (avGrip1 + avGrip2) * 0.5f));
+	return mtxPlace;
+}
+
+// BunkerVR: a rotation that brings the way avFrom points onto the way avTo
+// points (the smallest one; exactly the other way: half a turn about
+// avAxisIfOpposite). (The same as VRTurnBetween in Prop_PlayerBody.hps.)
+cMatrixf BunkerVR_TurnBetween(const cVector3f &in avFrom, const cVector3f &in avTo, const cVector3f &in avAxisIfOpposite)
+{
+	cVector3f vA = cMath_Vector3Normalize(avFrom);
+	cVector3f vB = cMath_Vector3Normalize(avTo);
+	cVector3f vAxis = cMath_Vector3Cross(vA, vB);
+	float fSin = vAxis.Length();
+	float fCos = cMath_Vector3Dot(vA, vB);
+	if(fSin < 0.0001f)
+	{
+		if(fCos > 0.0f) return cMatrixf_Identity; // already there
+		vAxis = cMath_Vector3Normalize(avAxisIfOpposite); // exactly the other way: half a turn
+		fSin = 0.0f;
+	}
+	else
+	{
+		vAxis = vAxis * (1.0f / fSin);
+	}
+	float fAngle = cMath_ATan2(fSin, fCos);
+
+	// Math libraries differ in which way round a positive angle turns: make
+	// both, and keep the one that really brings avFrom onto avTo.
+	cQuaternion qOneWay;
+	qOneWay.FromAngleAxis(fAngle, vAxis);
+	cMatrixf mtxOneWay = cMath_MatrixQuaternion(qOneWay);
+	cQuaternion qOtherWay;
+	qOtherWay.FromAngleAxis(-fAngle, vAxis);
+	cMatrixf mtxOtherWay = cMath_MatrixQuaternion(qOtherWay);
+	if(cMath_Vector3Dot(cMath_MatrixMul3x3(mtxOneWay, vA), vB) >= cMath_Vector3Dot(cMath_MatrixMul3x3(mtxOtherWay, vA), vB))
+		return mtxOneWay;
+	return mtxOtherWay;
+}
+
+//------------------------------------------------------------
+
+// BunkerVR: the fit, the hands-on items' shared "bring it to something" move.
+// An item held in the right hand is put into what the game says it is used on
+// (its "use" box: a key's lock): its tip brought to the box's face, pointing
+// in, starts it; from then on it is held on the line through the center of
+// that face, pointing straight in, and goes in as far as the hand pushes it,
+// the pins felt as it goes; pushed in gfBunkerVR_FitSlideFrom, it slides the
+// rest of the way by itself. All the way in, it turns with the wrist about
+// that line (BunkerVR_FitKeyTurn): only the way it unlocks, with a little play
+// the other way and no more, and stiffly past the play. Turned far enough,
+// the bolt goes, it turns on to the end of its turn (a quarter turn) by
+// itself and is used (an item with no turn is used once it is all the way
+// in). Pulled back out before that, or the hand gone well off the line, it
+// comes out and is in the hand again. The hand that holds it is drawn where
+// that puts it (HandFor): the same move that takes the item from where the
+// real hand has it to its place in the lock, given to the hand, so that the
+// item, placed by the hand as always, lands there. PlayerBodyHandler.hps
+// (VRUpdateFit) finds what it fits, starts it, steps it, plays the haptics
+// and sounds each step reports (mlEvents) and uses the item;
+// Prop_PlayerBody.hps draws the hand.
+// An item that screws in (mfThread: a fuse) goes in only to where its thread
+// catches, mfThread short of all the way. It then turns only while the grip
+// is held (mbGripped, set by the body script before each step), with the
+// wrist, either way: the way it tightens, going in as it turns and stiffer as
+// it comes tight; the other way back out to where its thread caught, no
+// further. With the grip let go, it stays and the hand turns freely round it
+// (taking a new hold, as the hand does between the twists of the game's
+// scene); tight, it is used. A screw turned into its thread holds itself in:
+// it comes out only unscrewed back to where its thread caught, or with the
+// hand 40 cm off.
+const float gfBunkerVR_FitReach = 0.03f;		// the tip this close before the face (or in, up to gfBunkerVR_FitInside) starts it
+const float gfBunkerVR_FitInside = 0.06f;
+const float gfBunkerVR_FitAim = 0.82f;			// pointing in within 35 degrees (the cosine)
+const float gfBunkerVR_FitAcross = 0.05f;		// the tip at most this far from the center of the face to start
+const float gfBunkerVR_FitAcrossMost = 0.15f;	// the real hand's tip this far off the line: it comes out
+const float gfBunkerVR_FitOut = 0.05f;			// the real hand's tip this far back out before the face: it comes out
+const float gfBunkerVR_FitSlideFrom = 0.04f;	// pushed in this far, it slides the rest of the way...
+const float gfBunkerVR_FitSlideSpeed = 0.35f;	// ...at this speed (m/s)
+const float gfBunkerVR_FitPinStep = 0.025f;		// going in, a pin felt every this far
+const float gfBunkerVR_FitTurnPlay = 0.1f;		// the turn's play either way (radians: 6 degrees)...
+const float gfBunkerVR_FitTurnGive = 0.65f;		// ...past it the way it unlocks it turns only this much of what the wrist turns...
+const float gfBunkerVR_FitTurnEnd = 1.5708f;	// ...and once the bolt has gone, on to here by itself (a quarter turn)...
+const float gfBunkerVR_FitTurnSnap = 8.0f;		// ...at this speed (radians per second)
+const float gfBunkerVR_FitGrindStep = 0.14f;	// turning it stiffly, a grind felt every this far of its turn (8 degrees)
+const float gfBunkerVR_FitForced = 0.35f;		// the wrist this far the wrong way: it is forced, and the lock says so (20 degrees)...
+const float gfBunkerVR_FitForcedAgain = 0.17f;	// ...again once the wrist has come back within this
+const int glBunkerVR_FitPin = 1;		// events of a step (mlEvents): a pin passed going in...
+const int glBunkerVR_FitSeated = 2;		// ...all the way in...
+const int glBunkerVR_FitGrind = 4;		// ...turned stiffly on a step...
+const int glBunkerVR_FitThrown = 8;		// ...the bolt has gone (a screw: tight)...
+const float gfBunkerVR_FitThreadStep = 0.26f;		// screwing it in, its thread felt every this far of its turn (15 degrees)...
+const float gfBunkerVR_FitScrewStiffFrom = 0.6f;	// ...stiffer from this much of the way to tight...
+const float gfBunkerVR_FitScrewGiveTight = 0.55f;	// ...to turning only this much of what the wrist turns as it comes tight
+const float gfBunkerVR_FitHandCatchUp = 2.0f;		// a screw let go of: the drawn hand catches up with the wrist (if the stiffness held it back) at this (radians per second)
+const float gfBunkerVR_FitScrewHolds = 0.05f;		// a screw turned in this far (3 degrees) holds itself in...
+const float gfBunkerVR_FitScrewAway = 0.4f;			// ...until the hand is this far off its line, or back out before its face
+const int glBunkerVR_FitForcedNow = 16;	// ...forced the wrong way...
+const int glBunkerVR_FitLetGoNow = 32;	// ...a screw's grip let go of...
+const int glBunkerVR_FitHoldNow = 64;	// ...a screw taken hold of with the grip
+class cBunkerVRFit
+{
+	int mlState = 0;					// 0 not in, 1 going in, 2 all the way in (turned from here), 3 the bolt gone (turning on by itself), 4 used
+	int mlEvents = 0;					// what the last step did (glBunkerVR_Fit...)
+	cVector3f mvAlong = cVector3f(0.0f, 0.0f, 1.0f);	// the way it goes in (the world)
+	cVector3f mvFace = cVector3f(0.0f);	// where its tip enters, on the line through the face's center
+	cVector3f mvTip = cVector3f(0.0f);	// its tip, in its local space
+	float mfScale = 1.0f;				// its own size (kept)
+	cMatrixf m_mtxStartTurn = cMatrixf_Identity;	// how it is turned as it goes in (pointing along mvAlong)
+	float mfDepthMost = 0.0f;			// how far in its tip goes, all the way
+	float mfThread = 0.0f;				// how far of that its turn takes it, for an item that screws in (0: it doesn't)
+	float mfTurnNeeded = 0.0f;			// how far it is turned for the bolt to go, or a screw to be tight (0: used once all the way in)...
+	float mfTurnWay = 1.0f;				// ...and which way: +1 about mvAlong (clockwise seen from behind it: to the right), -1 the other
+	float mfIn = 0.0f;					// how far in its tip is now
+	bool mbSliding = false;				// sliding the rest of the way in by itself
+	cVector3f mvRollWas = cVector3f(0.0f);	// the hand's way across mvAlong as it went all the way in...
+	bool mbRollByUp = true;				// ...(its up, or its right: whichever is more across)
+	cVector3f mvRollPrev = cVector3f(0.0f);	// ...and at the update before (the hand's turn is added up a step at a time)
+	float mfTurn = 0.0f;				// how far the hand has turned since (radians, + the way it unlocks)
+	float mfKeyTurn = 0.0f;				// how far that has turned the item (the same convention; BunkerVR_FitKeyTurn)
+	float mfHandTurn = 0.0f;			// how far the drawn hand has turned (as the item, but a screw's hold taken again shows)
+	float mfGrindWas = 0.0f;			// its turn at the last grind
+	bool mbForced = false;				// forced the wrong way, and not come back since
+	bool mbGripped = false;				// a screw: the hand holds its grip (set by the body script before each step)...
+	bool mbGrippedWas = false;			// ...and did at the step before
+
+	// Starts it: a_mtxThing, the item where the real hand has it; avTip, its
+	// tip, and avPoints, the way it points (both in its local space); avAlong,
+	// the way it goes in, and avFace, where its tip enters (the world);
+	// afDepthMost, afThread: see the members; afTurn: how far it is turned for
+	// the bolt to go (or a screw to be tight), + about avAlong (to the right,
+	// seen from behind it) or - (0: used once all the way in).
+	void Start(const cMatrixf &in a_mtxThing, const cVector3f &in avTip, const cVector3f &in avPoints,
+			   const cVector3f &in avAlong, const cVector3f &in avFace, float afDepthMost, float afTurn, float afThread = 0.0f)
+	{
+		mlState = 1;
+		mlEvents = 0;
+		mvAlong = cMath_Vector3Normalize(avAlong);
+		mvFace = avFace;
+		mvTip = avTip;
+		mfScale = cMath_MatrixMul3x3(a_mtxThing, cVector3f(1.0f, 0.0f, 0.0f)).Length();
+		if(mfScale < 0.001f) mfScale = 1.0f;
+		mfDepthMost = afDepthMost;
+		mfThread = cMath_Clamp(afThread, 0.0f, afDepthMost);
+		mfTurnNeeded = cMath_Abs(afTurn);
+		mfTurnWay = afTurn < 0.0f ? -1.0f : 1.0f;
+		cMatrixf mtxTurn = BunkerVR_PureTurn(a_mtxThing);
+		cVector3f vPoints = cMath_MatrixMul3x3(mtxTurn, avPoints);
+		cVector3f vSide = cMath_MatrixMul3x3(mtxTurn, cVector3f(avPoints.y, avPoints.z, avPoints.x)); // (any way across it: for half a turn, never needed)
+		m_mtxStartTurn = cMath_MatrixMul(BunkerVR_TurnBetween(vPoints, mvAlong, vSide), mtxTurn);
+		mfIn = cMath_Clamp(cMath_Vector3Dot(cMath_MatrixMul(a_mtxThing, mvTip) - mvFace, mvAlong), 0.0f, mfDepthMost - mfThread);
+		mbSliding = false;
+		mfTurn = 0.0f;
+		mfKeyTurn = 0.0f;
+		mfHandTurn = 0.0f;
+		mfGrindWas = 0.0f;
+		mbForced = false;
+		mbGripped = false;
+		mbGrippedWas = false;
+	}
+
+	// One update: a_mtxFree, the item where the real hand has it now;
+	// a_mtxHand, the real hand. False: it has come out (state 0). What it did
+	// is in mlEvents.
+	bool Step(const cMatrixf &in a_mtxFree, const cMatrixf &in a_mtxHand, float afTimeStep)
+	{
+		mlEvents = 0;
+		if(mlState == 0) return false;
+		cVector3f vTipFree = cMath_MatrixMul(a_mtxFree, mvTip);
+		float fPushed = cMath_Vector3Dot(vTipFree - mvFace, mvAlong);
+		cVector3f vAcross = (vTipFree - mvFace) - mvAlong * fPushed;
+		// A screw turned into its thread holds itself in (otherwise it can come
+		// out as the view drifts, and the next squeeze does the game's own use
+		// of it): it comes out only unscrewed back to where its thread caught,
+		// or with the hand gone far.
+		bool bScrewedIn = mfThread > 0.0f && mlState == 2 && mfKeyTurn > gfBunkerVR_FitScrewHolds;
+		float fOff = bScrewedIn ? gfBunkerVR_FitScrewAway : gfBunkerVR_FitAcrossMost;
+		float fBack = bScrewedIn ? gfBunkerVR_FitScrewAway : gfBunkerVR_FitOut;
+		if(mlState < 3 && (fPushed < -fBack || vAcross.Length() > fOff))
+		{
+			mlState = 0;
+			return false;
+		}
+		if(mlState == 1)
+		{
+			// (A screw goes in only to where its thread catches, and has no pins.)
+			float fInWas = mfIn;
+			float fCatch = mfDepthMost - mfThread;
+			if(fPushed >= gfBunkerVR_FitSlideFrom) mbSliding = true;
+			if(mbSliding) mfIn = cMath_Min(fCatch, cMath_Max(mfIn + gfBunkerVR_FitSlideSpeed * afTimeStep, fPushed)); // (and never behind the push)
+			else mfIn = cMath_Clamp(fPushed, 0.0f, fCatch);
+			if(mfThread <= 0.0f && mfIn > fInWas && int(mfIn / gfBunkerVR_FitPinStep) > int(fInWas / gfBunkerVR_FitPinStep)) mlEvents |= glBunkerVR_FitPin;
+			if(mfIn >= fCatch - 0.0001f)
+			{
+				mfIn = fCatch;
+				mlState = mfTurnNeeded > 0.0f ? 2 : 4;
+				mlEvents |= glBunkerVR_FitSeated;
+				cVector3f vUp = cMath_MatrixMul3x3(a_mtxHand, cVector3f(0.0f, 1.0f, 0.0f));
+				cVector3f vRight = cMath_MatrixMul3x3(a_mtxHand, cVector3f(1.0f, 0.0f, 0.0f));
+				mbRollByUp = cMath_Abs(cMath_Vector3Dot(cMath_Vector3Normalize(vUp), mvAlong)) <= cMath_Abs(cMath_Vector3Dot(cMath_Vector3Normalize(vRight), mvAlong));
+				mvRollWas = BunkerVR_FitAcross(mbRollByUp ? vUp : vRight, mvAlong);
+				mvRollPrev = mvRollWas;
+				mfTurn = 0.0f;
+				mfKeyTurn = 0.0f;
+				mfHandTurn = 0.0f;
+				mfGrindWas = 0.0f;
+				mbGrippedWas = mbGripped; // (a grip already held as its thread catches holds it)
+			}
+		}
+		else if(mlState == 2)
+		{
+			// The hand's turn, added up a step at a time (a screw's twists, its
+			// hold taken again between them, can come to more than half a turn).
+			cVector3f vRoll = BunkerVR_FitAcross(cMath_MatrixMul3x3(a_mtxHand, mbRollByUp ? cVector3f(0.0f, 1.0f, 0.0f) : cVector3f(1.0f, 0.0f, 0.0f)), mvAlong);
+			float fStep = mfTurnWay * cMath_ATan2(cMath_Vector3Dot(mvAlong, cMath_Vector3Cross(mvRollPrev, vRoll)), cMath_Vector3Dot(mvRollPrev, vRoll));
+			mvRollPrev = vRoll;
+			mfTurn += fStep;
+			if(mfThread > 0.0f)
+			{
+				// Screwed in: only while the grip is held does the
+				// wrist turn it, and the hand with it: the way it tightens,
+				// stiffer as it comes tight (BunkerVR_FitScrewGive); the other way
+				// back out, to where its thread caught and no further (the hand
+				// held there, as at tight). The grip let go of, it stays, and the
+				// hand turns freely round it (catching up with the wrist, if the
+				// stiffness held it back). Its thread takes it in as it turns.
+				float fWas = mfKeyTurn;
+				if(mbGripped != mbGrippedWas) mlEvents |= mbGripped ? glBunkerVR_FitHoldNow : glBunkerVR_FitLetGoNow;
+				mbGrippedWas = mbGripped;
+				if(mbGripped)
+				{
+					if(fStep > 0.0f) mfKeyTurn = cMath_Min(mfTurnNeeded, mfKeyTurn + fStep * BunkerVR_FitScrewGive(mfKeyTurn / mfTurnNeeded));
+					else mfKeyTurn = cMath_Max(0.0f, mfKeyTurn + fStep);
+					mfHandTurn += mfKeyTurn - fWas;
+				}
+				else
+				{
+					mfHandTurn += fStep;
+					float fCatchUp = gfBunkerVR_FitHandCatchUp * afTimeStep;
+					mfHandTurn += cMath_Clamp(mfTurn - mfHandTurn, -fCatchUp, fCatchUp);
+				}
+				mfIn = mfDepthMost - mfThread * (1.0f - mfKeyTurn / mfTurnNeeded);
+				if(int(mfKeyTurn / gfBunkerVR_FitThreadStep) != int(fWas / gfBunkerVR_FitThreadStep)) mlEvents |= glBunkerVR_FitGrind;
+				if(mfKeyTurn >= mfTurnNeeded - 0.0001f)
+				{
+					mfKeyTurn = mfTurnNeeded;
+					mfIn = mfDepthMost;
+					mlState = 4;
+					mlEvents |= glBunkerVR_FitThrown;
+				}
+				return true;
+			}
+			mfKeyTurn = BunkerVR_FitKeyTurn(mfTurn);
+			mfHandTurn = mfKeyTurn;
+			if(mfKeyTurn > gfBunkerVR_FitTurnPlay && cMath_Abs(mfKeyTurn - mfGrindWas) >= gfBunkerVR_FitGrindStep)
+			{
+				mfGrindWas = mfKeyTurn;
+				mlEvents |= glBunkerVR_FitGrind;
+			}
+			if(mfTurn < -gfBunkerVR_FitForced && mbForced == false)
+			{
+				mbForced = true;
+				mlEvents |= glBunkerVR_FitForcedNow;
+			}
+			else if(mfTurn > -gfBunkerVR_FitForcedAgain)
+			{
+				mbForced = false;
+			}
+			if(mfKeyTurn >= mfTurnNeeded)
+			{
+				mlState = 3;
+				mlEvents |= glBunkerVR_FitThrown;
+			}
+		}
+		else if(mlState == 3)
+		{
+			mfKeyTurn = cMath_Min(gfBunkerVR_FitTurnEnd, mfKeyTurn + gfBunkerVR_FitTurnSnap * afTimeStep);
+			mfHandTurn = mfKeyTurn;
+			if(mfKeyTurn >= gfBunkerVR_FitTurnEnd) mlState = 4;
+		}
+		return true;
+	}
+
+	// Where the item is now: on the line, its tip mfIn in, turned mfKeyTurn
+	// the way it unlocks about the line.
+	cMatrixf Placed()
+	{
+		return PlacedTurned(mfKeyTurn);
+	}
+
+	// The same, turned afTurn (+ the way it unlocks) about the line.
+	cMatrixf PlacedTurned(float afTurn)
+	{
+		float fTurn = afTurn * mfTurnWay;
+		cVector3f vRef = BunkerVR_FitAcross(cMath_MatrixMul3x3(m_mtxStartTurn, cVector3f(1.0f, 0.0f, 0.0f)) + cMath_MatrixMul3x3(m_mtxStartTurn, cVector3f(0.0f, 1.0f, 0.0f)), mvAlong);
+		cVector3f vTurned = vRef * cMath_Cos(fTurn) + cMath_Vector3Cross(mvAlong, vRef) * cMath_Sin(fTurn);
+		cMatrixf mtx = cMath_MatrixMul(BunkerVR_TurnBetween(vRef, vTurned, mvAlong), m_mtxStartTurn);
+		if(mfScale < 0.999f || mfScale > 1.001f) mtx = cMath_MatrixMul(mtx, cMath_MatrixScale(cVector3f(mfScale, mfScale, mfScale)));
+		mtx.SetTranslation(mvFace + mvAlong * mfIn - cMath_MatrixMul3x3(mtx, mvTip));
+		return mtx;
+	}
+
+	// The hand drawn so that the item it holds is at Placed(): the move that
+	// takes the item from where the real hand has it (a_mtxFree) to there,
+	// given to the real hand (a_mtxHand). (So a stiff turn holds the hand back
+	// from the wrist, and the wrong way stops it.) Turned mfHandTurn, not the
+	// item's turn: a screw's hold taken again turns the hand round it.
+	cMatrixf HandFor(const cMatrixf &in a_mtxFree, const cMatrixf &in a_mtxHand)
+	{
+		cMatrixf mtxPlaced = PlacedTurned(mfHandTurn);
+		cMatrixf mtxMove = cMath_MatrixMul(BunkerVR_PureTurn(mtxPlaced), cMath_MatrixInverse(BunkerVR_PureTurn(a_mtxFree)));
+		cVector3f vTipFree = cMath_MatrixMul(a_mtxFree, mvTip);
+		cVector3f vTipPlaced = cMath_MatrixMul(mtxPlaced, mvTip);
+		cMatrixf mtxHand = cMath_MatrixMul(mtxMove, a_mtxHand);
+		mtxHand.SetTranslation(vTipPlaced + cMath_MatrixMul3x3(mtxMove, a_mtxHand.GetTranslation() - vTipFree));
+		return mtxHand;
+	}
+}
+
+// BunkerVR: how far a key in its lock turns for the wrist turned afHand
+// (radians, + the way it unlocks): the play either way
+// (gfBunkerVR_FitTurnPlay) as the wrist turns; the wrong way no further; the
+// way it unlocks, past the play, stiffly: gfBunkerVR_FitTurnGive of the wrist's
+// turn more.
+float BunkerVR_FitKeyTurn(float afHand)
+{
+	if(afHand <= gfBunkerVR_FitTurnPlay) return cMath_Max(afHand, -gfBunkerVR_FitTurnPlay);
+	return gfBunkerVR_FitTurnPlay + (afHand - gfBunkerVR_FitTurnPlay) * gfBunkerVR_FitTurnGive;
+}
+
+// BunkerVR: how much of the wrist's turn turns a screw (a fuse) afDone of the
+// way to tight (0 to 1): all of it at first; from
+// gfBunkerVR_FitScrewStiffFrom of the way it gets stiffer, down to
+// gfBunkerVR_FitScrewGiveTight as it comes tight.
+float BunkerVR_FitScrewGive(float afDone)
+{
+	float fStiff = cMath_Clamp((afDone - gfBunkerVR_FitScrewStiffFrom) / (1.0f - gfBunkerVR_FitScrewStiffFrom), 0.0f, 1.0f);
+	return 1.0f - (1.0f - gfBunkerVR_FitScrewGiveTight) * fStiff * fStiff;
+}
+
+// BunkerVR: avWay's part across avAlong (a unit vector), made a unit long
+// (for the fit's turn). Nothing across: any direction across.
+cVector3f BunkerVR_FitAcross(const cVector3f &in avWay, const cVector3f &in avAlong)
+{
+	cVector3f vAcross = avWay - avAlong * cMath_Vector3Dot(avWay, avAlong);
+	if(vAcross.Length() > 0.0001f) return cMath_Vector3Normalize(vAcross);
+	vAcross = cMath_Vector3Cross(avAlong, cVector3f(0.0f, 1.0f, 0.0f));
+	if(vAcross.Length() < 0.0001f) vAcross = cMath_Vector3Cross(avAlong, cVector3f(1.0f, 0.0f, 0.0f));
+	return cMath_Vector3Normalize(vAcross);
+}
+
+//------------------------------------------------------------
+
+// BunkerVR: a held thing doesn't bump into the player's own body (as the
+// game's grab has it: Grab_CollisionWithPlayer is false for the things it
+// lets the player carry; a hand's own hold the same). Both holds switch that
+// off when they take hold, but the game can switch it on again by itself: a
+// thing that was let go of or thrown bumps into characters until it has
+// stopped (the game's grab, DropBody: EnableCharCollisionUntilStopped), so a
+// thing taken hold of again before that would bump into the player's body
+// and face while held, until it is held still. So it is switched off every
+// update while held (after note 88/89, BunkerVR_HoldNearHeadNote, so that the
+// notes show whether the game keeps switching it on). The first time for each
+// thing, a line in hpl.log.
+tID g_idBunkerVR_BumpLogged = tID_Invalid;
+void BunkerVR_HoldNoBodyBump(iPhysicsBody@ apBody)
+{
+	if(apBody is null || apBody.GetCollideCharacter() == false) return;
+	apBody.SetCollideCharacter(false);
+	if(apBody.GetID() == g_idBunkerVR_BumpLogged) return;
+	g_idBunkerVR_BumpLogged = apBody.GetID();
+	Log("BunkerVR: a held thing was set to bump into the player's body; switched off again\n");
+}
+
+//------------------------------------------------------------
+
+// BunkerVR: notes for the mod's log about a thing held near the head (88: the
+// left hand, 89: the right), to show what happens when it is brought to the
+// chest or the head: how far it is from the game's eye, how far its place was
+// moved out of something, and its speed, plus 100 if it collides with the
+// player's body. A note every quarter second at most for each hand, 40 in
+// all.
+int glBunkerVR_HoldNotes = 0;
+double[] gfBunkerVR_HoldNoteTime = {0.0, 0.0};
+
+void BunkerVR_HoldNearHeadNote(int alHand, iPhysicsBody@ apBody, const cVector3f &in avCorrection)
+{
+	if(apBody is null || alHand < 0 || alHand > 1 || glBunkerVR_HoldNotes >= 40) return;
+	cLuxPlayer@ pPlayer = cLux_GetPlayer();
+	cCamera@ pCam = pPlayer !is null ? pPlayer.GetCamera() : null;
+	if(pCam is null) return;
+	cVector3f vEyes = pCam.GetPosition();
+	float fDistance = (apBody.GetLocalPosition() - vEyes).Length();
+	if(fDistance > 0.6f) return;
+	double fNow = cEngine_GetGameTime();
+	if(fNow - gfBunkerVR_HoldNoteTime[alHand] < 0.25) return;
+	gfBunkerVR_HoldNoteTime[alHand] = fNow;
+	glBunkerVR_HoldNotes++;
+	float fSpeed = apBody.GetLinearVelocity().Length() + (apBody.GetCollideCharacter() ? 100.0f : 0.0f);
+	cVR_Note(alHand == 0 ? 88 : 89, fDistance, avCorrection.Length(), fSpeed);
+}
+
+//------------------------------------------------------------
+// Knockdowns, the Beast's kills and deaths
+
+// BunkerVR: which of these a player body animation is: 0 none of them, 1 a
+// knockdown the player gets up from (thrown by the Beast, a big fall, hit by
+// a shotgun), 2 a kill or a death. The names are the game's own:
+// PlayerState_Thrown.hps (player_throw_...), Player_Custom.hps
+// (fall_and_get_up_quickly, player_shot_shotgun_..., and for a death by a
+// gun player_shot_death_...), agent_stalker.hps (player_death_..., the
+// Beast's kills) and DeathHandler.hps (die_fall, every other death).
+int BunkerVR_RoughMoveOfAnimation(const tString &in asAnim)
+{
+	if(cString_Sub(asAnim, 0, 13) == "player_throw_") return 1;
+	if(asAnim == "fall_and_get_up_quickly") return 1;
+	if(cString_Sub(asAnim, 0, 19) == "player_shot_shotgun") return 1;
+	if(cString_Sub(asAnim, 0, 13) == "player_death_") return 2;
+	if(cString_Sub(asAnim, 0, 17) == "player_shot_death") return 2;
+	if(asAnim == "die_fall") return 2;
+	return 0;
+}
+
+// BunkerVR: the rotation for the player's camera while an animation moves it
+// (the body script's cutscene code sets the camera's rotation to this
+// matrix's transpose, as the game's own SetAnimationControlledCamera does
+// with cMath_MatrixRotateXYZ of the player's pitch, yaw and roll), facing the
+// way afYaw says (the game's yaw, as a camera's GetYaw gives it) and level:
+// not tipped up or down, not rolled.
+cMatrixf BunkerVR_LevelCameraRotation(float afYaw)
+{
+	return cMath_MatrixRotateXYZ(cVector3f(0.0f, afYaw, 0.0f));
+}
+
+// BunkerVR: the yaw of a camera's rotation, as the body script's cutscene code
+// builds it (before it is transposed for SetRotationMatrix), in the
+// convention of BunkerVR_LevelCameraRotation: the way that rotation faces,
+// kept level (a cutscene seen through the eyes faces the way the scene
+// starts). Its own forward (z) seen from above; a head tipped up or down
+// doesn't change it.
+float BunkerVR_LevelYawOf(const cMatrixf &in a_mtxRot)
+{
+	cVector3f vZ = cMath_MatrixMul(a_mtxRot.GetRotation(), cVector3f(0.0f, 0.0f, 1.0f));
+	return cMath_ATan2(vZ.x, vZ.z);
+}
+
+// BunkerVR: the yaw (as BunkerVR_LevelCameraRotation takes it, and a
+// camera's GetYaw gives it) of a camera looking along avDir, seen from
+// above (a Beast kill turns the view to face the Beast). A camera looks
+// along minus its rotation's z, so this is BunkerVR_LevelYawOf of a
+// rotation whose z is minus avDir.
+float BunkerVR_YawFacing(const cVector3f &in avDir)
+{
+	return cMath_ATan2(-avDir.x, -avDir.z);
+}
+
+// BunkerVR: the angle by which a turn of cMath_MatrixRotateY takes avFrom onto
+// avTo, both seen from above. (Tried both ways round, as UpdateOrientation
+// does: math libraries differ in which way a positive angle turns.)
+float BunkerVR_RotateYBetween(const cVector3f &in avFrom, const cVector3f &in avTo)
+{
+	cVector3f vFrom = cVector3f(avFrom.x, 0.0f, avFrom.z);
+	cVector3f vTo = cVector3f(avTo.x, 0.0f, avTo.z);
+	float fAngle = cMath_ATan2(cMath_Vector3Cross(vFrom, vTo).y, cMath_Vector3Dot(vFrom, vTo));
+	float fOneWay = cMath_Vector3Dot(cMath_MatrixMul3x3(cMath_MatrixRotateY(fAngle), vFrom), vTo);
+	float fOtherWay = cMath_Vector3Dot(cMath_MatrixMul3x3(cMath_MatrixRotateY(-fAngle), vFrom), vTo);
+	return fOtherWay > fOneWay ? -fAngle : fAngle;
+}
+
+const float gfBunkerVR_KeepLineLeast = 0.05f;	// a line shorter than this seen from above (a body on its side) says nothing of which way it faces
+
+// BunkerVR: the turn to draw a body with so that a line across it (avLine, as it
+// is drawn now, with the turn afApplied) lies the way it did at first (avFirst),
+// whatever its animation does (VRKnockBodyTurn): at most afMostStep from
+// afApplied this time. A line too short to tell by keeps the turn it had.
+float BunkerVR_KeepLineTurn(const cVector3f &in avLine, const cVector3f &in avFirst, float afApplied, float afMostStep)
+{
+	cVector3f vLevel = cVector3f(avLine.x, 0.0f, avLine.z);
+	if(vLevel.Length() < gfBunkerVR_KeepLineLeast) return afApplied;
+	cVector3f vAnimated = cMath_MatrixMul3x3(cMath_MatrixRotateY(-afApplied), vLevel);
+	float fStep = BunkerVR_RotateYBetween(vAnimated, avFirst) - afApplied;
+	while(fStep > cMath_Pi) fStep -= cMath_PiMul2;
+	while(fStep < -cMath_Pi) fStep += cMath_PiMul2;
+	return afApplied + cMath_Clamp(fStep, -afMostStep, afMostStep);
+}
+
+//------------------------------------------------------------
+// The gentle knockdowns
+
+// BunkerVR: 0 at or below afLow, 1 at or above afHigh, and between them an S
+// with no sudden start or stop (3t^2 - 2t^3). For the comfort ring and the
+// eased return of VRGentleView (PlayerBodyHandler.hps).
+float BunkerVR_SmoothStep(float afLow, float afHigh, float afX)
+{
+	if(afHigh <= afLow) return afX >= afHigh ? 1.0f : 0.0f;
+	float fT = cMath_Clamp((afX - afLow) / (afHigh - afLow), 0.0f, 1.0f);
+	return fT * fT * (3.0f - 2.0f * fT);
+}
+
+// BunkerVR: where a point at avPos, going at avVel, is afTimeStep later as it
+// follows avTarget the way a critically damped spring does, afOmega tight (a
+// gap left still closes to 40% in 2 / afOmega seconds and to 20% in 3 /
+// afOmega, never swinging past); its speed then in avVelAfter. Worked out
+// whole for the step, the target held still across it, so a long step (the
+// game held up) cannot make it swing or run away. Started still, its path is
+// an average of where the target has been, so it never goes beyond the
+// target's path: following the animated head of a knockdown, the view never
+// goes lower than the head went (VRGentleView, PlayerBodyHandler.hps).
+cVector3f BunkerVR_SpringFollow(const cVector3f &in avPos, const cVector3f &in avVel, const cVector3f &in avTarget, float afOmega, float afTimeStep, cVector3f &out avVelAfter)
+{
+	avVelAfter = avVel;
+	if(afTimeStep <= 0.0f) return avPos;
+	// e^-x as 1 / (1 + x + 0.48x^2 + 0.235x^3): within 0.1% for a step of up
+	// to 1 / afOmega, and between 0 and 1 for any step (the script language
+	// has no e^x).
+	float fX = afOmega * afTimeStep;
+	float fDecay = 1.0f / (1.0f + fX + 0.48f * fX * fX + 0.235f * fX * fX * fX);
+	cVector3f vGap = avPos - avTarget;
+	cVector3f vPush = (avVel + vGap * afOmega) * afTimeStep;
+	avVelAfter = (avVel - vPush * afOmega) * fDecay;
+	return avTarget + (vGap + vPush) * fDecay;
+}
+
+//------------------------------------------------------------
+// The fire group
+
+// BunkerVR: how far avPoint is from the stretch between avA and avB (the
+// nearest point of it; a stretch of no length is the point avA). For a flame
+// held to a molotov's cloth, which runs up its neck (VRUpdateFlames in
+// PlayerBodyHandler.hps).
+float BunkerVR_DistanceToSegment(const cVector3f &in avPoint, const cVector3f &in avA, const cVector3f &in avB)
+{
+	cVector3f vAlong = avB - avA;
+	float fLengthSqr = cMath_Vector3Dot(vAlong, vAlong);
+	float fT = 0.0f;
+	if(fLengthSqr > 0.000001f)
+		fT = cMath_Clamp(cMath_Vector3Dot(avPoint - avA, vAlong) / fLengthSqr, 0.0f, 1.0f);
+	return (avPoint - (avA + vAlong * fT)).Length();
+}

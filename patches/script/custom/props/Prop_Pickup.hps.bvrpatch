@@ -1,0 +1,36 @@
+BunkerVR patch 1
+file script/custom/props/Prop_Pickup.hps
+from ef291cec0700d7fee3ccfbbde9c53d48e99ad3d03c605d0b0ca39eca79d46b34 14892
+to b548fee3aea151a90002184a3f796a8d60319103f8ded18858859343390408cf 16233
+=290
++		// BunkerVR: a gun picked up in the headset goes straight into the
++		// hand, held: the pick-up's own "make held" flag is set and the gun
++		// is not put away after.
++		bool bVRToHand = (msType == "Gun" || msType == "Shotgun") && cVR_Active();
++		if (bVRToHand) Log("BunkerVR: " + mBaseObj.GetName() + " (" + msType + ") picked up into the hand\n");
+=1
+-1
++		pHandler.PickUpEntity(mBaseObj.GetName(), bVRToHand, bVRToHand ? false : mbPutAwayAfter, mbDestroyEntityOnPickup);
+=8
++	
++	// BunkerVR: picks the item up as it reaches the hand that pulled it in
++	// (see VRDoPull in PlayerBodyHandler.hps), as when the player interacts
++	// with it: same rules (inventory full, only one needed) and its sound.
++	// Returns (as the global return) whether it was picked up. Goes through
++	// the entity's own interaction, as the game's pick does
++	// (PlayerState_Normal.hps), so the map's own callback for it runs too.
++	// Calling this class's OnInteract directly would skip it: the map with
++	// the soldier's gun in the bunker waits in OnInteract_PickupGun.
++	void _Global_VRPickUp()
++	{
++		iLuxEntity@ pSelf = cLux_ID_Entity(mBaseObj.GetID());
++		if(pSelf is null)
++		{
++			cScript_SetGlobalReturnBool(OnInteract(0, null, mBaseObj.GetPosition(), ""));
++			return;
++		}
++		cScript_SetGlobalReturnBool(pSelf.OnInteract(0, pSelf.GetMainBody(), mBaseObj.GetPosition(), ""));
++	}
++	
++	//------------------------------------------------------------
+end

@@ -1,0 +1,19 @@
+BunkerVR patch 1
+file maps/trenches/trenches.hps
+from ee0a00f88430c23df84acac8f7b09639fc3ad516c080759989d694d547aadcf9 72644
+to 78388f017410257c3e79622501081d8830e9683f162fc70f4fd36d3f952a5ceb 73028
+=134
+-2
++		// Intro sequence (BunkerVR: one of the mod's debug jumps skips it)
++		if (cLux_ScriptDebugOn() || cVR_JumpSkipsOpening())
+=968
+-1
++			cVector3f vEnd = Player_GetEyesPosition(); // (BunkerVR: where the player really is)
+=214
+-1
++			// BunkerVR: a shot meant to hit goes at where the player's eyes really
++			// are, inside the body that is hit (see Player_GetEyesPosition): in VR
++			// the game's camera can be outside it, and these shots would all miss,
++			// with the Germans firing on and on.
++			cVector3f vGoalPos = bForceHit ? Player_GetEyesPosition() : Player_GetPosition();
+end

@@ -1,0 +1,8 @@
+BunkerVR patch 1
+file script/modules/ModuleInterfaces.hps
+from 6db0d5b3a671ddd754279a6d71553edd761ce113cff53c74be914db775fb7c25 24246
+to 2e3d9da372d1d0ec5f0fa7a8662ac9db842e9f253eb99f31bb20e138081d9183 24361
+=436
++
++	void VREndSceneForJump(); // BunkerVR: a jump first ends any scene the body is playing (PlayerBodyHandler.hps)
+end

@@ -1,0 +1,12 @@
+BunkerVR patch 1
+file script/custom/player/PlayerState_UsingGun_Aim.hps
+from 8d45ccc988f6e4e35d515e2521b99a41a4834b3fc4fef11e4e3e6c002c63333a 7864
+to f15f5a6f956345affc54eb290449bac9f34589c67ddd890d1b4c07524f6f08ce 8301
+=125
++		// BunkerVR: the kick in both hands (Prop_PlayerBody.hps VRRevolverKicked): a full one for a
++		// shot, a small one for the hammer's snap on an empty chamber. The game's own kick is in the
++		// arm's animation, which the hands on the controllers leave out.
++		cScript_SetGlobalVarFloat("BunkerVR_RevolverKickAt", float(cEngine_GetGameTime()));
++		cScript_SetGlobalVarFloat("BunkerVR_RevolverKickSize", bCanFire ? 1.0f : 0.15f);
++		
+end

@@ -1,0 +1,24 @@
+BunkerVR patch 1
+file script/custom/helpers/helper_items.hps
+from d3a0f083c34ea93fca7e73e2d0842df56a742dac288c4447afe20236196cd560 42728
+to 0a34ced3453277f828ac34554be2dbc8c577653d1e1c3dbe520f5ae32c9fd371 43207
+=922
++		// BunkerVR: in the headset the watch is wound by hand (VRUpdateWatch in
++		// PlayerBodyHandler.hps: its crown pinched and twisted, then pressed):
++		// it waits, stopped, until then.
++		if (cVR_Active())
++		{
++			PocketWatch_ForceWindUp();
++			return;
++		}
++
+=91
++	// BunkerVR: in the headset its button is pressed by hand to start it
++	// (VRUpdateWatch in PlayerBodyHandler.hps).
++	if (cVR_Active())
++	{
++		cScript_SetGlobalVarInt("BunkerVR_WatchPress", 1);
++		return;
++	}
++	
+end

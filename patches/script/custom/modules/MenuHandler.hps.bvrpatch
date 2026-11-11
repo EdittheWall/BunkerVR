@@ -1,0 +1,1003 @@
+BunkerVR patch 1
+file script/custom/modules/MenuHandler.hps
+from bb2962b3e05ecb0e7bac7d0b8a37e96adcbbb1b2e33ed0eab9ca55307e270619 424823
+to ff65385ba63d72d26d5353eb7a676ad8eac5cda86c67c51407364c25a26c3195 463813
+=47
++	eMainMenuButtonID_VR, // BunkerVR
+=50
++	eMainMenuGroup_Options_VR, // BunkerVR: the VR menu's first page (opened from the main menu, not from Options)
++	eMainMenuGroup_VR_Comfort, // BunkerVR: its six pages
++	eMainMenuGroup_VR_Movement,
++	eMainMenuGroup_VR_Hands,
++	eMainMenuGroup_VR_Access,
++	eMainMenuGroup_VR_Player,
++	eMainMenuGroup_VR_System,
+=615
++bool gbVRGrabTestStarted = false; // BunkerVR: has a test map's menu already started its game? (see VRGrabTestAutoStart)
+=325
++		msSelectedVRButton = "VR_Playing"; // BunkerVR
++		msSelectedVRHubButton = "VR_Player"; // BunkerVR
+=3
++		mbVRMenuFadeStarted = false; // BunkerVR
++		mfVRMenuFloorBelow = -1.0f;
++		mbVRMenuFloorLooked = false;
+=213
++	// BunkerVR: tell the VR mod whether the game's loading screen is up. This
++	// script also runs during loading screens. A loading screen that waits for
++	// a button already has the new level drawn behind it, which the headset
++	// would show around the loading picture; the mod keeps the eyes black
++	// until this says the screen is gone. (News goes to the mod in the
++	// camera's position with the special roll value 7027; both are put
++	// straight back.)
++	void VRSendLoadingNews()
++	{
++		cLuxPlayer@ pNewsPlayer = cLux_GetPlayer();
++		cCamera@ pNewsCam = pNewsPlayer !is null ? pNewsPlayer.GetCamera() : null;
++		if (pNewsCam is null) return;
++		
++		float fRealRoll = pNewsCam.GetRoll();
++		cVector3f vRealPos = pNewsCam.GetPosition();
++		pNewsCam.SetPosition(cVector3f(cLux_IsLoadingScreenVisible() ? 1.0f : 0.0f, 0.0f, 0.0f));
++		pNewsCam.SetRoll(7027.0f);
++		pNewsCam.GetMatrix();
++		pNewsCam.SetRoll(fRealRoll);
++		pNewsCam.SetPosition(vRealPos);
++	}
++	
++	// BunkerVR: the main menu's room (vr.cpp UpdateMenuRoom): every frame
++	// while the main menu is up, how far the game's camera stands above that
++	// room's floor, for the mod to put the floor where the real one is. The
++	// floor is found once: rays down from the camera and four places around
++	// it, taking the median of those that hit (one may hit a pile of rubble,
++	// one fall through a gap).
++	void VRSendMenuRoom()
++	{
++		if(mbMenuActive == false || cVR_Active() == false) return;
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		if(pMap is null || pMap.GetName() != "main_menu") return;
++		if(mfVRMenuFloorBelow < 0.0f && mbVRMenuFloorLooked == false)
++		{
++			mbVRMenuFloorLooked = true;
++			iLuxEntity@ pNode = pMap.GetEntityByName("CameraAnimation_1", eLuxEntityType_Area);
++			if(pNode !is null)
++			{
++				array<float> vHits;
++				for(int i = 0; i < 5; ++i)
++				{
++					cVector3f vFrom = pNode.GetPosition() + cVector3f(i == 1 ? 0.4f : (i == 2 ? -0.4f : 0.0f), 0.0f, i == 3 ? 0.4f : (i == 4 ? -0.4f : 0.0f));
++					float fDistance = 0.0f;
++					cVector3f vNormal = cVector3f(0.0f);
++					if(cLux_GetClosestBody(vFrom, cVector3f_Down, 3.0f, fDistance, vNormal) !is null) vHits.push_back(fDistance);
++				}
++				vHits.sortAsc();
++				if(vHits.length() > 0) mfVRMenuFloorBelow = vHits[vHits.length() / 2];
++				Log("BunkerVR: the main menu's floor is " + mfVRMenuFloorBelow + " below its camera (" + vHits.length() + " of 5 rays hit)\n");
++			}
++		}
++		cVR_MenuRoom(mfVRMenuFloorBelow);
++
++		// The main menu fully in view: this level's fade from black over (5 s, main_menu.hps OnEnter),
++		// the title shown, the first page up. The mod's start-up page appears a moment after.
++		if(mbPremenuActive == false && mbWelcomeScreen == false && mCurrentGroup == eMainMenuGroup_Main &&
++		   Effect_Fade_IsFading() == false && Effect_Fade_GetAlpha() < 0.01f && mfBackgroundTitleAlpha > 0.99f)
++			cVR_MenuInView();
++	}
++
++	// BunkerVR: the room blurred behind the mod's start-up page (the mod also darkens it):
++	// the game's own depth of field, as for checking health, sharp only within 10 cm (the
++	// page is a layer of its own), faded in and out over half a second. Here because this
++	// module's OnGui runs in the main menu and in every level.
++	void VRUpdateStartupBlur()
++	{
++		bool bWanted = cVR_Active() && cVR_RoomBlurred();
++		if(bWanted == (mlVRStartupBlur > 0)) return;
++		if(bWanted)
++		{
++			mlVRStartupBlur = Effect_DoF_Start(0.0f, 0.1f, 1.0f, 0.5f);
++			Log("BunkerVR: the start-up page is up: the room blurred\n");
++		}
++		else
++		{
++			Effect_DoF_FadeOut(mlVRStartupBlur, 0.5f);
++			mlVRStartupBlur = 0;
++			Log("BunkerVR: the start-up page is put away: the room sharp again\n");
++		}
++	}
++
++	// BunkerVR: debug jumps ("Take me there" in the mod's debug menu; testlist.h in
++	// the mod): the level, the start spot in it, then the items the check needs at
++	// hand. Here because this module's OnGui runs in the main menu and in every
++	// level, the game paused or not. Done the way the game's own debug page changes
++	// the map (GuiOptionsDebug); the level scripts skip their openings while
++	// cVR_Jumping() says so; after a jump nothing is saved (SaveRoomHandler.hps)
++	// until a real game is started or loaded. The target is read from the mod each
++	// time, never kept here: a new game sets this module up afresh and loses what
++	// it held, so a jump from the main menu would never arrive and would block
++	// every jump after it.
++	[nosave] float mfVRJumpWaited = 0.0f;	// seconds since it began
++	[nosave] float mfVRJumpInMap = 0.0f;	// seconds in the level wanted
++	[nosave] bool mbVRJumpAgainSeen = false;	// the jump under way is the last one again, after a death, and its waits have restarted
++
++	void VRUpdateJump(float afTimeStep)
++	{
++		if(cVR_JumpWanted())
++		{
++			VRJumpStart();
++			return;
++		}
++		if(cVR_Jumping() == false)
++		{
++			mbVRJumpAgainSeen = false;
++			return;
++		}
++		// A jump made again after a death (GameOverHandler.hps VRJumpRestart starts the level
++		// afresh itself, nothing is wanted here): its waits restart when it is first seen, then
++		// it arrives as any jump does.
++		if(mbVRJumpAgainSeen == false && cVR_JumpText(2) == "again")
++		{
++			mbVRJumpAgainSeen = true;
++			mfVRJumpWaited = 0.0f;
++			mfVRJumpInMap = 0.0f;
++		}
++
++		tString sMap = cVR_JumpText(0);
++		mfVRJumpWaited += afTimeStep;
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		if(pMap !is null && (sMap == "" || pMap.GetName() + ".hpm" == sMap))
++			mfVRJumpInMap += cMath_Min(afTimeStep, 0.1f); // (the first step after a load can be long)
++		if(mfVRJumpInMap >= 1.0f)
++		{
++			VRJumpArrived();
++		}
++		else if(mfVRJumpWaited > 180.0f)
++		{
++			Log("BunkerVR: jump: " + sMap + " did not come in 3 minutes; given up\n");
++			cVR_JumpDone();
++		}
++	}
++
++	void VRJumpStart()
++	{
++		tString sMap = cVR_JumpText(0);
++		tString sStart = cVR_JumpText(1);
++		mfVRJumpWaited = 0.0f;
++		mfVRJumpInMap = 0.0f;
++		Log("BunkerVR: jump: to level \"" + sMap + "\", start spot \"" + sStart + "\"\n");
++
++		// (A scene the body is playing, a level's own, is ended first: left on, it goes with the player into the next
++		// level, the body frozen. PlayerBodyHandler.hps VREndSceneForJump.)
++		if(mbMainMenuActive == false && cLux_GetPlayer() !is null)
++		{
++			iScrPlayerBodyHandler_Interface@ pJumpBody = cast<iScrPlayerBodyHandler_Interface>(cLux_GetUserModuleFromID(eModuleType_PlayerBodyHandler));
++			if(pJumpBody !is null) pJumpBody.VREndSceneForJump();
++		}
++
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		if(sMap == "" || (pMap !is null && pMap.GetName() + ".hpm" == sMap))
++		{
++			VRJumpToStartSpot(sStart); // already in this level: no load
++		}
++		else if(mbMainMenuActive)
++		{
++			VRJumpStartGameAt(sMap, sStart);
++		}
++		else
++		{
++			if(mbMenuActive) SetMenuActive(false);
++			mbGameOver = false;
++			Map_ChangeMap(sMap, sStart, "", "", true, true);
++			cLux_ClearPlayedVoiceLines();
++		}
++	}
++
++	// From the main menu: what StartNewGame does, leaving out the save slot it
++	// clears and chooses (nothing of the player's is touched: a jump saves
++	// nothing), and starting in the level wanted.
++	void VRJumpStartGameAt(const tString &in asMap, const tString &in asStart)
++	{
++		cVR_NewGame(); // BunkerVR: a new game at that level: the hints start again
++		GameStats_ResetAllEntries(false);
++		SetMenuActive(false);
++		cLux_LoadScreenSetOneShotSolidColorBackground();
++		mbGameOver = false;
++		mbWelcomeScreen = false;
++		msPreviousSaveLoaded = "";
++		MainMenu_SetPhase_Items(eMainMenuPhase_Items_None);
++		MainMenu_Sketchbook_SetSketch("loadscreen_1aa");
++		MainMenu_SetPhase_Ghoul(0);
++		Sketchbook_OnNewGame();
++		cLux_SetGameDifficulty(mlSelectedGameMode);
++		GameDifficulty_SwitchSettingsPresetTo(mlSelectedGameMode);
++		array<int> vDifficultySettingValueIDs = GameDifficulty_GetSettingsSelectedValueIDs();
++		cLux_StartNewGame(asMap, asStart);
++		GameDifficulty_SetSettingsSelectedValueIDs(vDifficultySettingValueIDs, true);
++		GameDifficulty_SetInitialPlaythroughConditions(true);
++		Item_OnNewGame();
++	}
++
++	void VRJumpToStartSpot(const tString &in asStart)
++	{
++		if(asStart == "") return;
++		array<tString> vStarts;
++		cLux_GetStartPositions(vStarts);
++		for(uint i = 0; i < vStarts.length(); ++i)
++		{
++			if(vStarts[i] != asStart) continue;
++			cLux_TeleportToStartPos(asStart);
++			return;
++		}
++		Log("BunkerVR: jump: this level has no start spot \"" + asStart + "\" (" + vStarts.length() + " listed)\n");
++	}
++
++	void VRJumpArrived()
++	{
++		// After a death: the level was started afresh at its own start; back to the spot jumped to.
++		bool bAgain = cVR_JumpText(2) == "again";
++		if(bAgain) VRJumpToStartSpot(cVR_JumpText(1));
++		mbVRJumpAgainSeen = false;
++		Sketchbook_SetCanOpen(true); // (the end of each level's opening does this, and a jump has skipped it)
++		if(cVR_JumpText(10) != "") Item_SetCurrentSlotsCount(Item_GetMaxSlotsCount());
++		for(int i = 0; i < 8; ++i)
++		{
++			tString sItem = cVR_JumpText(10 + i);
++			if(sItem == "") break;
++			if(ItemType_GetCountInInventory(sItem) == 0) Item_AddToInventory(sItem);
++		}
++		// A jump starts clean: the dream's smoke, left on by a jump out of a dream scene, would
++		// show in the levels after it, and a hurt player would be stopped by a hint card.
++		if(cVR_JumpSkipsOpening())
++		{
++			cScript_SetGlobalArgFloat(0, 0.f);
++			cScript_SetGlobalArgFloat(1, 0.f);
++			cScript_RunGlobalFunc("LuxPlayer", "", "_Global_FadeDreamLights");
++			if(cLux_GetPlayer() !is null) cLux_GetPlayer().SetHealth(1.f);
++		}
++		tString sMap = cVR_JumpText(0);
++		Log("BunkerVR: jump: arrived in \"" + sMap + "\" after " + mfVRJumpWaited + " s" + (bAgain ? " (again, after a death)" : "") + "\n");
++		cVR_JumpDone(); // (the mod then asks the body script for what is to be made and pressed)
++	}
++
+=2
++		VRSendLoadingNews();
++		VRSendMenuRoom(); // BunkerVR
++		VRUpdateJump(afTimeStep); // BunkerVR
++		VRUpdateStartupBlur(); // BunkerVR
++		
+=283
++		if(cVR_Active()) mouseGfx.mColor = cColor(1.0f, 0.0f); // BunkerVR: drawn unseen in the headset, so the game's default cannot take its place
+=220
++		// BunkerVR: started from a test map's shortcut, the game opens that test
++		// map's mod, and that mod goes straight into its room.
++		VRGrabTestLaunch(afTimeStep);
++		VRGrabTestAutoStart();
++
+=2
+-1
++		if(	ImGui_TimerExists("NewGameTimer") ||
+=15
+-2
++			// BunkerVR: in the headset, no black over the menu's picture, and
++			// no menu: it is gone at once (see below) and the room fades instead,
++			// for as long as this wait lasts. The picture is a floating panel, so
++			// this black, one second in, would be a black wall in the room for the
++			// 7 seconds left of the new game's 8.
++			bool bVRMenuGone = cVR_Active();
++			if(bVRMenuGone)
++			{
++				if(mbVRMenuFadeStarted == false)
++				{
++					mbVRMenuFadeStarted = true;
++					Effect_Fade_Out(ImGui_TimerExists("NewGameTimer") ? mfNewGameFadeLength : (ImGui_TimerExists("Continue") ? gfContinueGameFadeOutTime : mfFadeLength));
++				}
++			}
++			else
++			{
++				cImGuiGfx gfx;
++				ImGui_DrawGfx(gfx, ImGui_FullScreenPos(40.0), ImGui_FullScreenSize(), cColor(0, mfFadeOut));
++			}
+=81
++
++			if(bVRMenuGone) return; // BunkerVR (see above: nothing of the menu drawn)
+=17
+-1
++			if(cVR_Active() == false) // BunkerVR (as the fade out above)
++				ImGui_DrawGfx(gfx, ImGui_FullScreenPos(40.0), ImGui_FullScreenSize(), cColor(0, mfFadeIn));
+=24
++			case eMainMenuGroup_Options_VR: // BunkerVR: its pages hide the title image, as the game's Options do
++			case eMainMenuGroup_VR_Comfort:
++			case eMainMenuGroup_VR_Movement:
++			case eMainMenuGroup_VR_Hands:
++			case eMainMenuGroup_VR_Access:
++			case eMainMenuGroup_VR_Player:
++			case eMainMenuGroup_VR_System:
+=19
+-1
++					if(mbPremenuActive)
+=1
+-1
++						/////////////////
++						// BunkerVR: the game's own start, its logos (Frictional Games, FMOD) and the rest,
++						// waits while the mod's studio card holds the game back (waiting for the headset to be
++						// put on, or shown), then plays in full. Never skip the original developers' logos.
++						bool bVRCardHolds = cVR_StudioCardHolds();
++						if(bVRCardHolds != mbVRPreMenuHeld)
++						{
++							mbVRPreMenuHeld = bVRCardHolds;
++							Log("BunkerVR: the game's own start (its logos) " + (bVRCardHolds ? "waits for the studio's card" : "goes on, the studio's card over") + "\n");
++						}
++						GuiPreMenu(bVRCardHolds ? 0.0f : afTimeStep);
+=173
++			////////////////////
++			// BunkerVR: the VR page
++			case eMainMenuGroup_Options_VR:
++			{
++				GuiVRHub(); break;
++			}
++			case eMainMenuGroup_VR_Comfort:
++			{
++				GuiVRPage(0); break;
++			}
++			case eMainMenuGroup_VR_Movement:
++			{
++				GuiVRPage(1); break;
++			}
++			case eMainMenuGroup_VR_Hands:
++			{
++				GuiVRPage(2); break;
++			}
++			case eMainMenuGroup_VR_Access:
++			{
++				GuiVRPage(3); break;
++			}
++			case eMainMenuGroup_VR_Player:
++			{
++				GuiVRPage(4); break;
++			}
++			case eMainMenuGroup_VR_System:
++			{
++				GuiVRPage(5); break;
++			}
+=25
++		// BunkerVR: in the headset the menu floats in front of the world. Its
++		// dark backing and dark edges would show there as a dark rectangle
++		// with a border, so they are left out and only the menu itself is drawn.
++		if (VRGetOption(0) >= 0)
++		{
++			// (Also for the VR mod: with "both eyes in step" the game draws
++			// a second picture while its clock stands still, which it only
++			// does when this engine setting is off. It is on otherwise. The
++			// mod says whether the option is on when asked with roll 7034.)
++			cLuxPlayer@ pStepPlayer = cLux_GetPlayer();
++			cCamera@ pStepCam = pStepPlayer !is null ? pStepPlayer.GetCamera() : null;
++			if (pStepCam !is null)
++			{
++				float fStepRoll = pStepCam.GetRoll();
++				pStepCam.SetRoll(7034.0f);
++				cVector3f vStep = pStepCam.GetMatrix().GetTranslation();
++				pStepCam.SetRoll(fStepRoll);
++				bool bInStep = vStep.x > 12344.0f && vStep.x < 12346.0f && vStep.y > 0.5f;
++				if (cEngine_GetLimitFPS() == bInStep) cEngine_SetLimitFPS(bInStep == false);
++			}
++			return;
++		}
++		
+=30
++		cVR_JumpsOver(); // BunkerVR: a real game: saving is back on
++		cVR_NewGame(); // BunkerVR: a new game: the hints start again
++		
+=63
+-1
++
++	// BunkerVR: when the running mod is one of the BunkerVR test maps (each its
++	// own stand-alone mod, such as "BunkerVR Grab Test", the title in its
++	// entry.hpc), the menu starts a new game at once, the first time it shows,
++	// as the New Game button does (the "NewGameTimer", then StartNewGame below),
++	// so the room comes up without the logos or the menu, for quick testing.
++	// Done once: the game itself and any other mod are left alone, and back in
++	// the menu later (from the pause menu) it stays.
++	void VRGrabTestAutoStart()
++	{
++		if(gbVRGrabTestStarted) return;
++		if(mbMainMenuActive == false) return;
++		if(ImGui_TimerExists("NewGameTimer")) return;
++		cLuxModHandler@ pMods = cLux_GetModHandler();
++		if(pMods is null || pMods.GetIsRunningMod() == false) return;
++		gbVRGrabTestStarted = true;
++		tString sTitle = pMods.GetMainModTitle();
++		Log("BunkerVR: the running mod is \"" + sTitle + "\"\n");
++		if(sTitle != "BunkerVR Grab Test" && sTitle != "BunkerVR Item Test" && sTitle != "BunkerVR Drawer Test" && sTitle != "BunkerVR Sight Test") return; // (the grab, item, drawer and sight test maps)
++		Log("BunkerVR: the test map \"" + sTitle + "\": its game is started at once\n");
++		ImGui_AddTimer("NewGameTimer", 0.3f);
++	}
++
++	//-------------------------------------------------------
++
++	// BunkerVR: started from a test map's desktop shortcut (the VR mod says so:
++	// VR option 90, see StartedForGrabTest in its vr.cpp), the game's own main
++	// menu opens that test map's mod at once, as its entry in the Mods page does
++	// (LaunchMod_New), as soon as the mod list has it (looked for for up to 15
++	// seconds). That mod's menu then starts its game (VRGrabTestAutoStart). Done
++	// once. Don't have the shortcut pass the mod to the game itself with "-mod":
++	// the game then quits straight after starting.
++	[nosave] int mlVRGrabTestLaunch = 0;			// 0: not asked yet; 1: looking for it in the mod list; 2: done, or not wanted
++	[nosave] float mfVRGrabTestLooking = 0.0f;	// seconds spent looking
++	[nosave] tString msVRTestMapTitle = "BunkerVR Grab Test";	// the test map's mod looked for (its title)
++	void VRGrabTestLaunch(float afTimeStep)
++	{
++		if(mlVRGrabTestLaunch == 2) return;
++		if(mbMainMenuActive == false) return;
++		cLuxModHandler@ pMods = cLux_GetModHandler();
++		if(pMods is null || pMods.GetIsRunningMod())
++		{
++			mlVRGrabTestLaunch = 2;
++			return;
++		}
++		if(mlVRGrabTestLaunch == 0)
++		{
++			// (1: the grab test map's shortcut; 2: the item test map's; 3: the
++			// drawer test map's; 4: the sight test map's.)
++			int lVRWhich = VRGetOption(90);
++			if(lVRWhich != 1 && lVRWhich != 2 && lVRWhich != 3 && lVRWhich != 4)
++			{
++				mlVRGrabTestLaunch = 2;
++				return;
++			}
++			msVRTestMapTitle = lVRWhich == 4 ? "BunkerVR Sight Test" : (lVRWhich == 3 ? "BunkerVR Drawer Test" : (lVRWhich == 2 ? "BunkerVR Item Test" : "BunkerVR Grab Test"));
++			Log("BunkerVR: started from a test map's shortcut: opening \"" + msVRTestMapTitle + "\"\n");
++			pMods.CleanUpListing();
++			pMods.PrepareListing();
++			mlVRGrabTestLaunch = 1;
++			mfVRGrabTestLooking = 0.0f;
++		}
++
++		// (The list's news are taken here as the Mods page takes them; that page
++		// asks for the list afresh whenever it is opened.)
++		while(pMods.HasNextListEvent())
++		{
++			eLuxModEntryListEventType eventType;
++			array<uint32> vEntryIDs;
++			pMods.NextListEvent(eventType, vEntryIDs);
++		}
++		array<uint32> vIDs;
++		array<tString> vNames;
++		array<tWString> vAuthors;
++		array<tString> vPics;
++		pMods.GetModEntriesByName(eLuxModContentType_StandAlone, vIDs, vNames, vAuthors, vPics);
++		for(uint i = 0; i < vIDs.length() && i < vNames.length(); ++i)
++		{
++			if(vNames[i] != msVRTestMapTitle) continue;
++			mlVRGrabTestLaunch = 2;
++			Log("BunkerVR: the test map's mod is in the list (" + vIDs[i] + "): opening it\n");
++			array<uint32> vAddOnIDs;
++			mbHasSaveFiles = false;
++			pMods.LaunchMod_New(vIDs[i], vAddOnIDs);
++			return;
++		}
++		mfVRGrabTestLooking += afTimeStep;
++		if(mfVRGrabTestLooking > 15.0f)
++		{
++			mlVRGrabTestLaunch = 2;
++			Log("BunkerVR: the test map's mod \"" + msVRTestMapTitle + "\" was not found in the mod list (" + vIDs.length() + " mods listed)\n");
++		}
++	}
++
++	//-------------------------------------------------------
++
+=2
++		cVR_JumpsOver(); // BunkerVR: a real game: saving is back on
+=1
+-1
++
+=723
+-1
++			////////////////
+=504
+-1
++
+=2
+-1
++
++		/////////////////
++		// BunkerVR: the VR menu
++		{
++			if(OptionMenu_MainMenuButton("VRMenu", kMainMenuButtonPos, lEntryPos, eMainMenuButtonID_VR, msSelectedMainMenuButton, mlClickedMainMenuButton, mfTransitionAlpha))
++			{
++				mlClickedMainMenuButton = eMainMenuButtonID_VR;
++			}
++
++			msSelectedMainMenuButton = OptionMenu_UpdateFocus("VRMenu", msSelectedMainMenuButton);
++
++			++lEntryPos;
++		}
++
+=113
++			case eMainMenuButtonID_VR:
++				// BunkerVR: open the VR menu and set focus
++				mlFirstItemId = 0;
++				mlLastInFocus = 0;
++				mTargetGroup = eMainMenuGroup_Options_VR;
++				msTargetFocus = msSelectedVRHubButton;
++				break;
+=49
++		if (VRGetOption(0) >= 0) return; // BunkerVR: no dark sheet over the panel (see DoBackground)
+=68
+-1
++
++		/////////////////
++		// BunkerVR: the VR menu
++		{
++			if(OptionMenu_MainMenuButton("VRMenu", kOptionsButtonPos, lEntryPos, eMainMenuButtonID_VR, msSelectedPauseMenuButton, mlClickedPauseMenuButton, mfTransitionAlpha))
++			{
++				mlClickedPauseMenuButton = eMainMenuButtonID_VR;
++			}
++
++			msSelectedPauseMenuButton = OptionMenu_UpdateFocus("VRMenu", msSelectedPauseMenuButton);
++		}
++		++lEntryPos;
++
+=120
++
++			case eMainMenuButtonID_VR:
++				// BunkerVR: the VR menu
++				mlFirstItemId = 0;
++				mlLastInFocus = 0;
++				mTargetGroup = eMainMenuGroup_Options_VR;
++				msTargetFocus = msSelectedVRHubButton;
++				break;
+=118
+-1
++		array<tString> vMenuItemsPC = {"Options_Game", "Options_Controls", "Options_Display", "Options_Graphics", "Options_Audio", "Options_Accessibility"}; // BunkerVR: no VR page here: it opens from the main menu
+=5244
+-2
++			mbShowNewGamePlusPopUpMsg = false;
++			mbShowNewGamePlusButton = false;
+=127
++				cVR_MenuFocus(); // BunkerVR: a light buzz in the pointing hand
+=477
++	// BunkerVR: the VR menu. It is opened by its own button on the first page
++	// of the main menu (and of the pause menu), not from Options. Its first
++	// page lists six pages of settings, named and grouped as native VR games
++	// do (the mod's own menu in the headset, Y, uses the same names): player,
++	// comfort, movement, hands, accessibility, system; and Recalibrate.
++	//
++	// The settings themselves are kept by the VR mod (BunkerVR_settings.txt).
++	// These pages ask the mod what each one is set to and tell it when one is
++	// changed. The mod answers through the camera: after setting a special
++	// roll value, reading the camera's matrix returns the mod's data instead
++	// (12345 as its first number, the choice as its second). Without the mod
++	// the answer does not match, and the pages show the first choice of each.
++	// Settings 0 to 9 have a roll value each (7040 + number to ask, 7050 +
++	// number to set). The rest share two: 7060 asks and 7061 sets, with the
++	// setting's number (and the choice) put in the camera's position first.
++	int VRGetOption(int alIndex)
++	{
++		cLuxPlayer@ pPlayer = cLux_GetPlayer();
++		cCamera@ pCam = pPlayer !is null ? pPlayer.GetCamera() : null;
++		if(pCam is null) return -1;
++
++		float fRealRoll = pCam.GetRoll();
++		cVector3f vAnswer = cVector3f(0.0f, 0.0f, 0.0f);
++		if(alIndex < 10)
++		{
++			pCam.SetRoll(7040.0f + float(alIndex));
++			vAnswer = pCam.GetMatrix().GetTranslation();
++		}
++		else
++		{
++			cVector3f vRealPos = pCam.GetPosition();
++			pCam.SetPosition(cVector3f(float(alIndex), 0.0f, 0.0f));
++			pCam.SetRoll(7060.0f);
++			vAnswer = pCam.GetMatrix().GetTranslation();
++			pCam.SetPosition(vRealPos);
++		}
++		pCam.SetRoll(fRealRoll);
++
++		if(vAnswer.x < 12344.0f || vAnswer.x > 12346.0f) return -1;
++		return int(vAnswer.y + 0.5f);
++	}
++
++	void VRSetOption(int alIndex, int alChoice)
++	{
++		cLuxPlayer@ pPlayer = cLux_GetPlayer();
++		cCamera@ pCam = pPlayer !is null ? pPlayer.GetCamera() : null;
++		if(pCam is null) return;
++
++		// The choice travels in the camera's position, which is put straight back.
++		cVector3f vRealPos = pCam.GetPosition();
++		float fRealRoll = pCam.GetRoll();
++		if(alIndex < 10)
++		{
++			pCam.SetPosition(cVector3f(float(alChoice), 0.0f, 0.0f));
++			pCam.SetRoll(7050.0f + float(alIndex));
++		}
++		else
++		{
++			pCam.SetPosition(cVector3f(float(alIndex), float(alChoice), 0.0f));
++			pCam.SetRoll(7061.0f);
++		}
++		pCam.GetMatrix();
++		pCam.SetRoll(fRealRoll);
++		pCam.SetPosition(vRealPos);
++	}
++
++	// One row of a page: a setting with a list of choices.
++	void VROptionRow(const array<tString> &in avMenuItems, int alOption, const array<tString> &in avChoices, cVector2f avRightAnchor, cVector3f avInfoBoxPos)
++	{
++		if (OptionMenu_CheckOutOfLimits(mlCurrentItemId) == false)
++		{
++			int lValue = VRGetOption(alOption);
++			bool bModHere = lValue >= 0;
++			if (lValue < 0 || lValue >= int(avChoices.length())) lValue = 0;
++
++			int lNewValue = OptionMenu_ButtonOptionsMultiSelect(avMenuItems[mlCurrentItemId-mlFirstItemId], kOptionsAccessibilityButtonPos, mlCurrentItemId, msSelectedVRButton, avChoices, lValue, false, mlActionHorizontal, "menu", 0, avRightAnchor, avInfoBoxPos, mfTransitionAlpha, false, false, true, "", cString_To16Char(""), false, false);
++			if (lNewValue != lValue && bModHere)
++			{
++				VRSetOption(alOption, lNewValue);
++			}
++			msSelectedVRButton = OptionMenu_UpdateFocusCustom(avMenuItems, avMenuItems[mlCurrentItemId], msSelectedVRButton);
++		}
++		mlCurrentItemId++;
++	}
++
++	// One row of the VR menu's first page: a button that opens a page.
++	void VRHubItem(const array<tString> &in avMenuItems, eMainMenuGroup aGroup, const tString &in asFirstRow, cVector2f avRightAnchor, cVector3f avInfoBoxPos)
++	{
++		if (OptionMenu_CheckOutOfLimits(mlCurrentItemId) == false)
++		{
++			if(OptionMenu_ButtonOptions(avMenuItems[mlCurrentItemId-mlFirstItemId], kOptionsButtonPos, mlCurrentItemId, msSelectedVRHubButton, false, avRightAnchor, avInfoBoxPos, mfTransitionAlpha))
++			{
++				mlFirstItemId = 0;
++				mlLastInFocus = 0;
++				mTargetGroup = aGroup;
++				msSelectedVRButton = asFirstRow;
++				msTargetFocus = asFirstRow;
++			}
++			msSelectedVRHubButton = OptionMenu_UpdateFocusCustom(avMenuItems, avMenuItems[mlCurrentItemId], msSelectedVRHubButton);
++		}
++		mlCurrentItemId++;
++	}
++
++	// The VR menu's first page's last row, RECALIBRATE ("VR_MeasureAgain"): the mod's start-up
++	// page, Player Setup, from the beginning (the mod's setting 39), for when the measured height
++	// is wrong.
++	void VRHubMeasureAgain(const array<tString> &in avMenuItems, cVector2f avRightAnchor, cVector3f avInfoBoxPos)
++	{
++		if (OptionMenu_CheckOutOfLimits(mlCurrentItemId) == false)
++		{
++			if(OptionMenu_ButtonOptions(avMenuItems[mlCurrentItemId-mlFirstItemId], kOptionsButtonPos, mlCurrentItemId, msSelectedVRHubButton, false, avRightAnchor, avInfoBoxPos, mfTransitionAlpha))
++			{
++				VRSetOption(39, 1);
++				Log("BunkerVR: the start-up page asked for from the VR settings' Measure Again\n");
++			}
++			msSelectedVRHubButton = OptionMenu_UpdateFocusCustom(avMenuItems, avMenuItems[mlCurrentItemId], msSelectedVRHubButton);
++		}
++		mlCurrentItemId++;
++	}
++
++	// The VR menu's first page.
++	void GuiVRHub()
++	{
++		GuiPauseDarkOverlay();
++
++		array<tString> vMenuItems = {"VR_Player", "VR_Comfort", "VR_Movement", "VR_Hands", "VR_Access", "VR_System", "VR_MeasureAgain"};
++		if (cLux_GetInputHandler().GetGamepadWasLastDeviceUsed()==false)
++			vMenuItems.push_back("Back");
++
++		cVector2f vBgSize = kOptionsBgSize;
++		cVector2f vRightAnchor = cVector2f(kOptionsBgPos.x + vBgSize.x, 0);
++		cVector3f vInfoBoxPos = OptionMenu_GetTopLeftOffset(cVector2f(kOptionsBgPos.x+vBgSize.x-60,0),0);
++
++		DoBackground(vRightAnchor.x + 100);
++
++		////////////////
++		// Title
++		OptionMenu_SectionTitle("VRMenu", kOptionsBgPos + cVector2f(40,-40), 1.f, mfTransitionAlpha);
++
++		ImGui_SetTransCategory("Menu");
++
++		mlCurrentItemId = mlFirstItemId;
++		OptionMenu_SetOutOfLimit(vMenuItems.length());
++
++		VRHubItem(vMenuItems, eMainMenuGroup_VR_Player, "VR_Playing", vRightAnchor, vInfoBoxPos);
++		VRHubItem(vMenuItems, eMainMenuGroup_VR_Comfort, "VR_Turning", vRightAnchor, vInfoBoxPos);
++		VRHubItem(vMenuItems, eMainMenuGroup_VR_Movement, "VR_WalkDir", vRightAnchor, vInfoBoxPos);
++		VRHubItem(vMenuItems, eMainMenuGroup_VR_Hands, "VR_HandPoses", vRightAnchor, vInfoBoxPos);
++		VRHubItem(vMenuItems, eMainMenuGroup_VR_Access, "VR_Hints", vRightAnchor, vInfoBoxPos);
++		VRHubItem(vMenuItems, eMainMenuGroup_VR_System, "VR_MenuDistance", vRightAnchor, vInfoBoxPos);
++		VRHubMeasureAgain(vMenuItems, vRightAnchor, vInfoBoxPos);
++
++		if (cLux_GetInputHandler().GetGamepadWasLastDeviceUsed()==false)
++			mlCurrentItemId++;
++
++		/////////////////
++		// Back
++		{
++			bool bButton = MainMenu_DoBackButton(msSelectedVRHubButton, mfTransitionAlpha);
++			bool bGamepadBack = ImGui_ActionTriggered(eImGuiAction_Cancel, true);
++
++			if(bButton || bGamepadBack)
++			{
++				mlFirstItemId = 0;
++				mlLastInFocus = 0;
++
++				if (ImGui_TimerExists("TransitionOut") == false)
++					ImGui_AddTimer("TransitionOut", 10);
++
++				mTargetGroup = eMainMenuGroup_Main;
++				msTargetFocus = mbMainMenuActive ? msSelectedMainMenuButton : msSelectedPauseMenuButton;
++
++				if(bGamepadBack == false)
++				{
++					OptionMenu_ShowGamepadButtons(true);
++					return;
++				}
++			}
++
++			if(mlCurrentItemId >= vMenuItems.size())
++				mlCurrentItemId = vMenuItems.size() - 1;
++
++			tString sID = cLux_GetInputHandler().GetGamepadWasLastDeviceUsed() ? vMenuItems[mlCurrentItemId] : "Back";
++			msSelectedVRHubButton = OptionMenu_UpdateFocus(sID, msSelectedVRHubButton);
++		}
++
++		GuiHandleTransition(mTargetGroup, msTargetFocus);
++
++		///////////
++		// Show gamepad legacy
++		OptionMenu_ShowGamepadButtons(true);
++	}
++
++	// One of the VR menu's six pages: 0 comfort, 1 movement, 2 hands, 3
++	// accessibility, 4 player, 5 system, with the rows grouped as the mod's
++	// own menu has them. The number VROptionRow gets for each row below is
++	// the mod's number for that setting (see VrGetMenuOption in the mod's
++	// vr.cpp).
++	void GuiVRPage(int alPage)
++	{
++		GuiPauseDarkOverlay();
++
++		array<tString> vOffOn = {"VR_Off", "VR_On"};
++		array<tString> vMenuItems;
++		array<tString> vWidest;
++		tString sTitle = "VR_Comfort";
++
++		if(alPage == 4)
++		{
++			sTitle = "VR_Player";
++			vMenuItems.push_back("VR_Playing");
++			vMenuItems.push_back("VR_Height");
++			vMenuItems.push_back("VR_Size");
++			vMenuItems.push_back("VR_Recentre");
++			vWidest.push_back("VR_PressArrow");
++		}
++		else if(alPage == 0)
++		{
++			sTitle = "VR_Comfort";
++			vMenuItems.push_back("VR_Turning");
++			vMenuItems.push_back("VR_SnapAngle");
++			vMenuItems.push_back("VR_TurnSpeed");
++			vMenuItems.push_back("VR_MoveVignette");
++			vMenuItems.push_back("VR_HeadBob");
++			vMenuItems.push_back("VR_Knockdown");
++			vMenuItems.push_back("VR_VignetteStrength");
++			vMenuItems.push_back("VR_Blood");
++			vWidest.push_back("VR_CutsceneScreen"); // (the knockdown view's three)
++			vWidest.push_back("VR_NoComfort");
++			vWidest.push_back("VR_Vignette");
++		}
++		else if(alPage == 1)
++		{
++			sTitle = "VR_Movement";
++			vMenuItems.push_back("VR_WalkDir");
++			vMenuItems.push_back("VR_WalkSpeed");
++			vMenuItems.push_back("VR_Jump");
++			vMenuItems.push_back("VR_DuckCrouch");
++			vMenuItems.push_back("VR_DuckDepth");
++			vMenuItems.push_back("VR_RoomScale");
++			vWidest.push_back("VR_LeftController");
++			vWidest.push_back("VR_StickUp");
++		}
++		else if(alPage == 2)
++		{
++			sTitle = "VR_Hands";
++			vMenuItems.push_back("VR_HandPoses");
++			vMenuItems.push_back("VR_GunDraw");
++			vMenuItems.push_back("VR_BulletsFrom");
++			vMenuItems.push_back("VR_BulletCount");
++			vMenuItems.push_back("VR_GunPush");
++			vWidest.push_back("VR_AtPouch");
++			vWidest.push_back("VR_Holster");
++		}
++		else if(alPage == 3)
++		{
++			sTitle = "VR_Access";
++			vMenuItems.push_back("VR_Hints");
++			vMenuItems.push_back("VR_HintsReset");
++			vMenuItems.push_back("VR_BandageTurns");
++			vMenuItems.push_back("VR_ThrowHelp");
++			vMenuItems.push_back("VR_Reach");
++			vMenuItems.push_back("VR_Vibration");
++			vMenuItems.push_back("VR_Pointer");
++			vWidest.push_back("VR_UntilLearned");
++			vWidest.push_back("VR_PressArrow");
++		}
++		else
++		{
++			sTitle = "VR_System";
++			vMenuItems.push_back("VR_MenuDistance");
++			vMenuItems.push_back("VR_MenuSize");
++			vMenuItems.push_back("VR_MonitorSteady");
++			vMenuItems.push_back("VR_MonitorWidth");
++			vMenuItems.push_back("VR_PcInput");
++			vWidest.push_back("VR_Medium");
++		}
++
++		if (cLux_GetInputHandler().GetGamepadWasLastDeviceUsed()==false)
++			vMenuItems.push_back("Back");
++
++		for (int i=0; i<vMenuItems.length(); i++)
++		{
++			OptionMenu_UpdateButtonWidth(vMenuItems[i], 450);
++		}
++
++		OptionMenu_UpdateMultiSelectionExtraWidth(vWidest, "Menu", gfFontSize_MainMenu, 50.f);
++		OptionMenu_AlignExtraButtonWidth();
++
++		cVector2f vPageMenuPos = kOptionsAccessibilityBgPos;
++		cVector2f vPageMenuSize = kOptionsAccessibilityBgSize + cVector2f(gfOptionsMenu_ExtraWidth + gfOptionsMenu_ExtraWidth_MultiSelect, 0);
++		cVector2f vRightAnchor = cVector2f(vPageMenuPos.x + vPageMenuSize.x - 40,0);
++
++		DoBackground(vRightAnchor.x + 100);
++
++		cVector3f vInfoBoxPos = OptionMenu_GetTopLeftOffset(cVector2f(vPageMenuPos.x + vPageMenuSize.x - 20,0), 0);
++
++		////////////////
++		// Title
++		OptionMenu_SectionTitle(sTitle, kOptionsAccessibilityBgPos + cVector2f(40,-40), 1.f, mfTransitionAlpha);
++
++		ImGui_SetTransCategory("Menu");
++
++		mlCurrentItemId = mlFirstItemId;
++
++		if(alPage == 4)
++		{
++			array<tString> vPlaying = {"VR_Seated", "VR_Standing"};
++			array<tString> vHeight = {"VR_Height0", "VR_Height1", "VR_Height2", "VR_Height3", "VR_Height4", "VR_Height5", "VR_Height6", "VR_Height7", "VR_Height8"};
++			array<tString> vSize = {"VR_Size80", "VR_Size90", "VR_Size100", "VR_Size110", "VR_Size120"};
++			array<tString> vRecentre = {"VR_PressArrow", "VR_Done"};
++
++			VROptionRow(vMenuItems, 0, vPlaying, vRightAnchor, vInfoBoxPos);
++			VROptionRow(vMenuItems, 4, vHeight, vRightAnchor, vInfoBoxPos);
++			VROptionRow(vMenuItems, 14, vSize, vRightAnchor, vInfoBoxPos);
++			VROptionRow(vMenuItems, 28, vRecentre, vRightAnchor, vInfoBoxPos); // the mod always answers "first choice"; picking the other one recenters the view
++		}
++		else if(alPage == 0)
++		{
++			array<tString> vTurning = {"VR_Smooth", "VR_Snap"};
++			array<tString> vSnapAngle = {"VR_Angle30", "VR_Angle45", "VR_Angle60", "VR_Angle90"};
++			array<tString> vTurnSpeed = {"VR_Slow", "VR_Normal", "VR_Fast", "VR_VeryFast"};
++			// (The head bob and the view during knockdowns and the Beast's kill: the mod's VR options 37 and 35.)
++			array<tString> vHeadBob = {"VR_Reduced", "VR_Off"};
++			array<tString> vKnockdown = {"VR_NoComfort", "VR_CutsceneScreen", "VR_Vignette"};
++			array<tString> vVignette = {"VR_VignetteNone", "VR_VignetteWeak", "VR_VignetteMedium", "VR_VignetteStrong"};
++			
++			VROptionRow(vMenuItems, 1, vTurning, vRightAnchor, vInfoBoxPos);
++			VROptionRow(vMenuItems, 2, vSnapAngle, vRightAnchor, vInfoBoxPos);
++			VROptionRow(vMenuItems, 3, vTurnSpeed, vRightAnchor, vInfoBoxPos);
++			// (The movement vignette, the mod's VR option 43: the edges of the view darkened while the
++			// thumbsticks move or turn the player.)
++			array<tString> vMoveVignette = {"VR_Off", "VR_VignetteWeak", "VR_VignetteMedium", "VR_VignetteStrong"};
++			VROptionRow(vMenuItems, 43, vMoveVignette, vRightAnchor, vInfoBoxPos);
++			VROptionRow(vMenuItems, 37, vHeadBob, vRightAnchor, vInfoBoxPos);
++			VROptionRow(vMenuItems, 35, vKnockdown, vRightAnchor, vInfoBoxPos);
++			VROptionRow(vMenuItems, 42, vVignette, vRightAnchor, vInfoBoxPos);
++			// (Cutscenes always play on the cinema screen: option 38 has no row.)
++			VROptionRow(vMenuItems, 17, vOffOn, vRightAnchor, vInfoBoxPos);
++		}
++		else if(alPage == 1)
++		{
++			array<tString> vWalkDir = {"VR_MyHead", "VR_LeftController"};
++			array<tString> vWalkSpeed = {"VR_AlwaysFull", "VR_FollowsStick"};
++			array<tString> vJump = {"VR_Off", "VR_StickUp"};
++			array<tString> vDuckDepth = {"VR_ALittle", "VR_Normal", "VR_ALot"};
++
++			VROptionRow(vMenuItems, 10, vWalkDir, vRightAnchor, vInfoBoxPos);
++			VROptionRow(vMenuItems, 11, vWalkSpeed, vRightAnchor, vInfoBoxPos);
++			VROptionRow(vMenuItems, 7, vJump, vRightAnchor, vInfoBoxPos);
++			VROptionRow(vMenuItems, 12, vOffOn, vRightAnchor, vInfoBoxPos);
++			VROptionRow(vMenuItems, 13, vDuckDepth, vRightAnchor, vInfoBoxPos);
++			VROptionRow(vMenuItems, 31, vOffOn, vRightAnchor, vInfoBoxPos);
++		}
++		else if(alPage == 2)
++		{
++			array<tString> vGunDraw = {"VR_Holster", "VR_AButton"};
++			array<tString> vBulletsFrom = {"VR_Pouch", "VR_AnySqueeze"};
++			array<tString> vBulletCount = {"VR_AtPouch", "VR_AboveCylinder"};
++
++			VROptionRow(vMenuItems, 21, vOffOn, vRightAnchor, vInfoBoxPos);
++			VROptionRow(vMenuItems, 5, vGunDraw, vRightAnchor, vInfoBoxPos);
++			VROptionRow(vMenuItems, 19, vBulletsFrom, vRightAnchor, vInfoBoxPos);
++			VROptionRow(vMenuItems, 20, vBulletCount, vRightAnchor, vInfoBoxPos);
++			VROptionRow(vMenuItems, 27, vOffOn, vRightAnchor, vInfoBoxPos);
++		}
++		else if(alPage == 5)
++		{
++			array<tString> vMenuDistance = {"VR_Near", "VR_Normal", "VR_Far"};
++			array<tString> vMenuSize = {"VR_Small", "VR_Normal", "VR_Large"};
++			array<tString> vMonitorSteady = {"VR_Off", "VR_Light", "VR_Medium", "VR_Strong"};
++			array<tString> vMonitorWidth = {"VR_Narrow", "VR_Normal", "VR_Wide"};
++			
++			VROptionRow(vMenuItems, 15, vMenuDistance, vRightAnchor, vInfoBoxPos);
++			VROptionRow(vMenuItems, 16, vMenuSize, vRightAnchor, vInfoBoxPos);
++			VROptionRow(vMenuItems, 33, vMonitorSteady, vRightAnchor, vInfoBoxPos); // the monitor's steady view (for recording)
++			VROptionRow(vMenuItems, 34, vMonitorWidth, vRightAnchor, vInfoBoxPos);
++			VROptionRow(vMenuItems, 29, vOffOn, vRightAnchor, vInfoBoxPos);
++		}
++		else
++		{
++			array<tString> vTurns = {"VR_One", "VR_Two", "VR_Three"};
++			array<tString> vThrow = {"VR_Off", "VR_Light", "VR_Medium", "VR_Strong"};
++			array<tString> vReach = {"VR_Short", "VR_Normal", "VR_Long", "VR_VeryLong"};
++			array<tString> vVibration = {"VR_Off", "VR_Light", "VR_Normal", "VR_Strong"};
++			array<tString> vPointer = {"VR_Off", "VR_Light", "VR_Medium", "VR_Strong"};
++			array<tString> vHints = {"VR_UntilLearned", "VR_Always", "VR_Off"};
++			array<tString> vHintsReset = {"VR_PressArrow", "VR_Done"};
++
++			VROptionRow(vMenuItems, 40, vHints, vRightAnchor, vInfoBoxPos); // (the hints on the objects)
++			VROptionRow(vMenuItems, 41, vHintsReset, vRightAnchor, vInfoBoxPos); // (the mod always answers "first choice"; picking the other one shows every hint again)
++			VROptionRow(vMenuItems, 26, vTurns, vRightAnchor, vInfoBoxPos); // (3 unless chosen fewer)
++			VROptionRow(vMenuItems, 22, vThrow, vRightAnchor, vInfoBoxPos);
++			VROptionRow(vMenuItems, 23, vReach, vRightAnchor, vInfoBoxPos);
++			VROptionRow(vMenuItems, 24, vVibration, vRightAnchor, vInfoBoxPos);
++			VROptionRow(vMenuItems, 18, vPointer, vRightAnchor, vInfoBoxPos);
++		}
++
++		/////////////////
++		// Back
++		{
++			bool bButton = MainMenu_DoBackButton(msSelectedVRButton, mfTransitionAlpha);
++			bool bGamepad = ImGui_ActionTriggered(eImGuiAction_Cancel, true);
++
++			if(bButton || bGamepad)
++			{
++				if (ImGui_TimerExists("TransitionOut") == false)
++					ImGui_AddTimer("TransitionOut", 10);
++
++				mlFirstItemId = 0;
++				mlLastInFocus = 0;
++				mTargetGroup = eMainMenuGroup_Options_VR;
++				msTargetFocus = msSelectedVRHubButton;
++
++				/////////
++				// Reset menu position
++				if(bGamepad == false)
++				{
++					OptionMenu_ShowGamepadButtons(true);
++					return;
++				}
++			}
++
++			tString sID = cLux_GetInputHandler().GetGamepadWasLastDeviceUsed() ? vMenuItems[mlCurrentItemId-1] : "Back";
++			msSelectedVRButton = OptionMenu_UpdateFocus(sID, msSelectedVRButton);
++		}
++
++		GuiHandleTransition(mTargetGroup, msTargetFocus);
++
++		///////////
++		// Show gamepad legacy
++		OptionMenu_ShowGamepadButtons(true);
++	}
++	
++	//------------------------------------------------------- 
++
+=2246
++	bool mbVRPreMenuHeld = false; // BunkerVR: the game's own start waiting for the studio's card (its last state, for the log)
+=71
++	[nosave] tString msSelectedVRButton; // BunkerVR
++	[nosave] tString msSelectedVRHubButton; // BunkerVR
+=39
++	[nosave] bool mbVRMenuFadeStarted = false;	// BunkerVR: the room's fade started for the menu's last wait
++	[nosave] float mfVRMenuFloorBelow = -1.0f;	// BunkerVR: how far the main menu's floor is below its camera (VRSendMenuRoom)
++	[nosave] bool mbVRMenuFloorLooked = false;	// BunkerVR: ...looked for already
++	[nosave] int mlVRStartupBlur = 0;	// BunkerVR: the blur behind the start-up page, while it is up (its id; 0 none)
+end

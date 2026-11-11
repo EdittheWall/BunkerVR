@@ -1,0 +1,17 @@
+BunkerVR patch 1
+file script/areas/Area_Ladder.hps
+from e1870abdea8ec9f607526833beb7501cc5aa6933eff2fdf8c7b43a0ac2290f41 9111
+to 1ae7e2651b5d33ef680e1a0bf6307476f2f5783ef1b168c0d14d19a876f2daee 9750
+=124
++		///////////////////////////////
++		// BunkerVR: in VR a ladder can't be climbed onto again within a second
++		// of getting off one (PlayerState_Ladder.hps gfVRLadderAgainWait).
++		// Otherwise a hand still on it, its squeeze waiting for something to
++		// touch, climbs straight back on, in a loop until the player lets go.
++		// A leave time ahead of the current time means the game's clock was
++		// restarted, and is not waited on.
++		float fVRSinceLadder = float(cEngine_GetGameTime()) - cScript_GetGlobalVarFloat("BunkerVR_LadderLeftAt");
++		if(cVR_Active() && fVRSinceLadder >= 0.0f && fVRSinceLadder < 1.0f)
++			return false;
++
+end

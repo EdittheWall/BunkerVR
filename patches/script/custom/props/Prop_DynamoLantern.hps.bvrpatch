@@ -1,0 +1,163 @@
+BunkerVR patch 1
+file script/custom/props/Prop_DynamoLantern.hps
+from 2435f1a3acfb6de3527e85a83a5ce12ee74f13878fb78482efb764df90026211 26978
+to ef89bc695349abc526968658064f44becfe07b24ae28f824757b44fd5742055b 33717
+=309
++	/////////////////////////////////////////////
++	// BunkerVR: the pull string follows the hand.
++	//
++	// While the mod reports that the right hand holds the cord (roll 7034,
++	// z above 0.5), the flashlight's own string is run from the place it
++	// leaves the flashlight to the right hand's index finger, with the ring
++	// around that finger. It is the game's own string and ring, so it is lit
++	// like everything else and hidden behind things.
++	//
++	// The string has a row of bones: j_string_base, _1, _2 and _3 lie inside
++	// the flashlight, j_string_end is its loose end and j_string_ring the ring
++	// on it. Bone _3 is put where the string leaves the flashlight, and the end
++	// and the ring are put at the finger, turned along the string.
++	//
++	// This is called after the flashlight's own animation, and again by the
++	// body script after it has put the arms on the controllers, so that
++	// whichever of the two runs last in a frame, the string ends up at the hand.
++	void VRUpdateString()
++	{
++		if (Item_GetHeldEntity(eItemHandlerHand_Left) != mBaseObj.GetName()) return;
++		
++		cLuxPlayer@ pVRPlayer = cLux_GetPlayer();
++		cCamera@ pVRCam = pVRPlayer !is null ? pVRPlayer.GetCamera() : null;
++		cMeshEntity@ pMesh = mBaseObj.GetMeshEntity();
++		if (pVRCam is null || pMesh is null) return;
++		
++		float fVRRealRoll = pVRCam.GetRoll();
++		pVRCam.SetRoll(7034.0f);
++		cVector3f vVRAnswer = pVRCam.GetMatrix().GetTranslation();
++		pVRCam.SetRoll(fVRRealRoll);
++		if (vVRAnswer.x < 12344.0f || vVRAnswer.x > 12346.0f || vVRAnswer.z < 0.5f) return;
++		
++		cBoneState@ pRoot = pMesh.GetBoneStateFromName("j_root");
++		cBoneState@ pThird = pMesh.GetBoneStateFromName("j_string_3");
++		cBoneState@ pEnd = pMesh.GetBoneStateFromName("j_string_end");
++		cBoneState@ pRing = pMesh.GetBoneStateFromName("j_string_ring");
++		if (pRoot is null || pThird is null || pEnd is null || pRing is null) return;
++		
++		/////////////////////////////
++		// The right hand's index finger (on the player's body).
++		iLuxEntity@ pBody = cLux_ID_Entity(PlayerBody_GetEntityID());
++		cMeshEntity@ pBodyMesh = pBody !is null ? pBody.GetMeshEntity() : null;
++		if (pBodyMesh is null) return;
++		cBoneState@ pFingerA = pBodyMesh.GetBoneStateFromName("j_R_Index_3");
++		cBoneState@ pFingerB = pBodyMesh.GetBoneStateFromName("j_R_Index_4");
++		if (pFingerA is null || pFingerB is null) return;
++		
++		cVector3f vFingerA = pFingerA.GetWorldPosition();
++		cVector3f vFingerDir = pFingerB.GetWorldPosition() - vFingerA;
++		cVector3f vFinger = vFingerA + vFingerDir * 0.35f;	// where the ring sits on the finger
++		
++		/////////////////////////////
++		// The flashlight's own directions and size. Its model is measured in
++		// centimeters, with the string hanging straight down its Y axis.
++		cMatrixf mtxRoot = pRoot.GetWorldMatrix();
++		cMatrixf mtxRest = mtxRoot;
++		mtxRest.SetTranslation(cVector3f(0.0f, 0.0f, 0.0f));
++		
++		float fSize = cMath_MatrixMul3x3(mtxRest, cVector3f(0.0f, 1.0f, 0.0f)).Length();
++		if (fSize < 0.000001f) return;
++		float fUnit = fSize < 0.1f ? 1.0f : 0.01f;	// model units per centimeter (the 1/100 scale is in the bones or in the model)
++		float fCm = fSize * fUnit;					// the length of one of its centimeters in the world
++		
++		cVector3f vExit = cMath_MatrixMul(mtxRoot, cVector3f(0.0f, -4.3f * fUnit, 0.0f));	// where the string leaves the flashlight
++		cVector3f vDown = cMath_MatrixMul3x3(mtxRest, cVector3f(0.0f, -1.0f, 0.0f)) * (1.0f / fSize);
++		cVector3f vRingFace = cMath_MatrixMul3x3(mtxRest, cVector3f(0.0f, 0.0f, 1.0f)) * (1.0f / fSize);
++		cVector3f vSide = cMath_MatrixMul3x3(mtxRest, cVector3f(1.0f, 0.0f, 0.0f)) * (1.0f / fSize);
++		
++		cVector3f vLine = vFinger - vExit;
++		float fLength = vLine.Length();
++		if (fLength < 2.5f * fCm) return;	// the hand is right at the flashlight: leave the string hanging
++		vLine = vLine * (1.0f / fLength);
++		
++		/////////////////////////////
++		// Turn the loose end from "hanging down" to "along the line to the
++		// finger", then about that line until the finger goes through the ring.
++		cMatrixf mtxTurn = VRStringTurn(vDown, vLine, vSide);
++		
++		cVector3f vAcross = vFingerDir - vLine * cMath_Vector3Dot(vFingerDir, vLine);
++		if (vAcross.Length() > 0.2f * vFingerDir.Length() && vAcross.Length() > 0.00001f)
++		{
++			cVector3f vFaceNow = cMath_MatrixMul3x3(mtxTurn, vRingFace);
++			mtxTurn = cMath_MatrixMul(VRStringTurn(vFaceNow, vAcross, vLine), mtxTurn);
++		}
++		
++		// The ring's middle is 1.57 cm beyond the end bone and the ring's own
++		// bone 0.33 cm beyond it.
++		cMatrixf mtxEnd = cMath_MatrixMul(mtxTurn, mtxRest);
++		cVector3f vEnd = vFinger - vLine * (1.57f * fCm);
++		
++		cMatrixf mtxThird = mtxRest;
++		mtxThird.SetTranslation(vExit);
++		pThird.SetWorldMatrix(mtxThird);
++		
++		mtxEnd.SetTranslation(vEnd);
++		pEnd.SetWorldMatrix(mtxEnd);
++		
++		mtxEnd.SetTranslation(vEnd + vLine * (0.33f * fCm));
++		pRing.SetWorldMatrix(mtxEnd);
++	}
++	
++	// The turn that brings direction avFrom onto direction avTo by the shortest
++	// way (about avAxisIfOpposite when they point exactly opposite ways).
++	cMatrixf VRStringTurn(const cVector3f &in avFrom, const cVector3f &in avTo, const cVector3f &in avAxisIfOpposite)
++	{
++		cVector3f vA = cMath_Vector3Normalize(avFrom);
++		cVector3f vB = cMath_Vector3Normalize(avTo);
++		cVector3f vAxis = cMath_Vector3Cross(vA, vB);
++		float fSin = vAxis.Length();
++		float fCos = cMath_Vector3Dot(vA, vB);
++		
++		if (fSin < 0.0001f)
++		{
++			if (fCos > 0.0f) return cMatrixf_Identity;
++			vAxis = cMath_Vector3Normalize(avAxisIfOpposite);
++			fSin = 0.0f;
++		}
++		else
++		{
++			vAxis = vAxis * (1.0f / fSin);
++		}
++		float fAngle = cMath_ATan2(fSin, fCos);
++		
++		// Math libraries differ in which way a positive angle turns. Make
++		// both, and keep the one that really brings avFrom onto avTo.
++		cQuaternion qOneWay;
++		qOneWay.FromAngleAxis(fAngle, vAxis);
++		cMatrixf mtxOneWay = cMath_MatrixQuaternion(qOneWay);
++		
++		cQuaternion qOtherWay;
++		qOtherWay.FromAngleAxis(-fAngle, vAxis);
++		cMatrixf mtxOtherWay = cMath_MatrixQuaternion(qOtherWay);
++		
++		if (cMath_Vector3Dot(cMath_MatrixMul3x3(mtxOneWay, vA), vB) >= cMath_Vector3Dot(cMath_MatrixMul3x3(mtxOtherWay, vA), vB))
++			return mtxOneWay;
++		return mtxOtherWay;
++	}
++	
++	void _Global_VRUpdateString()
++	{
++		VRUpdateString();
++	}
++	
++	// BunkerVR: sets the charge (argument 0, 0 to 1). For testing: the "Empty the
++	// flashlight" button in the mod's menu.
++	void _Global_VRSetCharge()
++	{
++		mfCharge = cMath_Clamp(cScript_GetGlobalArgFloat(0), 0.0f, 1.0f);
++	}
++	
++	//------------------------------------------------------------
++	
+=446
++		/////////////////
++		// BunkerVR: the pull string goes to the hand that holds it.
++		VRUpdateString();
++		
+end

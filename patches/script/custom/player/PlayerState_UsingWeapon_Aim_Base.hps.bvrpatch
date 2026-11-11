@@ -1,0 +1,72 @@
+BunkerVR patch 1
+file script/custom/player/PlayerState_UsingWeapon_Aim_Base.hps
+from 197937e3b82d463f97aaaf6feba0107fbfa3f02cdc390bc407a3aa0723e2004d 34310
+to 20b10aa6ce99cc383341ac098e259143e11cf11368864a59f8d822f6a31f4ae1 36776
+=15
++// BunkerVR: how fast the lamp is taken out and put away with a gun out, when
++// the VR mod asks (see _Global_VRToggleLantern).
++const float gfVRLanternAnimSpeed = 3.0f;
+=482
++				mfVRLanternAnimSpeed = 1.0f; // BunkerVR
+=19
++				mfVRLanternAnimSpeed = 1.0f; // BunkerVR
+=27
+-1
++
+=2
+-1
++			// (BunkerVR: at once when the left hand waits for the game's
++			// interact button, as the other items' states leave, with the
++			// lowering playing on behind it; see PlayerState_UsingItem_Base.hps.)
++			if (lState == -1 || cVR_OtherHandWaits())
+=65
+-1
++			// BunkerVR: in the headset the shotgun's dry click comes from its own
++			// script, cut short before the pump rack this sound includes
++			// (Prop_Shotgun.hps VRDryClick).
++			if (cVR_Active() == false || msWeaponType != "Shotgun")
++				Sound_PlayGui(msShootSound_Dry, 1.f, eSoundEntryType_GuiWorld);
+=88
++	// BunkerVR: the VR mod's flashlight (a squeeze at the left of the chest,
++	// or the right stick clicked) while a gun is out: done as the game's own
++	// flashlight key does here (see eAction_Flashlight in OnAction below), so
++	// the left arm takes the lamp with the game's own animation and the gun is
++	// then held in one hand. If the mod turned the light on by itself, the
++	// left arm would stay in the two-handed grip and hold the lamp like the
++	// revolver's grip until the lamp was wound.
++	void _Global_VRToggleLantern()
++	{
++		if (mbAllowUsingLantern == false ||
++			mlAnimState == eUsingItemAnimState_Outro ||
++			mLanternEquipState != eGunLanternEquipState_None ||
++			ItemType_GetCountInInventory("DynamoLantern") == 0 ||
++			Player_GetCanUseLightSource() == false)
++		{
++			return;
++		}
++		
++		// (Its animations play three times as fast as the game's own: at their
++		// own speed the lamp comes out of the holster with a noticeable delay.)
++		int lHeldState = Item_GetHandHeldState(eItemHandlerHand_Left);
++		if (lHeldState == 3)
++		{
++			Player_ToggleLightSource();
++			mLanternEquipState = eGunLanternEquipState_Unequip;
++			mfVRLanternAnimSpeed = gfVRLanternAnimSpeed;
++		}
++		else if (lHeldState == 0)
++		{
++			mLanternEquipState = eGunLanternEquipState_Equip;
++			mfVRLanternAnimSpeed = gfVRLanternAnimSpeed;
++		}
++	}
++	
++	//------------------------------------------------------------
++	
+=167
++			pAnimL.SetSpeed(mfVRLanternAnimSpeed); // BunkerVR (see _Global_VRToggleLantern)
+=5
++			pAnimR.SetSpeed(mfVRLanternAnimSpeed); // BunkerVR (see _Global_VRToggleLantern)
+=174
++	[nosave] float mfVRLanternAnimSpeed = 1.0f;	// BunkerVR: how fast the lamp's take-out and put-away animations play (see _Global_VRToggleLantern)
+end

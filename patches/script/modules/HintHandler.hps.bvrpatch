@@ -1,0 +1,98 @@
+BunkerVR patch 1
+file script/modules/HintHandler.hps
+from 43738efa690480f67e1f67423c68d8ab13f3a25a246a9e6af5f8d33a7d837eb0 41825
+to 9badfacf6f3e2a4725b4f8e9329830c9bbd14e19f8c95f0a5310b245a1570580 45811
+=25
++// BunkerVR: the game's hints left out in the headset (VRLeaveHintOut). The
++// lean hints: the player leans with their own body. The rest are either shown
++// at the spot by the labels on the objects, or of no use with the hands: the
++// interactive scenes' stick, doors, wheels, sliders, taking hold, throwing,
++// turning and moving a held object, picking up, aiming, opening and loading
++// the revolver, using an item, the pocket watch, pouring fuel.
++tString[] gsVRHintsLeftOut = {
++	"HintLean", "HintLean_Toggle",
++	"InteractiveAnimation", "InteractiveAnimationInverted",
++	"HintDoors", "HintWheel", "HintSlider",
++	"HintGrabHowTo", "HintGrabHowTo_Toggle", "HintGrabThrow", "HintGrabRotate", "HintGrabMove",
++	"HintPickUpItem",
++	"HintAimGun", "HintAimGun_Toggle",
++	"HintCheckAmmo", "HintCheckAmmo_Toggle",
++	"HintLoadBullets", "HintLoadBullets_Toggle",
++	"HintUseItem", "HintUseItem_Toggle",
++	"HintPocketWatch", "HintPocketWatch_Toggle",
++	"HintPourFuel" };
++
+=258
++	// BunkerVR: hints left out in the headset (gsVRHintsLeftOut). Checked
++	// before anything else, so a hint that would pause the game doesn't pause
++	// it either; each is logged once per run (the interactions request theirs
++	// every time).
++	bool VRLeaveHintOut(const tString &in asTextEntry)
++	{
++		if (cVR_Active() == false) return false;
++		if (gsVRHintsLeftOut.find(asTextEntry) < 0) return false;
++		if (mvVRHintsLoggedOut.find(asTextEntry) < 0)
++		{
++			mvVRHintsLoggedOut.push_back(asTextEntry);
++			Log("BunkerVR: the hint " + asTextEntry + " left out in VR\n");
++		}
++		return true;
++	}
++
++	//------------------------------------------------------------
++
++	// BunkerVR: tells the VR mod that the game is paused (a hint that waits for
++	// a button, the pause menu). The game stops drawing the world then; knowing
++	// why, the mod keeps the last pictures up instead of going black. The news
++	// travels in the camera's roll (special value 7021), which is put straight back.
++	void VRSendPausedNews()
++	{
++		if(cLux_GetGamePaused() == false) return;
++		
++		cLuxPlayer@ pPlayer = cLux_GetPlayer();
++		cCamera@ pCam = pPlayer !is null ? pPlayer.GetCamera() : null;
++		if(pCam is null) return;
++		
++		float fRealRoll = pCam.GetRoll();
++		pCam.SetRoll(7021.0f);
++		pCam.GetMatrix();
++		pCam.SetRoll(fRealRoll);
++	}
++
++	//------------------------------------------------------------
++
++	// BunkerVR: the hint to take the gun out ("HintEquipGun", a hint that
++	// pauses the game) is left out in the headset when the gun is in the
++	// right hand already: picked up there, it goes straight into
++	// the hand (see PickUp in Prop_Pickup.hps), and the bunker's map still
++	// shows the hint 9 s after the soldier's gun is taken.
++	bool VRGunHintNotNeeded(const tString &in asTextEntry)
++	{
++		if (asTextEntry != "HintEquipGun" || cVR_Active() == false) return false;
++		iScrItemHandler_Interface@ pItems = cast<iScrItemHandler_Interface>(cLux_GetUserModuleFromID(eModuleType_Custom_ItemHandler));
++		if (pItems is null) return false;
++		tString sHeld = pItems.GetHeldItem(eItemHandlerHand_Right);
++		iScrItem@ pHeld = sHeld != "" ? pItems.GetItemByID(sHeld) : null;
++		if (pHeld is null || pHeld.GetTypeID() != "Gun") return false;
++		Log("BunkerVR: the hint HintEquipGun left out in VR: the gun is in the hand already\n");
++		return true;
++	}
++	
++	//------------------------------------------------------------
++	
+=2
++		VRSendPausedNews(); // BunkerVR
++		
+=6
++			VRSendPausedNews(); // BunkerVR: straight away, before the next picture
+=152
++		// BunkerVR: the paused news is sent here too: the game's pause menu stops the modules' Update, so the news
++		// from Update would arrive only once, as the menu opens, and go stale; the interface's drawing goes on.
++		VRSendPausedNews();
+=377
++		if (VRLeaveHintOut(asTextEntry)) return -1; // BunkerVR
+=32
++		if (VRGunHintNotNeeded(asTextEntry)) return -1; // BunkerVR
+=562
++	[nosave] array<tString> mvVRHintsLoggedOut; // BunkerVR: the hints left out in VR that have been logged already
+end

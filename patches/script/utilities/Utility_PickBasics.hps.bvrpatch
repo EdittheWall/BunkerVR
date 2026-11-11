@@ -1,0 +1,175 @@
+BunkerVR patch 1
+file script/utilities/Utility_PickBasics.hps
+from f9edd6f014877b4caffa7365ea38eed0e843f9230dcc383905d291338acc8660 5651
+to 6d51951d9733fdce7e92bdc14a64e879fcf9764f0504b4ffdc2d7eba609a8fa5 11755
+=12
++
++// BunkerVR: picking with a hand. The search starts this far back inside the
++// hand and reaches this far out from the controller's front (in meters).
++const float gfVRHandPickStartBack = 0.12f;
++const float gfVRHandReach = 0.30f;
++// How far the extra rays tilt away from straight ahead (1 = 45 degrees).
++const float gfVRHandPickSpread = 0.9f;
+=19
+-1
++	// BunkerVR: abVRTouch: with a hand, only what the hand touches (see
++	// VRHandTouchFind in Prop_PlayerBody.hps). Set by the ordinary state's
++	// pick (PlayerState_Normal.hps), where an empty hand takes hold of things
++	// and uses them; the other picks (an item used on something, and the
++	// like) keep the rays.
++	bool UpdatePickCheck(cCamera @apCam, bool abCheckInteractionSupport, float afCustomMaxInteractDist=-1, bool abForceSkipSpecialDist=false, bool abVRTouch=false)
+=16
+-3
++		/////////////////////////////////////////////
++		// BunkerVR: where the pick ray starts and which way it goes: normally the camera.
++		cVector3f vRayPos = apCam.GetPosition();
++		cVector3f vRayDir = apCam.GetForward();
++		cVector3f vRayRight = apCam.GetRight();
++		cVector3f vRayUp = apCam.GetUp();
++		bool bVRHandPick = false;
++		float fVRHandReach = gfVRHandReach;
++		int lVRPickHand = -1;	// BunkerVR: which hand points (0 left, 1 right)
+=1
+-3
++		/////////////////////////////////////////////
++		// BunkerVR: point with a hand instead of looking with the camera.
++		// The VR mod answers through the camera: after setting a special roll value,
++		// reading the camera's matrix returns the hand's data instead. Without the
++		// mod installed the answer does not match, and the camera is used as normal.
+=1
+-7
++			float fRealRoll = apCam.GetRoll();
++			apCam.SetRoll(7004.0f);
++			cVector3f vVRStatus = apCam.GetMatrix().GetTranslation();
++			if(vVRStatus.x > 12344.0f && vVRStatus.x < 12346.0f && vVRStatus.y > 0.5f)
+=1
+-2
++				apCam.SetRoll(7003.0f);
++				cMatrixf mtxVRHand = apCam.GetMatrix();
++				cMatrixf mtxVRHandInv = cMath_MatrixInverse(mtxVRHand);
++				vRayPos = mtxVRHand.GetTranslation();
++				vRayDir = mtxVRHandInv.GetForward() * -1.0f;
++				vRayRight = mtxVRHandInv.GetRight();
++				vRayUp = mtxVRHandInv.GetUp();
++
++				// The hand that is seen may be held back from the real one (it
++				// stops at tables and walls, the real hand going a little into
++				// them: see VRHandBlock in Prop_PlayerBody.hps). The search goes
++				// from the hand that is seen, so a hand resting on a table still
++				// finds what lies on it; from the real hand, inside the table, it
++				// would find only the table.
++				int lVRHand = int(vVRStatus.z + 0.5f);
++				lVRPickHand = lVRHand;
++				cVector3f vVRBack = cScript_GetGlobalVarVector3f(lVRHand == 0 ? "BunkerVR_HandBack0" : "BunkerVR_HandBack1");
++				if(vVRBack.Length() < 0.6f) vRayPos = vRayPos + vVRBack;
++
++				// Things are taken hold of with the hand itself: only what the hand
++				// is at, or very nearly touching, counts. The search starts inside
++				// the hand and reaches a short way past the fingertips.
++				bVRHandPick = true;
++				vRayPos = vRayPos - vRayDir * gfVRHandPickStartBack;
++				
++				// The reach can be changed in the mod's menu (special roll value 7032, second number).
++				apCam.SetRoll(7032.0f);
++				float fVRReachSet = apCam.GetMatrix().GetTranslation().y;
++				if(fVRReachSet > 0.04f && fVRReachSet < 3.01f) fVRHandReach = fVRReachSet;
+=1
+-7
++			apCam.SetRoll(fRealRoll);
++		}
++
++		// Normally one ray is tried per update, a little to one side of the center
++		// (a different side each time nothing was found).
++		// BunkerVR: with a hand, a whole fan of rays is tried at once: straight out
++		// of the hand and tilted to every side of that, so that whatever the hand
++		// is at or over is found, not only what it points exactly at. The nearest
++		// thing found wins.
++		int lRayNum = bVRHandPick ? glPickOffsetNum : 1;
++
++		// BunkerVR: only what the hand touches (abVRTouch): what the arms' code
++		// reports that hand touches ("BunkerVR_TouchEntity0/1"...: see
++		// VRHandTouchFind in Prop_PlayerBody.hps), if reported just now; then
++		// no rays. If the report is old or missing, the arms are not being drawn
++		// and the rays are used as usual.
++		if(bVRHandPick && abVRTouch && lVRPickHand >= 0 && lVRPickHand <= 1)
++		{
++			tString sVRHand = lVRPickHand == 0 ? "0" : "1";
++			float fVRTouchAge = float(cEngine_GetGameTime()) - cScript_GetGlobalVarFloat("BunkerVR_TouchTime" + sVRHand);
++			if(fVRTouchAge > -0.001f && fVRTouchAge < 0.25f)
+=1
+-4
++				lRayNum = 0;
++				iLuxEntity@ pVRTouched = cLux_ID_Entity(cScript_GetGlobalVarID("BunkerVR_TouchEntity" + sVRHand));
++				iPhysicsBody@ pVRTouchedBody = cLux_ID_Body(cScript_GetGlobalVarID("BunkerVR_TouchBody" + sVRHand));
++				cVector3f vVRSpot = cScript_GetGlobalVarVector3f("BunkerVR_TouchSpot" + sVRHand);
++				if(pVRTouched !is null && pVRTouchedBody !is null)
++				{
++					float fVRDistance = (vVRSpot - vRayPos).Length();
++					bool bVRInteractionCheck = abCheckInteractionSupport == false ||
++											   (pVRTouched.GetInteractionDisabled() == false && pVRTouched.CanInteract(0, pVRTouchedBody));
++					bool bVRSpecialDistCheck = (@apCam is cLux_GetPlayer().GetCharacterBody().GetCamera() && abForceSkipSpecialDist == false);
++					if(bVRInteractionCheck && EntityInRange(pVRTouched, vVRSpot, fVRDistance, bVRSpecialDistCheck, afCustomMaxInteractDist))
++					{
++						outputData.mfDistance = fVRDistance;
++						@outputData.mpEntity = pVRTouched;
++						@outputData.mpBody = pVRTouchedBody;
++						mvFocusPosition = vVRSpot;
++						bFoundEntity = true;
++					}
++				}
++			}
++		}
++		for(int lRay = 0; lRay < lRayNum; ++lRay)
++		{
++			cVector3f vOffset = cVector3f(0);
++			cVector3f vCastDir = vRayDir;
++			if(bVRHandPick)
++			{
++				vCastDir = vRayDir + (vRayRight*gvPickOffset[lRay].x + vRayUp*gvPickOffset[lRay].y) * gfVRHandPickSpread;
++				vCastDir.Normalize();
++			}
++			else
++			{
++				vOffset += vRayRight*gvPickOffset[id].x*gfPickOffsetSize;
++				vOffset += vRayUp*gvPickOffset[id].y*gfPickOffsetSize;
++			}
++			
++			////////////////////////////////////////
++			//Ray cast with a certain offset		
++			if(cLux_GetClosestEntity(vRayPos+vOffset,vCastDir,fMaxRayDist, 0, false, tempData))
++			{
++				iLuxEntity @pEntity = tempData.mpEntity;
++				//cLux_AddDebugMessage("Closest ent is "+pEntity.GetName());
++				
++				cVector3f vFocusPos = vRayPos+vOffset + vCastDir * tempData.mfDistance;
++				
++				bool bInteractionCheck = true;
++				if(abCheckInteractionSupport)
++				{
++					bInteractionCheck = pEntity.GetInteractionDisabled()==false &&
++										pEntity.CanInteract(0, tempData.mpBody);
++				}
++				
++				//////////////////////////////////////////////////////////
++				//Check if closest body, can be interacted with and in range
++				bool bSpecialDistCheck = (@apCam is cLux_GetPlayer().GetCharacterBody().GetCamera() && abForceSkipSpecialDist==false);
++				if(	outputData.mfDistance > tempData.mfDistance && 
++					bInteractionCheck &&
++					(bVRHandPick == false || tempData.mfDistance < gfVRHandPickStartBack + fVRHandReach) &&
++					EntityInRange(pEntity, vFocusPos, tempData.mfDistance, bSpecialDistCheck, afCustomMaxInteractDist))
++				{
++					outputData.mfDistance = tempData.mfDistance;
++					@outputData.mpEntity = tempData.mpEntity;
++					@outputData.mpBody = tempData.mpBody;
++					mvFocusPosition = vFocusPos;
+=1
+-1
++					bFoundEntity = true;
++				}
+=37
++		mbVRHandPick = bVRHandPick; // BunkerVR
++		mlVRPickHand = lVRPickHand; // BunkerVR: for the squeezes' log
+=67
++	bool mbVRHandPick = false;	// BunkerVR: was the last pick check made with a hand (see PlayerState_Normal.hps, VRInteractWait)?
++	int mlVRPickHand = -1;		// BunkerVR: ...and which (0 left, 1 right)
+end

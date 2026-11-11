@@ -1,0 +1,11 @@
+BunkerVR patch 1
+file script/custom/agents/agent_shotgunner.hps
+from eb41a4718b82a802b362a84467d482714a9ef6f6d04e9a6fdade3e507ace47fa 199296
+to 74adfcd2c4e7d194ecd3bb2e480107e87d790f1f3319637c26a33137e027f105 199482
+=4020
+-1
++				// BunkerVR: aim at where the player's eyes really are, inside the
++				// body that is hit (see Player_GetEyesPosition): in VR the game's
++				// camera can be outside it, and the shots would miss.
++				mvShoot_Pos = Player_GetEyesPosition() + mvShoot_PlayerPosOffset;
+end

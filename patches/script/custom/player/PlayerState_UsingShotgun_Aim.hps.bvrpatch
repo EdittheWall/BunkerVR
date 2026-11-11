@@ -1,0 +1,60 @@
+BunkerVR patch 1
+file script/custom/player/PlayerState_UsingShotgun_Aim.hps
+from a2e94747987d7dad1823aa957be143b55ee55e126594abc5b3e5c81828c2d111 11260
+to e54a74d6321f933edb1ab41a15f3384dc191810f61e70037e57bfb995622046c 13454
+=2
++#include "custom/helpers/helper_bunkervr_shotgun.hps" // BunkerVR: the shotgun worked by hand
+=207
++		// BunkerVR: in the headset the shotgun is worked by hand
++		// (Prop_Shotgun.hps, VRUpdateShotgun): the trigger does nothing with the
++		// action open or the hammer down (pump it), clicks on an empty chamber,
++		// and fires a live shell, which stays in the chamber spent. A shot kicks
++		// the gun up in the hands (Prop_PlayerBody.hps, "BunkerVR_GunKickAt")
++		// and is felt in both.
++		bool bVRShot = false;
++		if (cVR_Active())
++		{
++			int lHow = VRShotgunTrigger();
++			if (lHow == glBunkerVR_PumpTriggerNothing) return;
++			bVRShot = lHow == glBunkerVR_PumpTriggerFire;
++		}
++		
+=10
++		
++		if (bVRShot && bCanFire)
++		{
++			cScript_SetGlobalVarFloat("BunkerVR_GunKickAt", float(cEngine_GetGameTime()));
++			BunkerVR_GunBuzz(1, 0.16f, 1.0f);
++			BunkerVR_GunBuzz(0, 0.12f, 0.8f);
++		}
++	}
++	
++	//------------------------------------------------------------
++	
++	// BunkerVR: what the trigger does in the headset, from the held shotgun's
++	// action (Prop_Shotgun.hps _Global_VRTrigger; glBunkerVR_PumpTrigger...), or
++	// -1 if it gives no answer (then the game's own way applies).
++	int VRShotgunTrigger()
++	{
++		tString sEnt = Item_GetHeldEntity(eItemHandlerHand_Right);
++		if (sEnt == "") return -1;
++		cScript_SetGlobalReturnInt(-1);
++		cScript_RunGlobalFunc(sEnt, "cScrPropShotgun", "_Global_VRTrigger");
++		return cScript_GetGlobalReturnInt();
+=31
++		// BunkerVR: in the headset always the gun's own "empty" fire: the others
++		// work its pump by themselves (their events put the next shell in), which
++		// the hand does in VR. The empty one also drops the hammer and then pumps;
++		// the gun's script holds it once the hammer is down, until the hand's pump
++		// cocks it (Prop_Shotgun.hps VRHoldHammer).
++		if (cVR_Active()) return gsUsingShotgun_Aim_GunShootEmptyAnim;
+=7
++		// BunkerVR: the same for the arms (theirs pump it and swing the gun
++		// around in the hand), and no kick of the head (it would move the view):
++		// the kick is the gun's, in the hands (Prop_PlayerBody.hps).
++		if (cVR_Active())
++		{
++			if (aLayer == eGunAnimationLayer_Head) return "";
++			alIx = -1;
++		}
+end

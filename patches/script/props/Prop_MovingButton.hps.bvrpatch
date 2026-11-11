@@ -1,0 +1,14 @@
+BunkerVR patch 1
+file script/props/Prop_MovingButton.hps
+from 0cd5fd3f10797ad60aae3751e49c3005fcc269a361b69f2428494b3f28a27770 21161
+to 44a47b82a2cf75fd08ac5e2d08888a8b77b593460ac5d3deda9ab2be9f85da3a 21438
+=520
++
++	// BunkerVR: whether it is switched by a single press (a door lock, a
++	// button, a switch), so a VR hand pushing it in may press it
++	// (Prop_PlayerBody.hps VRPushButtons).
++	void _Global_VRSimplePress()
++	{
++		cScript_SetGlobalReturnBool(mbSimplePressInteraction);
++	}
+end

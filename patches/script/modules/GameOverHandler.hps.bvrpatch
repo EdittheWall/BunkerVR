@@ -1,0 +1,98 @@
+BunkerVR patch 1
+file script/modules/GameOverHandler.hps
+from 0e317f2a8d9143262318b2f2c26c9ea23795216520b4405e4d93ed4434b8eae8 14939
+to fa778cb9e27f8ab22a123037aa03ce7d07e0520a60b7e7384619633e3e21fe2a 18991
+=158
++		VRSendBlack(); // BunkerVR
++		
+=234
+-1
++		// BunkerVR: the last save is loaded here as SaveRoom_LoadLastSave loads it
++		// (the save room handler only calls this), to learn whether there was one:
++		// in a level with no save at all (the mod's test maps) the engine loads
++		// nothing and returns false, and this black screen would stay for good.
++		// Such a level is started again instead (VRNoSaveToLoad).
++		// After a jump from the mod's Places page or debug menu, the level jumped to
++		// is started again at the spot jumped to (VRJumpRestart): a jump from a test
++		// map has no save at all, and the player's own last save is elsewhere in their
++		// story, where saving would stay off and a Beast kept away would stay away
++		// until a game is started or loaded.
++		if (cVR_JumpedThisRun() && VRJumpRestart())
++			return;
++		if (cLux_GetSaveHandler().LoadLastSave() == false)
++			VRNoSaveToLoad();
++	}
++
++	//------------------------------------------------------------
++
++	// BunkerVR: the game over's screen is black, and the game's fade to black
++	// is drawn on its flat interface, which in VR is only a panel in front of
++	// the eyes: the mod darkens the eyes' pictures by the fade the body script
++	// reports, and the body script's reports may stop once the game over has
++	// switched the level off. So while this screen shows, the mod is told the
++	// view is black (roll 7026: the hands hold nothing; faded fully).
++	void VRSendBlack()
++	{
++		cLuxPlayer@ pPlayer = cLux_GetPlayer();
++		cCamera@ pCam = pPlayer !is null ? pPlayer.GetCamera() : null;
++		if (pCam is null) return;
++		cVector3f vRealPos = pCam.GetPosition();
++		float fRealRoll = pCam.GetRoll();
++		pCam.SetPosition(cVector3f(0.0f, 0.0f, 1.0f));
++		pCam.SetRoll(7026.0f);
++		pCam.GetMatrix();
++		pCam.SetPosition(vRealPos);
++		pCam.SetRoll(fRealRoll);
++	}
++
++	// BunkerVR: a game over with no save to load (above): the level is started
++	// again by its own "custom death" (the mod's test maps have one: dying
++	// there starts the map again), with what Start switched off put back
++	// first, as loading a save would have: the player, the level, the sound.
++	void VRNoSaveToLoad()
++	{
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		tString sCallback = "void OnCustomDeath(const tString &in asSource)";
++		if (pMap is null || pMap.ScriptMethodExists(sCallback) == false)
++		{
++			Log("BunkerVR: game over with no save to load, and no way to start the level again\n");
++			return;
++		}
++		Log("BunkerVR: game over with no save to load: the level's own OnCustomDeath starts it again\n");
++		gbGameOver_LoadingSaveGame = false;
++		mbActive = false;
++		mbShowScreen = false;
++		mbShowText = false;
++		cLux_GetPlayer().SetActive(true);
++		pMap.SetActive(true);
++		cSound_FadeGlobalVolume(1.f, 0.5f, eSoundEntryType_AllExceptGui, eLuxGlobalVolumeType_Menu, false);
++		if (pMap.ScriptPrepare(sCallback))
++		{
++			pMap.SetArgString(0, gsGameOver_DeathSource);
++			pMap.ScriptExecute();
++		}
++	}
++
++	// BunkerVR: a game over after a jump (see above): the level jumped to is
++	// started afresh, as the mod's test maps start themselves again (VRNoSaveToLoad),
++	// with the jump under way again (cVR_JumpAgain), so that its opening is skipped and
++	// the menu script puts the player back at the spot jumped to as it arrives
++	// (MenuHandler.hps VRJumpArrived). False if the mod has no jump to make again.
++	bool VRJumpRestart()
++	{
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		if (pMap is null || cLux_GetPlayer() is null) return false;
++		if (cVR_JumpAgain() == false) return false;
++		tString sMap = cVR_JumpText(0);
++		if (sMap == "") sMap = pMap.GetName() + ".hpm";
++		Log("BunkerVR: game over after a jump: " + sMap + " started again, back at \"" + cVR_JumpText(1) + "\" (no save loaded)\n");
++		gbGameOver_LoadingSaveGame = false;
++		mbActive = false;
++		mbShowScreen = false;
++		mbShowText = false;
++		cLux_GetPlayer().SetActive(true);
++		pMap.SetActive(true);
++		cSound_FadeGlobalVolume(1.f, 0.5f, eSoundEntryType_AllExceptGui, eLuxGlobalVolumeType_Menu, false);
++		cLux_StartMap(sMap);
++		return true;
+end

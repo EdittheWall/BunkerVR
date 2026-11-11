@@ -1,0 +1,11 @@
+# Every file is kept byte for byte: the game's scripts use CRLF line endings, and each patch must reproduce the
+# mod's files exactly.
+* -text
+
+# Language statistics: the vendored libraries left out, the headers counted as C++, the mod's scripts and its
+# patches to the game's scripts as AngelScript, the particle definition not taken for PostScript.
+third_party/** linguist-vendored
+*.h linguist-language=C++
+*.hps linguist-language=AngelScript
+*.bvrpatch linguist-language=AngelScript
+*.ps linguist-detectable=false

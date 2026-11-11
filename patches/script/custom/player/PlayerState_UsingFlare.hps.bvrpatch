@@ -1,0 +1,190 @@
+BunkerVR patch 1
+file script/custom/player/PlayerState_UsingFlare.hps
+from b454d6f1deecfb5d1b1b5fafc34d4dd4467018494456f597f66621dabc9ed81c 3308
+to 9fa4d1e78c9c8f2f58bb82eefd4044166574a503723f87f39a5cf3ae4733e0b6 11098
+=94
++
++	//------------------------------------------------------------
++
++	/////////////////////////////////////////
++	// BunkerVR: the flare by hand: the player pulls its cord to light it, then
++	// throws it.
++	//
++	// The body script (VRUpdateFlare in PlayerBodyHandler.hps) sees the left
++	// hand take the cord's cap at the end of the flare's handle and pull the
++	// cord out (Prop_PlayerBody.hps runs it to the fingers); pulled far enough,
++	// it calls _Global_VRIgnite. Then the game's own burning flare
++	// (flare_thrown.ent, Prop_Flare.hps: its red light, flame, smoke and sound,
++	// and what it does to creatures and to what it touches, as a thrown one)
++	// is made where the flare in the hand is and kept there each frame
++	// (Prop_PlayerBody.hps). Its own model is bigger than the hand's flare, so
++	// it is hidden while held. Thrown by hand (the profile's throw move, given
++	// to the mod only once it is lit), the burning one is let go at the hand's
++	// speed (VRThrow); out of the hand any other way (put away, dropped from
++	// the inventory), it falls where it is (_Global_VRDropLit). Either way the
++	// flare item leaves the inventory, as the burning one has taken its place.
++	// Globals: "BunkerVR_FlareLit" (the burning one's name, "" none),
++	// "BunkerVR_FlareLitItem" (the item it was), "BunkerVR_FlareLitHand" (the
++	// one in the hand it follows), "BunkerVR_FlareInHand_<name>" (Prop_Flare).
++	/////////////////////////////////////////
++
++	cLuxProp@ VRLitFlare()
++	{
++		tString sLit = cScript_GetGlobalVarString("BunkerVR_FlareLit");
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		if (sLit == "" || pMap is null) return null;
++		return cLux_ToProp(pMap.GetEntityByName(sLit));
++	}
++
++	// Shows or hides a flare's model, all its parts (the burning one's is
++	// hidden while it is held).
++	void VRShowHandFlare(cLuxProp@ apHand, bool abShow)
++	{
++		cMeshEntity@ pMesh = apHand !is null ? apHand.GetMeshEntity() : null;
++		if (pMesh is null) return;
++		for (int i = 0; i < pMesh.GetSubMeshEntityNum(); ++i)
++		{
++			cSubMeshEntity@ pSub = pMesh.GetSubMeshEntity(i);
++			if (pSub !is null) pSub.SetVisible(abShow);
++		}
++	}
++
++	void _Global_VRIgnite()
++	{
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		if (pMap is null || VRLitFlare() !is null) return;
++		if (Item_GetHeldType(eItemHandlerHand_Right) != "Flare") return;
++		cLuxProp@ pHand = cLux_ToProp(pMap.GetEntityByName(Item_GetHeldEntity(eItemHandlerHand_Right)));
++		if (pHand is null) return;
++
++		uint lStart = cSystem_GetApplicationTime();
++		tString sName = pHand.GetName() + "_VRLit";
++		// (Its burning end at the hand flare's: gfBunkerVR_FlareLitLift.)
++		cMatrixf mtxLit = pHand.GetMatrix();
++		mtxLit.SetTranslation(mtxLit.GetTranslation() + cMath_MatrixMul3x3(mtxLit, cVector3f(0.0f, gfBunkerVR_FlareLitLift, 0.0f)));
++		cLuxProp@ pLit = cLux_ToProp(ParticleSetting_CreateEntityFromSetting(pMap, sName, msThrowEnt, mtxLit, cVector3f(1.f)));
++		if (pLit is null)
++		{
++			Log("BunkerVR: FLARE: the burning flare (" + msThrowEnt + ") could not be made\n");
++			return;
++		}
++		sName = pLit.GetName();
++
++		// Held: it does not fall or touch anything; the body script puts it
++		// where the hand's flare is each frame.
++		pLit.SetStaticPhysics(true);
++		for (int i = 0; i < pLit.GetBodyNum(); ++i)
++		{
++			iPhysicsBody@ pBody = pLit.GetBody(i);
++			pBody.SetCollide(false);
++			pBody.SetCollideCharacter(false);
++		}
++
++		cScript_SetGlobalVarString("BunkerVR_FlareLit", sName);
++		cScript_SetGlobalVarString("BunkerVR_FlareLitItem", Item_GetHeld(eItemHandlerHand_Right));
++		cScript_SetGlobalVarString("BunkerVR_FlareLitHand", pHand.GetName());
++		cScript_SetGlobalVarBool("BunkerVR_FlareInHand_" + sName, true);
++		// The hand's flare stays shown; the burning one's own model, which is
++		// bigger, is hidden while held.
++		VRShowHandFlare(pLit, false);
++
++		pLit.PlaySound("BunkerVR_FlareIgnite", "weapons/throwables/flare/ignite", true, true);
++		Log("BunkerVR: FLARE: lit by its cord: " + sName + " burns in the hand (made in " + (cSystem_GetApplicationTime() - lStart) + " ms)\n");
++	}
++
++	// BunkerVR: the throw by hand. Lit: the burning flare is let go at the
++	// hand's speed. Not lit: nothing (its throw move is only given once lit).
++	void VRThrow(const cVector3f &in avVelocity, bool abPutDown = false, bool abUnlit = false) override
++	{
++		cLuxProp@ pLit = VRLitFlare();
++		if (pLit is null)
++		{
++			Log("BunkerVR: FLARE: not thrown: it is not lit (its cord not pulled)\n");
++			return;
++		}
++		VRReleaseLit(pLit, avVelocity, true);
++	}
++
++	// BunkerVR: the burning flare out of the hand some other way (the body
++	// script: the flare put away, swapped, or dropped from the inventory):
++	// it falls from where it is, moving as the hand was (argument 0).
++	void _Global_VRDropLit()
++	{
++		cLuxProp@ pLit = VRLitFlare();
++		if (pLit !is null) VRReleaseLit(pLit, cScript_GetGlobalArgVector3f(0), false);
++		else VRForgetLit();
++	}
++
++	void VRForgetLit()
++	{
++		tString sLit = cScript_GetGlobalVarString("BunkerVR_FlareLit");
++		if (sLit != "") cScript_SetGlobalVarBool("BunkerVR_FlareInHand_" + sLit, false);
++		cScript_SetGlobalVarString("BunkerVR_FlareLit", "");
++		cScript_SetGlobalVarString("BunkerVR_FlareLitItem", "");
++		cScript_SetGlobalVarString("BunkerVR_FlareLitHand", "");
++	}
++
++	void VRReleaseLit(cLuxProp@ apLit, const cVector3f &in avVelocity, bool abThrown)
++	{
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		if (pMap is null) return;
++
++		// The flare it was: out of the hand and the inventory.
++		tString sItem = cScript_GetGlobalVarString("BunkerVR_FlareLitItem");
++		if (sItem != "")
++		{
++			iScrItemHandler_Interface@ pItems = cast<iScrItemHandler_Interface>(cLux_GetUserModuleFromID(eModuleType_Custom_ItemHandler));
++			bool bThere = pItems !is null && pItems.GetItemByID(sItem) !is null;
++			if (bThere && Item_GetHeld(eItemHandlerHand_Right) == sItem)
++			{
++				Item_SetPlayUnequipAnim(sItem, false);
++				Item_Unequip(sItem, true);
++			}
++			if (bThere) Item_RemoveFromInventory(sItem);
++		}
++		VRForgetLit();
++
++		// Let go: falling, touching the world after a moment (not the hand or
++		// the body), turning a little as it goes when thrown. Its own model is
++		// shown again (it is hidden while held).
++		VRShowHandFlare(apLit, true);
++		apLit.SetStaticPhysics(false);
++		pMap.AddTimer(apLit.GetName(), abThrown ? 0.1f : 0.05f, "$_Throwable_ActivateThrownCollision");
++		apLit.WakeUp();
++		for (int i = 0; i < apLit.GetBodyNum(); ++i)
++		{
++			iPhysicsBody@ pBody = apLit.GetBody(i);
++			pBody.Enable();
++			pBody.SetLinearVelocity(avVelocity);
++			pBody.SetCollideCharacter(false);
++			pBody.SetCollide(false);
++			if (abThrown == false) continue;
++			pBody.SetThrownByPlayer(true);
++			pBody.AddTorque(cMath_Vector3ClampLength(cMath_RandomSphereSurfacePoint(1.f), 0.5f, 1.f));
++		}
++		apLit.EnableBodyCollisionCallback();
++		apLit.SetAllowBreakCloseToCreation(true);
++
++		if (abThrown)
++		{
++			tString sCallback = "void OnThrowItem(const tString &in asEntity)";
++			if (pMap.ScriptMethodExists(sCallback) && pMap.ScriptPrepare(sCallback))
++			{
++				pMap.SetArgString(0, apLit.GetName());
++				pMap.ScriptExecute();
++			}
++			Sound_PlayGui(BunkerVR_ItemThrowSound("Flare"), 1.f, eSoundEntryType_GuiWorld);
++			GameStats_IncreaseEntryAmount(eHeroStats_FlaresThrown);
++			Log("BunkerVR: FLARE: thrown by hand at " + avVelocity.Length() + " m/s: " + apLit.GetName() + "\n");
++		}
++		else
++		{
++			Log("BunkerVR: FLARE: out of the hand (put away or dropped): " + apLit.GetName() + " falls where it is\n");
++		}
++
++		// If the flare's own state is on, end it (its usual way out animates the
++		// flare in the hand, which is gone).
++		if (mBaseObj.mpPlayer.GetCurrentStateId() == mBaseObj.GetId())
++			mBaseObj.mpPlayer.ChangeState(ePlayerState_Normal);
++	}
+end

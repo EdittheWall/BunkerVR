@@ -1,0 +1,60 @@
+BunkerVR patch 1
+file maps/maintenance/maintenance.hps
+from 914a14d76c09c19906f8176df03dc11926b7dd5db40603137faaeb0b586c2dfa 58833
+to 137e362114f463e88ac767d1b464021b4a3fafcb34d3789f3a5e5a6a83f93f87 61357
+=1036
++			// BunkerVR: in VR the bottle is filled by hand at the tap (VRUpdateFuelTap in PlayerBodyHandler.hps:
++			// the left hand turns the tap, the fuel runs into the bottle held under it), and used on it once full.
++			// No scene and no crouch after it; a moment later (outside the game's use) the full bottle (or molotov)
++			// is in the hand instead of the empty one.
++			if (cVR_Active())
++			{
++				msUsedBottleItemID = asItemID;
++				msUsedBottleItemType = asItemType;
++				Map_AddTimer("Timer_VRFillBottle", 0.05f, "OnTimer_VRFillBottle");
++				return false;
++			}
++			
+=60
++		// BunkerVR: filled by hand at the tap: the empty one leaves the hand and the pockets, and the full one goes
++		// into the hand.
++		void OnTimer_VRFillBottle(const tString &in asTimer)
++		{
++			tString sFull = msUsedBottleItemType == "EmptyMolotovCocktail" ? "MolotovCocktail" : "FuelBottle";
++			Item_RemoveFromInventory(msUsedBottleItemID, eInventoryInstance_Player, false, false);
++			tString sNew = Item_AddToInventory(sFull, eInventoryInstance_Player, false);
++			if (sNew != "") Item_Equip(sNew);
++			// (The game holds a molotov only with a lighter in the pockets, its RequiredToUseItem: without one it stays there.)
++			bool bNoLighter = sFull == "MolotovCocktail" && ItemType_GetCountInInventory("Lighter") == 0;
++			Log("BunkerVR: the " + msUsedBottleItemType + " filled at the tap by hand: a " + sFull + (sNew == "" ? " NOT made" : (bNoLighter ? " in the pockets (no lighter to hold it with)" : " in the hand")) + "\n");
++		}
++		
+=181
+-1
++					cVector3f vShotAim = msAimEntity=="Player" ? Player_GetEyesPosition() : pBulletAim.GetPosition(); // (BunkerVR: at where the player really is, see Player_GetEyesPosition)
+=274
++			// BunkerVR: in the headset there is no scene (it takes over the body and
++			// plays the key's turn on its own): the key has been put in the lock and
++			// turned by hand (VRUpdateFit in PlayerBodyHandler.hps), or the use button
++			// was pressed at the lock. The door unlocks at once, and the release timer
++			// runs right away to leave the key as the scene's end would.
++			if (cVR_Active())
++			{
++				Entity_SetActive("Lock_PillboxDoor_Proxy_" + cString_GetNumericSuffixInt(asTargetEntity), false);
++				OnTimer_PillboxKeyUnlock("");
++				Map_AddTimer("Timer_PillboxKeyRelease", 0.05f, "OnTimer_PillboxKeyRelease");
++				return false;
++			}
++			
+=26
+-3
++			// BunkerVR: in the headset the used key is left in the lock only when
++			// the held one was put in it by hand ("BunkerVR_FitIn"); with the use
++			// button the held key is in the hand, not in the lock.
++			if (cVR_Active() == false || cScript_GetGlobalVarInt("BunkerVR_FitIn") == 1)
++			{
++				tString sHeld = Item_GetHeldEntity(eItemHandlerHand_Right);
++				Entity_SetActive("UsedKey", true);
++				Entity_PlaceAtEntity("UsedKey", sHeld, 0.f, true);
++			}
+end

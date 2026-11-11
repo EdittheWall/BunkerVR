@@ -1,0 +1,151 @@
+BunkerVR patch 1
+file script/custom/player/PlayerState_UsingGun_Reload.hps
+from ab0d158a20fd760f5562cc36f0efaf8f90ab7c1496963e1ccab316e3a035d14f 12214
+to 8cd86293f041568fca94dccbb263511577e2204206f1e68ecc4c20252daf63b4 19092
+=20
++// BunkerVR: the sounds of the gun's own "open" and "close" animations (their events in
++// gun_bullet_check_open and _close), played at once when the start point set in the mod's menu
++// (Revolver Open Start, Close Start) skips past them (VRPlaySkippedSounds); and how far in the
++// start may go, short of the events that send the game's own messages (14 at 0.859 s in the
++// opening, 6 at 0.641 s in the closing).
++const float[] gvUsingGun_VROpenSoundAt = { 0.35f, 0.716667f };
++const tString[] gvUsingGun_VROpenSound = { "weapons/revolver/cylinder_release_lever", "weapons/revolver/reload_open" };
++const float[] gvUsingGun_VRCloseSoundAt = { 0.32712f };
++const tString[] gvUsingGun_VRCloseSound = { "weapons/revolver/reload_close" };
++const float gfUsingGun_VROpenStartMost = 0.84f;
++const float gfUsingGun_VRCloseStartMost = 0.62f;
++
+=67
++
++		////////////////
++		// BunkerVR: the revolver is flicked open by hand, so the cylinder
++		// should move at once. The game's "open" animation starts with a
++		// wind-up of the arm; with the VR mod running it is started part of
++		// the way in instead (see UpdateAnimationStates), and "close" likewise
++		// (see PlayOutroAndLeaveState). The mod says how many seconds in
++		// (special roll value 7030; it answers 12345, open, close through the
++		// camera's matrix). Spent shells are not dumped by an animation on
++		// opening: the player tips them out (see Prop_Gun.hps).
++		mbVRFlick = VRUsingItemModActive();
++		mbVRIntroJumped = false;
++		mfVROpenStart = 0.6f;
++		mfVRCloseStart = 0.25f;
++		if(mbVRFlick)
++		{
++			cLuxPlayer@ pVRPlayer = cLux_GetPlayer();
++			cCamera@ pVRCam = pVRPlayer !is null ? pVRPlayer.GetCamera() : null;
++			if(pVRCam !is null)
++			{
++				float fVRRealRoll = pVRCam.GetRoll();
++				pVRCam.SetRoll(7030.0f);
++				cVector3f vVRTimes = pVRCam.GetMatrix().GetTranslation();
++				pVRCam.SetRoll(fVRRealRoll);
++				if(vVRTimes.x > 12344.0f && vVRTimes.x < 12346.0f &&
++					vVRTimes.y >= 0.0f && vVRTimes.y <= 2.0f && vVRTimes.z >= 0.0f && vVRTimes.z <= 2.0f)
++				{
++					mfVROpenStart = vVRTimes.y;
++					mfVRCloseStart = vVRTimes.z;
++				}
++			}
++
++			if(mlAnimState == eUsingGun_ReloadState_EmptyBullets)
++				ChangeAnimState(eUsingItemAnimState_Intro);
++		}
+=7
+-1
++
++		////////////////
++		// BunkerVR: no dumping of spent shells by animation (the player tips
++		// them out by hand). Go straight to holding the gun open.
++		if (mbVRFlick && mlAnimState == eUsingGun_ReloadState_EmptyBullets)
++		{
++			ChangeAnimState(eUsingItemAnimState_Loop);
++		}
++
+=60
++
++		////////////////
++		// BunkerVR: once the "open" animations have started, move them on to
++		// where the cylinder swings out (done once per opening).
++		if (mbVRFlick && mbVRIntroJumped == false && mlAnimState == eUsingItemAnimState_Intro)
++		{
++			cLuxProp@ pVRGun = cLux_ID_Prop(m_idItemEntity);
++			cMeshEntity@ pVRGunMesh = pVRGun !is null ? pVRGun.GetMeshEntity() : null;
++			cAnimationState@ pVRGunAnim = pVRGunMesh !is null ? pVRGunMesh.GetAnimationStateFromName(msGunIntroAnim) : null;
++			if (pVRGunAnim !is null && pVRGunAnim.IsActive())
++			{
++				mbVRIntroJumped = true;
++
++				float fVRLength = pVRGunAnim.GetLength();
++				float fVRStart = cMath_Min(mfVROpenStart, gfUsingGun_VROpenStartMost);
++				if (fVRLength > 0.05f && fVRStart < fVRLength - 0.05f && pVRGunAnim.GetTimePosition() < fVRStart)
++				{
++					VRPlaySkippedSounds(pVRGun, pVRGunAnim.GetTimePosition(), fVRStart, gvUsingGun_VROpenSoundAt, gvUsingGun_VROpenSound, "open");
++					pVRGunAnim.SetTimePosition(fVRStart);
++
++					// The arm and head animations keep step with it.
++					float fVRRel = fVRStart / fVRLength;
++					cAnimationState@ pVRArmAnim = PlayerBody_GetAnimationState(msPlayerIntroAnim_R);
++					cAnimationState@ pVRHeadAnim = PlayerBody_GetAnimationState(msPlayerIntroAnim_Head);
++					if (pVRArmAnim !is null && pVRArmAnim.IsActive() && pVRArmAnim.GetRelativeTimePosition() < fVRRel)
++						pVRArmAnim.SetRelativeTimePosition(fVRRel);
++					if (pVRHeadAnim !is null && pVRHeadAnim.IsActive() && pVRHeadAnim.GetRelativeTimePosition() < fVRRel)
++						pVRHeadAnim.SetRelativeTimePosition(fVRRel);
++				}
++			}
++		}
++	}
++
++	//------------------------------------------------------------
++
++	// BunkerVR: the "close" animation of the gun is likewise started where the
++	// cylinder swings shut. (The game's own function has already left this
++	// state by the time it returns; only the gun's animation is touched.)
++	void PlayOutroAndLeaveState() override
++	{
++		iScrPlayerState_UsingWeapon_Reload_Base::PlayOutroAndLeaveState();
++
++		if (mbVRFlick == false) return;
++
++		iLuxEntity@ pVRItem = cLux_ID_Entity(m_idItemEntity);
++		cMeshEntity@ pVRGunMesh = pVRItem !is null ? pVRItem.GetMeshEntity() : null;
++		cAnimationState@ pVRGunAnim = pVRGunMesh !is null ? pVRGunMesh.GetAnimationStateFromName(msGunOutroAnim) : null;
++		if (pVRGunAnim is null) return;
++
++		float fVRLength = pVRGunAnim.GetLength();
++		float fVRStart = cMath_Min(mfVRCloseStart, gfUsingGun_VRCloseStartMost);
++		if (fVRLength > 0.05f && fVRStart < fVRLength - 0.05f && pVRGunAnim.GetTimePosition() < fVRStart)
++		{
++			VRPlaySkippedSounds(cLux_ToProp(pVRItem), pVRGunAnim.GetTimePosition(), fVRStart, gvUsingGun_VRCloseSoundAt, gvUsingGun_VRCloseSound, "close");
++			pVRGunAnim.SetTimePosition(fVRStart);
++		}
++	}
++
++	// BunkerVR: plays at once, at the gun, the sounds of the gun's own animation (its events,
++	// avAt seconds in, avSounds) that moving its start from afFrom to afTo would skip, as the
++	// animation would have played them. Without this, a later start loses the sound of the
++	// revolver opening and closing.
++	void VRPlaySkippedSounds(cLuxProp@ apGun, float afFrom, float afTo, const float[] &in avAt, const tString[] &in avSounds, const tString &in asWhat)
++	{
++		if (apGun is null) return;
++		for (uint i = 0; i < avAt.length() && i < avSounds.length(); ++i)
++		{
++			if (avAt[i] < afFrom || avAt[i] >= afTo) continue;
++			mlVRSkippedSounds++;
++			Sound_CreateAtEntity("BunkerVR_GunSound_" + mlVRSkippedSounds, avSounds[i], apGun.GetName(), 0.0f, false, 1.0f);
++			if (mlVRSkippedSounds <= 6)
++				Log("BunkerVR: the revolver's " + asWhat + " started " + int(afTo * 1000.0f + 0.5f) + " ms in: its sound " + avSounds[i] + " (at " + int(avAt[i] * 1000.0f + 0.5f) + " ms) played at once\n");
++		}
+=199
+-1
++
++	//------------------------------------------------------------
++
++	// BunkerVR (see OnEnterState)
++	[nosave] bool mbVRFlick = false;		// the VR mod is running: the revolver is opened and closed by hand
++	[nosave] bool mbVRIntroJumped = false;	// the "open" animation has been moved on for this opening
++	[nosave] float mfVROpenStart = 0.6f;	// seconds into the gun's "open" animation to start at
++	[nosave] float mfVRCloseStart = 0.25f;	// and into its "close" animation
++	[nosave] int mlVRSkippedSounds = 0;		// sounds played for a start past them (VRPlaySkippedSounds)
++
+end

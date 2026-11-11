@@ -1,0 +1,49 @@
+// BunkerVR: math kept safe from NaN, in a file of its own so that the scripts that don't include
+// helper_bunkervr.hps (props\Prop_PlayerBody.hps) have it too. Included by helper_bunkervr.hps; a
+// second include of it is skipped.
+
+// BunkerVR: is this a number (not NaN, not infinite)? In this game's script engine a comparison with NaN
+// can't be trusted: built with fast floating-point math, NaN compares as equal to anything (so
+// "fLength < 0.001f" lets a NaN length through, and the division after it is then treated as a division
+// by zero). Converted to an int, NaN and infinity give the smallest int, which no value within about two
+// billion either way does. (So this is for values well inside that: angles, positions, lengths.)
+const int glBunkerVR_NotANumberInt = -2147483647 - 1;
+bool BunkerVR_IsNumber(float afX)
+{
+	return int(afX) != glBunkerVR_NotANumberInt;
+}
+
+// BunkerVR: are these two rotations the same, to within gfBunkerVR_SameTurn (each axis, roughly in radians)?
+const float gfBunkerVR_SameTurn = 0.002f;
+bool BunkerVR_SameTurn(const cMatrixf &in a_mtxA, const cMatrixf &in a_mtxB)
+{
+	return (a_mtxA.GetRight() - a_mtxB.GetRight()).Length() < gfBunkerVR_SameTurn &&
+		   (a_mtxA.GetUp() - a_mtxB.GetUp()).Length() < gfBunkerVR_SameTurn &&
+		   (a_mtxA.GetForward() - a_mtxB.GetForward()).Length() < gfBunkerVR_SameTurn;
+}
+
+// BunkerVR: cMath_MatrixSlerp(afT, a_mtxA, a_mtxB, true) without the engine's NaN. The engine turns each
+// matrix into a quaternion (made w >= 0) and takes the arc cosine of their dot product without clamping it
+// to -1 to 1. Two rotations all but the same, each within a hair of 180 degrees (a camera facing yaw +-pi),
+// can come out as opposite quaternions whose dot product rounds to a hair below -1: a rotation of NaN, and
+// everything made from it NaN. (The game's own easing of the camera's turn as a Beast kill begins can hit
+// this; the view and the body scripts then fail every frame until the game over.) Rotations that close are
+// the same rotation: the nearer end is returned, its translation mixed as the engine mixes it; and a NaN
+// that comes back anyway is handled the same way.
+cMatrixf BunkerVR_Slerp(float afT, const cMatrixf &in a_mtxA, const cMatrixf &in a_mtxB)
+{
+	if(BunkerVR_SameTurn(a_mtxA, a_mtxB) == false)
+	{
+		cMatrixf mtx = cMath_MatrixSlerp(afT, a_mtxA, a_mtxB, true);
+		cVector3f vRight = mtx.GetRight();
+		cVector3f vUp = mtx.GetUp();
+		cVector3f vForward = mtx.GetForward();
+		if(BunkerVR_IsNumber(vRight.x) && BunkerVR_IsNumber(vRight.y) && BunkerVR_IsNumber(vRight.z) &&
+		   BunkerVR_IsNumber(vUp.x) && BunkerVR_IsNumber(vUp.y) && BunkerVR_IsNumber(vUp.z) &&
+		   BunkerVR_IsNumber(vForward.x) && BunkerVR_IsNumber(vForward.y) && BunkerVR_IsNumber(vForward.z))
+			return mtx;
+	}
+	cMatrixf mtxEnd = afT < 0.5f ? a_mtxA : a_mtxB;
+	mtxEnd.SetTranslation(a_mtxA.GetTranslation() * (1.0f - afT) + a_mtxB.GetTranslation() * afT);
+	return mtxEnd;
+}

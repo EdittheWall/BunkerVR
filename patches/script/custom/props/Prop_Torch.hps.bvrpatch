@@ -1,0 +1,103 @@
+BunkerVR patch 1
+file script/custom/props/Prop_Torch.hps
+from 9f110b1b28c9f8ee83110c9964fe9f7b1ba77cf718e6632e019bb5c983138a98 15034
+to c4d96f1f837e86da46916ec66dcb7b03028325340369b929c1dc77dea54b117b 19576
+=95
++		// BunkerVR: logged, to explain a torch that drops from the hand as it
++		// is taken out (see below).
++		Log("BunkerVR: torch " + mBaseObj.GetName() + " taken out: fuel " + mfHealth + ", lit before: " + (mbLitOnceBefore ? "yes" : "no") + "\n");
++		// BunkerVR: a torch never lit has all its fuel. The item takes the
++		// pickup's "Item_Health" (the item handler's CopyEntityToItemData),
++		// which is 0 when never set, as on a torch_pickup.ent placed with no
++		// fuel value (the item test map makes them so). Such a torch would be
++		// taken for burned out and dropped at once. A torch that has burned
++		// has been lit, so mbLitOnceBefore tells the two apart.
++		if (mfHealth <= 0.f && mbLitOnceBefore == false)
++		{
++			mfHealth = 1.f;
++			Entity_SetVarFloat(mBaseObj.GetName(), "Item_Health", mfHealth);
++		}
+=10
+-1
++			// BunkerVR: a new torch is lit by hand, the first time only. It comes
++			// out unlit, with the game's own lighter in the left hand as its
++			// sequence puts it there; the left trigger lights the lighter, and its
++			// flame held to the torch's head lights the torch (the body script's
++			// VRUpdateFlames calls _Global_VRLightByHand). None of the game's own
++			// sequence runs: no lighting state (it holds the player still), no arm
++			// animation (the arms follow the controllers, and the animation would
++			// take the lighter away when over), no timers lighting it.
++			if (mfHealth >= 1.0f && mbLitOnceBefore==false && cVR_Active())
++			{
++				mBaseObj.SetEffectsActive(false, false);
++				cSubMeshEntity@ pMesh_X = mBaseObj.GetMeshEntity().GetSubMeshEntityName("m_flame_X");
++				if (pMesh_X !is null) pMesh_X.SetVisible(false);
++				cSubMeshEntity@ pMesh_Z = mBaseObj.GetMeshEntity().GetSubMeshEntityName("m_flame_Z");
++				if (pMesh_Z !is null) pMesh_Z.SetVisible(false);
++				mBaseObj.PlayAnimation("torch_idle", 0.f, true);
++				mBaseObj.SetAnimationCallbackActive(true);
++
++				Item_Unequip(ItemType_GetFirstInInventory("DynamoLantern"), true);
++				Item_EquipTempRTUItem(ItemType_GetFirstInInventory("Lighter"), eItemHandlerHand_Left);
++				// The lighter stays shut, no flame shown, until the left trigger lights
++				// it, as the game readies its lighter for the molotov
++				// (CreateAndEquipLighterItem in PlayerState_UsingItem_Base.hps). The
++				// game's own torch sequence lights it at once instead.
++				tString sVRLighter = Item_GetTempRTUItemEntity();
++				if (sVRLighter != "")
++				{
++					cScript_RunGlobalFunc(sVRLighter, "cScrPropLighter", "_Global_OnItemTakenOut");
++					Entity_PlayAnimation(sVRLighter, "lighter_idle_closed", 0.f, true);
++				}
++
++				mbIsBeingLit = true;
++				mbVRWaitingForFlame = true;
++				Log("BunkerVR: FIRE: the torch " + mBaseObj.GetName() + " came out unlit, the game's lighter in the left hand: light it by hand\n");
++			}
++			else if (mfHealth >= 1.0f && mbLitOnceBefore==false)
+=59
++
++		// BunkerVR: put away before it was lit by hand: the game's lighter
++		// leaves the left hand too, and next time the torch comes out unlit
++		// again (it has not been lit).
++		if (mbVRWaitingForFlame)
++		{
++			mbVRWaitingForFlame = false;
++			Item_RemoveTempRTUItem("BunkerVR_NoAnimation");
++		}
++	}
++
++	// BunkerVR: is this torch out unlit, waiting for a flame held to its head
++	// (see _Global_OnItemTakenOut)? Answers in the global return.
++	void _Global_VRGetWaitingForFlame()
++	{
++		cScript_SetGlobalReturnBool(mbVRWaitingForFlame);
++	}
++
++	// BunkerVR: a flame was held to its head (the body script's
++	// VRUpdateFlames): it is lit as the game lights it (LightFire: the start
++	// sound, its fire and lights, the flame growing in a third of a second),
++	// counts as lit once, and the game's lighter leaves the left hand as after
++	// the game's own sequence. "BunkerVR_NoAnimation" names no animation, so
++	// the lighter goes at once, as it does after the molotov's hand throw.
++	void _Global_VRLightByHand()
++	{
++		if (mbVRWaitingForFlame == false) return;
++		mbVRWaitingForFlame = false;
++		mbIsBeingLit = false;
++		mbLitOnceBefore = true;
++		LightFire();
++		Item_RemoveTempRTUItem("BunkerVR_NoAnimation");
+=66
++		// BunkerVR: not while out unlit, waiting to be lit by hand: the
++		// game's own wait is 1.5 s, by hand it can be longer.
++		if (mbVRWaitingForFlame) return false;
+=103
++			{
++				// BunkerVR: logged, as in _Global_OnItemTakenOut.
++				Log("BunkerVR: torch " + mBaseObj.GetName() + " burned out in the hand: dropped (fuel " + mfHealth + ", lit before: " + (mbLitOnceBefore ? "yes" : "no") + ")\n");
+=1
++			}
+=170
++	[nosave] bool mbVRWaitingForFlame = false; // BunkerVR: out unlit, to be lit by hand
+end

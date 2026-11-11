@@ -1,0 +1,338 @@
+BunkerVR patch 1
+file script/custom/player/PlayerState_Interact_CombinationLock.hps
+from 0c1225cb293a3b81e5e04256d3366d3c7e001b56b1cdb39d18316d502f6b5e2a 21819
+to 599b17f3a3fe20f1a8c905af8eb039358ae2a1efa835528d52cd310c31565556 37394
+=11
++#include "custom/helpers/helper_bunkervr_hints.hps" // BunkerVR: the hints on the objects
+=19
++// BunkerVR: the rollers picked by a VR fingertip and turned by the trigger
++// (see VRSetupFingers). Distances in the lock's own size (as its model has
++// them).
++const float gfVRRollerIn = 0.015f;		// a fingertip on a roller: from this far inside its front...
++const float gfVRRollerOut = 0.045f;		// ...to this far out in front of it...
++const float gfVRRollerAbove = 0.012f;	// ...and this much above and below its front's height
++const float gfVRRollerKeep = 0.5f;		// the roller under the finger stays picked until another is nearer by this share of their spacing (so it changes three quarters of the way to the next)
++const float gfVRRollerSpacing = 0.0174f;	// the bunker's lock: its rollers' centers this far apart (its model's points; used if they cannot be read)
++const float gfVRLockAwayDistance = 0.25f;	// (meters, real) no fingertip this near the lock...
++const float gfVRLockAwayTime = 2.0f;		// ...for this long (seconds), once a fingertip has turned it: left
++const float gfVRLockHeadAway = 1.0f;		// left too with the head this far from it (meters, real), as the player walks away
++
+=82
++		mbVR = cVR_Active(); // BunkerVR: the rollers turned by a VR fingertip
+=68
+-1
++		// (BunkerVR: not in the headset, where it would turn the world around
++		// the player; the player stands at the lock as they are.)
++		if(mbVR == false)
++			cLux_GetPlayer().RotateCameraTowards(gfHeadRotateAcc, gfHeadRotateSpeedMul, gfHeadRotateMaxSpeed, vDirection * -1, true);
+=30
++
++		VRSetupFingers(vDirection); // BunkerVR
+=27
++		// (BunkerVR: the body, the hands and what hangs on them stay in the
++		// headset: the camera does not come up to the lock, and the fingertip
++		// turns the rollers.)
++		if(mbVR == false)
++		{
+=3
++		}
+=36
++		// (BunkerVR: nothing was hidden in the headset, see OnEnterState.)
++		if(mbVR == false)
++		{
+=3
++		}
+=74
++		// (BunkerVR: not in the headset; see SetupCombinationLock.)
+=1
+-1
++		if(mbVR == false)
++			cLux_GetPlayer().SetCameraPosAdd(eCameraAddType_CombinationLock, vPosAdd);
+=12
++		// BunkerVR: the rollers picked and turned by a fingertip.
++		if(mbVR)
++			VRUpdateFingers(afTimeStep);
++
+=165
++		// BunkerVR: the trigger (or grip) turns the lit roller.
++		if(mbVR && alAction == eAction_Interact)
++		{
++			if(abPressed) VRPressTurn();
++			return false;
++		}
++		// BunkerVR: in the headset the keys the sticks send walk and turn the
++		// player, as in play, so the player is never stuck at the lock; they
++		// don't pick or turn rollers (the fingertip and trigger do).
++		if(mbVR) return true;
+=36
++		// BunkerVR: in the headset the player walks and turns at
++		// the lock (see OnAction); walking away leaves it (VRUpdateFingers).
++		if(mbVR) return true;
++
+=102
++
++	//------------------------------------------------------------
++
++	/////////////////////////////////////////
++	// BunkerVR: the rollers picked by a fingertip, turned by the trigger
++	/////////////////////////////////////////
++
++	// The number locks in VR. In the headset the camera is neither moved up to
++	// the lock nor turned to it (that would move and turn the world around the
++	// player), and the body and hands are not hidden. A fingertip (the drawn
++	// index finger's, "BunkerVR_IndexTip0/1" from Prop_PlayerBody.hps) on the
++	// front of a roller lights it (the game's own highlight, mlRollerIndex),
++	// with a tick in the hand, and it stays lit until a fingertip is on
++	// another. Each press of the trigger (or grip: the game's interact) turns
++	// the lit roller one digit on, 9 to 0 (CombinationScroll: the game's sound
++	// and turning), with a tick. The game's code check, unlocking and door
++	// opening are untouched. The sticks walk and turn the player as in play
++	// (see OnAction). Left as the game's cancel and menu buttons leave it, and
++	// also once a fingertip has been on it and none has been near it for
++	// gfVRLockAwayTime, or with the head gfVRLockHeadAway from it.
++	// A press curls the drawn finger off the roller, so the roller stays lit
++	// after the finger leaves it.
++	//
++	// The rollers' places are read from the lock as it is (each one's points'
++	// center and their axle, the roller's own x, in the lock's own terms), so
++	// a lock drawn bigger (the safe room's is 1.5 times) works the same. The
++	// parts' own centers can't be used: they all come back as the lock's center.
++	void VRSetupFingers(const cVector3f &in avFront)
++	{
++		mlVRFingerHand = -1;
++		mlVRFingerRoller = -1;
++		mlVRLitHand = -1;
++		mfVRAwayTime = 0.0f;
++		mbVRFingerUsed = false;
++		mlVRTurnLogs = 0;
++		mvVRRollerX.resize(0);
++		cLuxProp@ pProp = cLux_ID_Prop(mPropID);
++		if(mbVR == false || pProp is null) return;
++		cMatrixf mtxLock = pProp.GetMatrix();
++		cMatrixf mtxToLock = cMath_MatrixInverse(mtxLock);
++		mfVRLockScale = cMath_MatrixMul3x3(mtxLock, cVector3f(1.0f, 0.0f, 0.0f)).Length();
++		if(mfVRLockScale < 0.01f) mfVRLockScale = 1.0f;
++		mfVRRadius = 0.026f;
++		for(uint i = 0; i < mvRollerIds.length(); ++i)
++		{
++			cSubMeshEntity@ pSub = cLux_ID_SubMeshEntity(mvRollerIds[i]);
++			if(pSub is null) continue;
++			// Its center: the center of its own points (its bounds in its own
++			// terms), placed by its own matrix in the lock (a turn about x,
++			// which leaves x as it is). (Every roller's origin is the lock's
++			// center, as is the center the engine reports for them.)
++			cBoundingVolume@ pBox = pSub.GetBoundingVolume();
++			if(pBox is null) continue;
++			cVector3f vMiddle = (pBox.GetLocalMin() + pBox.GetLocalMax()) * 0.5f;
++			mvVRRollerX.push_back(cMath_MatrixMul(pSub.GetLocalMatrix(), vMiddle).x);
++			if(i == 0)
++			{
++				mvVRAxle = cMath_MatrixMul(mtxToLock, pSub.GetWorldMatrix().GetTranslation());
++				cVector3f vSize = pBox.GetLocalMax() - pBox.GetLocalMin();
++				float fRadius = cMath_Max(cMath_Abs(vSize.y), cMath_Abs(vSize.z)) * 0.5f;
++				if(fRadius > 0.01f && fRadius < 0.08f) mfVRRadius = fRadius;
++			}
++		}
++		if(mvVRRollerX.length() != mvRollerIds.length() || mvVRRollerX.length() == 0)
++		{
++			mvVRRollerX.resize(0);
++			Log("BunkerVR: the number lock " + pProp.GetName() + ": its rollers were not all found; the sticks only\n");
++			return;
++		}
++		mfVRSpacing = gfVRRollerSpacing;
++		if(mvVRRollerX.length() > 1) mfVRSpacing = cMath_Abs(mvVRRollerX[mvVRRollerX.length() - 1] - mvVRRollerX[0]) / float(mvVRRollerX.length() - 1);
++		// Read wrong (all at one place): the bunker's lock's own layout, in a
++		// row along x about the middle, the first at -x as its model has it.
++		if(mfVRSpacing < gfVRRollerSpacing * 0.5f || mfVRSpacing > gfVRRollerSpacing * 2.0f)
++		{
++			Log("BunkerVR: the number lock " + pProp.GetName() + ": its rollers read " + int(mfVRSpacing * 1000.0f + 0.5f) + " mm apart; its model's layout used\n");
++			mfVRSpacing = gfVRRollerSpacing;
++			float fFirst = -0.5f * gfVRRollerSpacing * float(mvVRRollerX.length() - 1);
++			for(uint i = 0; i < mvVRRollerX.length(); ++i) mvVRRollerX[i] = fFirst + gfVRRollerSpacing * float(i);
++		}
++		// Its front (the side the game shows the player, its "normal"), and
++		// up that front: the way a roller's front moves as the game's "up"
++		// turns it (a turn about its own x by minus a digit).
++		cVector3f vFront = cMath_MatrixMul3x3(mtxToLock, avFront);
++		vFront.x = 0.0f;
++		if(vFront.Length() < 0.001f) vFront = cVector3f(0.0f, 0.0f, 1.0f);
++		mvVRFront = cMath_Vector3Normalize(vFront);
++		mvVRUp = cVector3f(0.0f, mvVRFront.z, -mvVRFront.y); // (the front crossed with its own x)
++		Log("BunkerVR: the number lock " + pProp.GetName() + " (" + int(mfVRLockScale * 100.0f + 0.5f) + "% size): " + mvVRRollerX.length() +
++			" rollers " + int(mfVRSpacing * 1000.0f + 0.5f) + " mm apart, " + int(mfVRRadius * 1000.0f + 0.5f) + " mm round their axle; a fingertip lights one, the trigger turns it\n");
++	}
++
++	// Each update in the headset: which roller a fingertip is on (it is lit).
++	void VRUpdateFingers(float afTimeStep)
++	{
++		cLuxProp@ pProp = cLux_ID_Prop(mPropID);
++		if(pProp is null || mvVRRollerX.length() == 0) return;
++		cMatrixf mtxToLock = cMath_MatrixInverse(pProp.GetMatrix());
++		float fNow = float(cEngine_GetGameTime());
++		int lHandOn = -1;
++		int lRollerOn = -1;
++		bool bNear = false;
++		int lNearestHand = -1;			// (for the hints: the fingertip nearest the lock...)
++		float fNearest = 1000.0f;
++		array<cVector3f> vTips = {cVector3f(0.0f), cVector3f(0.0f)};
++		for(int lHand = 0; lHand < 2; ++lHand)
++		{
++			if(cMath_Abs(fNow - cScript_GetGlobalVarFloat("BunkerVR_IndexTipTime" + lHand)) > 0.25f) continue;
++			cVector3f vTipWorld = cScript_GetGlobalVarVector3f("BunkerVR_IndexTip" + lHand);
++			vTips[lHand] = vTipWorld;
++			if((vTipWorld - pProp.GetPosition()).Length() < gfVRLockAwayDistance) bNear = true;
++			if((vTipWorld - pProp.GetPosition()).Length() < fNearest)
++			{
++				fNearest = (vTipWorld - pProp.GetPosition()).Length();
++				lNearestHand = lHand;
++			}
++			int lRoller = -1;
++			if(VRRollerAt(cMath_MatrixMul(mtxToLock, vTipWorld), lHand, lRoller) == false) continue;
++			// (The finger already on it first; else the first found.)
++			if(lHandOn < 0 || lHand == mlVRFingerHand)
++			{
++				lHandOn = lHand;
++				lRollerOn = lRoller;
++			}
++		}
++
++		if(lHandOn < 0)
++		{
++			// (The lit roller stays lit: a press curls the finger off it.)
++			mlVRFingerHand = -1;
++			mlVRFingerRoller = -1;
++		}
++		else if(lHandOn != mlVRFingerHand || lRollerOn != mlVRFingerRoller)
++		{
++			// Onto a roller (or another): it is lit, with a tick.
++			if(lRollerOn != mlRollerIndex)
++			{
++				VRFinishTurn();
++				mlRollerIndex = lRollerOn;
++				VRBuzzHand(lHandOn, 0.012f, 0.25f);
++				if(mlVRTurnLogs < 40)
++				{
++					mlVRTurnLogs++;
++					Log("BunkerVR: a fingertip lights roller " + (lRollerOn + 1) + " of the number lock " + pProp.GetName() + "\n");
++				}
++			}
++			mbVRFingerUsed = true;
++			mlVRFingerHand = lHandOn;
++			mlVRFingerRoller = lRollerOn;
++			mlVRLitHand = lHandOn;
++			cVR_HintUsed("lock_touch"); // (for the hints)
++		}
++
++		// The hints (VRUpdateHints in PlayerBodyHandler.hps): a
++		// fingertip on a roller, how it is turned (at the tip); none yet, how
++		// one is taken (at the lock, for the nearest fingertip).
++		if(lHandOn >= 0) BunkerVR_HintOffer(lHandOn, "lock_turn", vTips[lHandOn]);
++		else if(lNearestHand >= 0 && mlRollerIndex < 0) BunkerVR_HintOffer(lNearestHand, "lock_touch", pProp.GetPosition());
++
++		// Left: the fingertips away once one has turned it, or the head away.
++		if(bNear || mbVRFingerUsed == false) mfVRAwayTime = 0.0f;
++		else mfVRAwayTime += afTimeStep;
++		bool bHeadAway = (VRHeadPosition() - pProp.GetPosition()).Length() > gfVRLockHeadAway;
++		if(mbExit == false && (mfVRAwayTime > gfVRLockAwayTime || bHeadAway))
++		{
++			Log("BunkerVR: the number lock " + pProp.GetName() + " is left (" + (bHeadAway ? "the head is away from it" : "no fingertip near it") + ")\n");
++			Exit();
++		}
++	}
++
++	// The trigger (or grip) pressed: the lit roller turns one digit on (the
++	// game's own turn of it and its click; a face more, 9 to 0), with a tick
++	// in the hand that lit it.
++	void VRPressTurn()
++	{
++		if(mvVRRollerX.length() == 0 || mlRollerIndex < 0 || mlRollerIndex >= int(mvRollerIds.length())) return;
++		CombinationScroll(true);
++		mbVRFingerUsed = true;
++		if(mlVRLitHand >= 0) VRBuzzHand(mlVRLitHand, 0.015f, 0.35f);
++		cVR_HintUsed("lock_turn"); // (for the hints)
++		if(mlVRTurnLogs < 40)
++		{
++			mlVRTurnLogs++;
++			Log("BunkerVR: the trigger turns roller " + (mlRollerIndex + 1) + " a digit on (to " + ((mlForceFace % 10 + 10) % 10) + ")\n");
++		}
++	}
++
++	// The lit roller's turn finished at once, before another is lit: the game
++	// lets a roller left mid-turn settle on its nearest digit, which would
++	// lose a press made just before. (As the game's own snap, in Update.)
++	void VRFinishTurn()
++	{
++		if(mbForceFace == false || mlRollerIndex < 0 || mlRollerIndex >= int(mvRollerIds.length())) return;
++		cSubMeshEntity@ pSubMesh = cLux_ID_SubMeshEntity(mvRollerIds[mlRollerIndex]);
++		if(pSubMesh !is null)
++		{
++			float fStep = cMath_PiMul2 / 10.0f;
++			float fRotation = cMath_MatrixToEulerAngles(pSubMesh.GetLocalMatrix()).x;
++			float fTarget = fStep * cMath_Wrap(mlForceFace, -5.0f, 5.0f);
++			pSubMesh.SetMatrix(cMath_MatrixMul(pSubMesh.GetLocalMatrix(), cMath_MatrixRotateX(cMath_GetAngleDistanceRad(fRotation, fTarget))));
++		}
++		mbForceFace = false;
++	}
++
++	// Is a fingertip (avTip, in the lock's own terms) on the front of a
++	// roller? Which (alRoller, from 0). The roller already under that hand's
++	// finger (alHand) stays picked until another is nearer by gfVRRollerKeep
++	// of their spacing.
++	bool VRRollerAt(const cVector3f &in avTip, int alHand, int &out alRoller)
++	{
++		alRoller = -1;
++		int lLast = int(mvVRRollerX.length()) - 1;
++		if(lLast < 0) return false;
++		cVector3f vOff = avTip - mvVRAxle;
++		float fOut = vOff.y * mvVRFront.y + vOff.z * mvVRFront.z;
++		float fUp = vOff.y * mvVRUp.y + vOff.z * mvVRUp.z;
++		if(fOut < mfVRRadius - gfVRRollerIn || fOut > mfVRRadius + gfVRRollerOut || cMath_Abs(fUp) > mfVRRadius + gfVRRollerAbove) return false;
++		float fLow = cMath_Min(mvVRRollerX[0], mvVRRollerX[lLast]) - mfVRSpacing * 0.5f;
++		float fHigh = cMath_Max(mvVRRollerX[0], mvVRRollerX[lLast]) + mfVRSpacing * 0.5f;
++		if(avTip.x < fLow || avTip.x > fHigh) return false;
++		int lRoller = 0;
++		for(int i = 1; i <= lLast; ++i)
++			if(cMath_Abs(avTip.x - mvVRRollerX[i]) < cMath_Abs(avTip.x - mvVRRollerX[lRoller])) lRoller = i;
++		if(alHand == mlVRFingerHand && mlVRFingerRoller >= 0 && mlVRFingerRoller <= lLast && lRoller != mlVRFingerRoller &&
++		   cMath_Abs(avTip.x - mvVRRollerX[mlVRFingerRoller]) < cMath_Abs(avTip.x - mvVRRollerX[lRoller]) + mfVRSpacing * gfVRRollerKeep) lRoller = mlVRFingerRoller;
++		alRoller = lRoller;
++		return true;
++	}
++
++	// Where the eyes are: the real head (the mod's roll 7006: is it followed;
++	// 7005: where), else the game's camera.
++	cVector3f VRHeadPosition()
++	{
++		cLuxPlayer@ pPlayer = cLux_GetPlayer();
++		cCamera@ pCam = pPlayer !is null ? pPlayer.GetCamera() : null;
++		if(pCam is null) return cVector3f(0.0f);
++		cVector3f vHead = pCam.GetPosition();
++		float fRealRoll = pCam.GetRoll();
++		pCam.SetRoll(7006.0f);
++		cVector3f vStatus = pCam.GetMatrix().GetTranslation();
++		if(vStatus.x > 12344.0f && vStatus.x < 12346.0f && vStatus.y > 0.5f)
++		{
++			pCam.SetRoll(7005.0f);
++			vHead = pCam.GetMatrix().GetTranslation();
++		}
++		pCam.SetRoll(fRealRoll);
++		return vHead;
++	}
+=69
++
++	// BunkerVR: the rollers lit by a VR fingertip, turned by the trigger (see VRSetupFingers)
++	[nosave] bool mbVR = false;					// in the headset: no camera move or turn, the fingertip and trigger turn the rollers
++	[nosave] array<float> mvVRRollerX;			// each roller's middle along the axle (the lock's own x)
++	[nosave] cVector3f mvVRAxle;				// a point on the rollers' axle (the lock's own terms)
++	[nosave] cVector3f mvVRFront;				// the lock's front, across the axle
++	[nosave] cVector3f mvVRUp;					// up the rollers' front (the game's "up" turns it this way)
++	[nosave] float mfVRRadius = 0.026f;			// the rollers' size around their axle (the lock's own size)
++	[nosave] float mfVRSpacing = 0.017f;		// from one roller's middle to the next
++	[nosave] float mfVRLockScale = 1.0f;		// how big the lock is drawn
++	[nosave] int mlVRFingerHand = -1;			// the hand whose fingertip is on a roller (-1 none)...
++	[nosave] int mlVRFingerRoller = -1;			// ...and which roller
++	[nosave] int mlVRLitHand = -1;				// the hand whose fingertip lit the lit roller (its ticks; -1 none yet)
++	[nosave] float mfVRAwayTime = 0.0f;			// seconds no fingertip has been near the lock
++	[nosave] bool mbVRFingerUsed = false;		// has a fingertip been on a roller yet?
++	[nosave] int mlVRTurnLogs = 0;				// (digits noted in the log, the first 40)
+end

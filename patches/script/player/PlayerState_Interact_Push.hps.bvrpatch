@@ -1,0 +1,367 @@
+BunkerVR patch 1
+file script/player/PlayerState_Interact_Push.hps
+from 25352d363f2b1d832a3c1b8e25919641b92574f776e1fe1660082fa5864c1b74 23614
+to 86f47e58c27ec8e33f7ca774bd66dd110092d219f1c05b5d977f4f267b29fff2 43378
+=26
++// BunkerVR: a crate or barrel dragged by a VR hand (see VRPushByHand):
++const float gfVRPushCatchUp = 0.3f;		// the share of the gap to the hand closed each update
++const float gfVRPushMaxSpeed = 2.0f;	// the fastest it would go with the hand, weighing nothing (meters a second): less by its weight, as the game's own push (VRPushTopSpeed)
++const float gfVRPushLeastSpeed = 0.4f;	// ...and however heavy, it goes this fast
++const float gfVRPushForce = 45.0f;		// how hard a hand pulls (newtons): by its weight, how quickly it gets going
++const float gfVRPushStopForce = 150.0f;	// how hard the floor stops it, once the hand asks for less
++const float gfVRPushStick = 0.05f;		// the hand this far ahead of it before it moves at all (meters): it takes a pull to start it
++const float gfVRPushTwoForce = 1.5f;	// with both hands: pulled this much harder...
++const float gfVRPushTwoSpeed = 1.35f;	// ...and this much faster
++const float gfVRPushTurnShare = 0.45f;	// the share it takes of the turn the hand's pull about its center asks for
++const float gfVRPushMaxTurn = 2.0f;		// and the fastest it would turn, weighing nothing (radians a second)
++const float gfVRPushLeastTurn = 0.4f;	// ...and however heavy, it can turn this fast
++const float gfVRPushTurnGets = 90.0f;	// how quickly its turn gets going: this over its weight (radians a second, each second)
++const float gfVRPushUprightKeep = 0.8f;	// the share of any tipping or rolling turn kept each update while a hand has it
++const float gfVRPushTiltLetGo = 0.82f;	// tipped this far from how it stood when taken (the cosine: about 35 degrees): it goes out of the hand
++const float gfVRPushLetGo = 0.5f;		// the hand this far from the spot it holds, in any direction...
++const float gfVRPushLetGoTime = 0.25f;	// ...for this long (seconds): it lets go
++const float gfVRPushWalk = 1.6f;		// the fastest the player walks while dragging (meters a second)
++const float gfVRPushWalkOverTop = 0.9f;	// ...and no faster than this share of the top speed its weight allows (the floor keeps it a little under its top speed, and a faster walk draws the hand off it)
++const float gfVRPushRubbedOff = 0.15f;	// it has this much less speed than it was given last update (meters a second), or more: something stops it, not the floor's rub (VRPushGoing)
++const float gfVRPushTurnRubbedOff = 0.3f;	// ...and this much less turn (radians a second)
++const float gfVRPushScrapeEvery = 0.09f;	// a tick in the hand this often while it moves (seconds)...
++const float gfVRPushScrapeFrom = 0.08f;	// ...once it moves this fast (meters a second)...
++const float gfVRPushScrapeFull = 1.5f;	// ...strongest at this speed
++const float gfVRPushRayBack = 0.12f;	// the hand onto its surface: looked for from this far behind the palm (meters)...
++const float gfVRPushPalmOff = 0.035f;	// ...stopping this far out of it, the palm's thickness...
++const float gfVRPushOntoMost = 0.3f;	// ...and moved no further than this
++
+=119
+-1
++		mlVRPushHelp = -1; // BunkerVR
++		mbVRPushHelpSqueezeWas = true; // (a squeeze already on as this hold begins does not count)
++
+=41
+-1
++		cScript_SetGlobalVarID("BunkerVR_DoorBody", tID_Invalid); // BunkerVR (see VRPushByHand)
++
+=63
++	// BunkerVR: a vector's horizontal length.
++	float VRPushLevel(const cVector3f &in av)
++	{
++		return cVector3f(av.x, 0.0f, av.z).Length();
++	}
++
++	// BunkerVR: the hand goes onto the object's surface, not where it was when it
++	// closed (called by VRHoldSpot, which finds a drawer's handle the same way): a ray
++	// from a little behind the palm to the object's center, stopping the palm's
++	// thickness short of where it hits. False (the hand stays where it is) if
++	// something else is in the way.
++	bool VRHoldOnHandle(iPhysicsBody@ apBody, const cVector3f &in avNear, cVector3f &out avOnHandle) override
++	{
++		avOnHandle = avNear;
++		cVector3f vToMiddle = cMath_MatrixMul(apBody.GetLocalMatrix(), apBody.GetMassCenter()) - avNear;
++		float fToMiddle = vToMiddle.Length();
++		if(fToMiddle < 0.01f) return false;
++		cVector3f vDir = vToMiddle * (1.0f / fToMiddle);
++		cVector3f vFrom = avNear - vDir * gfVRPushRayBack;
++		float fHit = 0.0f;
++		cVector3f vNormal = cVector3f(0.0f);
++		iPhysicsBody@ pHit = cLux_GetClosestBody(vFrom, vDir, gfVRPushRayBack + fToMiddle, fHit, vNormal);
++		if(pHit is null || pHit.GetID() != apBody.GetID()) return false;
++		cVector3f vOn = vFrom + vDir * cMath_Max(fHit - gfVRPushPalmOff, 0.0f);
++		if((vOn - avNear).Length() > gfVRPushOntoMost) return false;
++		avOnHandle = vOn;
++		return true;
++	}
++
++	// BunkerVR: how much an object's weight leaves of its speed, as in the game's
++	// own push (PhysicsUpdate: the look push's fMassMul): 1 weighing nothing, less
++	// the heavier it is.
++	float VRPushLightness(float afMass)
++	{
++		return 1.0f - cMath_Clamp(afMass / gfMaxMass, 0.0f, 0.95f);
++	}
++
++	// BunkerVR: the fastest a hand (or two) moves it. Its weight counts, so heavy
++	// objects don't feel light: its speed isn't taken straight from the hand.
++	float VRPushTopSpeed(float afMass, bool abTwoHands)
++	{
++		float fTop = cMath_Max(gfVRPushMaxSpeed * VRPushLightness(afMass), gfVRPushLeastSpeed);
++		return abTwoHands ? fTop * gfVRPushTwoSpeed : fTop;
++	}
++
++	// BunkerVR: the speed the hand asks of an object dragged, from how far its held
++	// spot is from where the hand wants it: horizontal only, a share of the gap each
++	// update once the hand has pulled past gfVRPushStick, no faster than afTop.
++	cVector3f VRPushAsked(const cVector3f &in avGap, float afTop, float afTimeStep)
++	{
++		cVector3f vLevel = cVector3f(avGap.x, 0.0f, avGap.z);
++		float fGap = vLevel.Length();
++		if(fGap <= gfVRPushStick) return cVector3f(0.0f);
++		vLevel = vLevel * ((fGap - gfVRPushStick) / fGap) * (gfVRPushCatchUp / cMath_Max(afTimeStep, 0.004f));
++		return cMath_Vector3MaxLength(vLevel, afTop);
++	}
++
++	// BunkerVR: how fast it goes this update, towards the speed asked: only as much
++	// faster as the hand's pull gets its weight going, and as much slower as the
++	// floor stops it (so it starts slowly, and stops soon after the hand does). Its
++	// own vertical speed stays: it stands on the floor and falls by its own weight.
++	cVector3f VRPushSpeed(const cVector3f &in avAsked, const cVector3f &in avNow, float afMass, bool abTwoHands, float afTimeStep)
++	{
++		cVector3f vNowLevel = cVector3f(avNow.x, 0.0f, avNow.z);
++		bool bFaster = avAsked.Length() > vNowLevel.Length() && cMath_Vector3Dot(avAsked, vNowLevel) >= 0.0f;
++		float fForce = bFaster ? (abTwoHands ? gfVRPushForce * gfVRPushTwoForce : gfVRPushForce) : gfVRPushStopForce;
++		float fMost = fForce / cMath_Max(afMass, 1.0f) * afTimeStep;
++		cVector3f vSpeed = vNowLevel + cMath_Vector3MaxLength(avAsked - vNowLevel, fMost);
++		vSpeed.y = avNow.y;
++		return vSpeed;
++	}
++
++	// BunkerVR: how fast the hand's pull asks it to turn about its vertical axis,
++	// pulled at avLever from its center (horizontal) with the horizontal speed
++	// avPull: the part of the pull across that lever, no faster than its weight
++	// allows. Near its center (under 15 cm), it doesn't turn.
++	float VRPushTurn(const cVector3f &in avLever, const cVector3f &in avPull, float afMass)
++	{
++		float fLeverSqr = avLever.x * avLever.x + avLever.z * avLever.z;
++		if(fLeverSqr < 0.15f * 0.15f) return 0.0f;
++		float fTurn = (avLever.z * avPull.x - avLever.x * avPull.z) / fLeverSqr * gfVRPushTurnShare;
++		float fMost = cMath_Max(gfVRPushMaxTurn * VRPushLightness(afMass), gfVRPushLeastTurn);
++		return cMath_Clamp(fTurn, -fMost, fMost);
++	}
++
++	// BunkerVR: the speed to build on, for VRPushSpeed: the one it was given last
++	// update (avGiven), not the one it has (avNow). The floor's rub takes most of what
++	// the hand adds each update, so building on the actual speed leaves it far slower
++	// than the pull means. If it has lost more than a rub takes, something is stopping
++	// it, and the actual speed is used. The vertical speed is always the actual one.
++	cVector3f VRPushGoing(const cVector3f &in avGiven, const cVector3f &in avNow)
++	{
++		cVector3f vLost = cVector3f(avGiven.x - avNow.x, 0.0f, avGiven.z - avNow.z);
++		if(vLost.Length() > gfVRPushRubbedOff) return avNow;
++		return cVector3f(avGiven.x, avNow.y, avGiven.z);
++	}
++
++	// BunkerVR: how fast it turns this update, from afNow towards afAsked: only as
++	// quickly as its weight allows (gfVRPushTurnGets).
++	float VRPushTurnNow(float afAsked, float afNow, float afMass, float afTimeStep)
++	{
++		float fMost = gfVRPushTurnGets / cMath_Max(afMass, 1.0f) * afTimeStep;
++		return afNow + cMath_Clamp(afAsked - afNow, -fMost, fMost);
++	}
++
++	// BunkerVR: has it tipped or rolled out of the hand? Without this the hand stays
++	// stuck to a barrel that tips over or spins, and can end up under it. avUp,
++	// avUpTaken: which way its own up points now, and did when it was taken.
++	bool VRPushTipped(const cVector3f &in avUp, const cVector3f &in avUpTaken)
++	{
++		return cMath_Vector3Dot(avUp, avUpTaken) < gfVRPushTiltLetGo;
++	}
++
++	// BunkerVR: a tick in the hand as the object scrapes along, stronger the
++	// faster it goes; 0 under gfVRPushScrapeFrom.
++	float VRPushScrape(float afSpeed)
++	{
++		if(afSpeed < gfVRPushScrapeFrom) return 0.0f;
++		return 0.12f + 0.33f * cMath_Clamp((afSpeed - gfVRPushScrapeFrom) / (gfVRPushScrapeFull - gfVRPushScrapeFrom), 0.0f, 1.0f);
++	}
++
++	// BunkerVR: dragged by a VR hand. Crates and barrels are Prop_Push, moved by
++	// this state, which the game steers by where the head looks; without this the
++	// hand has no part in it and the player gets no sign that the grab took hold.
++	// With a hand it works like a drawer's hold (VRHoldSpot): the hand is drawn on
++	// the spot it took hold of, with a buzz; the spot follows the hand, horizontally,
++	// a walk taking it along too, and the object turns about its center when pulled
++	// across it; a tick now and then as it scrapes along, and a knock when it stops
++	// against something. The hand pulled off it lets go. Its weight counts, tipping
++	// is held back, tipped too far it goes out of the hand, and the other hand can
++	// take hold too (VRUpdatePushHelp).
++	// Returns whether a hand moved it (the game's own push is skipped then).
++	bool VRPushByHand(iPhysicsBody@ apBody, float afTimeStep)
++	{
++		// Not a push the level makes for the player, which can't be left: the rock at the end of
++		// the tunnel in the game's last moments (Push_SetCanLeaveState(false) in arena.hps; the
++		// level then moves the player on with Push_SimulateMovement). A hand would hold the rock
++		// still, and the ending wouldn't come until the hand let go.
++		if(mbCanLeaveState == false) return false;
++
++		cVector3f vPalm;
++		int lHand = 1;
++		if(VRGrabbingHand(lHand, vPalm) == false) return false;
++
++		bool bFirstUpdate = mbVRHoldSet == false;
++		cVector3f vSpot = VRHoldSpot(apBody, lHand, vPalm, "the heavy thing");
++		cVector3f vWanted = vPalm - mvVRHoldPalmOff;
++		cVector3f vGap = vWanted - vSpot;
++		cMatrixf mtxBody = apBody.GetLocalMatrix();
++		cVector3f vUp = cMath_MatrixMul3x3(mtxBody, cVector3f(0.0f, 1.0f, 0.0f));
++		if(bFirstUpdate)
++		{
++			mvVRPushUpTaken = vUp;
++			mfVRPushApart = 0.0f;
++			mvVRPushGiven = apBody.GetLinearVelocity();
++			mfVRPushTurnGiven = apBody.GetAngularVelocity().y;
++		}
++
++		// The variable the body script's VRTouchKind reads, as for a held door: the other
++		// hand, touching this, takes hold of it too.
++		cScript_SetGlobalVarID("BunkerVR_DoorBody", mBodyID);
++		cScript_SetGlobalVarFloat("BunkerVR_DoorTime", float(cEngine_GetGameTime()));
++
++		// Pulled off it (it is stuck, or the hand ran ahead of it), or it has tipped
++		// or rolled away: lets go.
++		if(vGap.Length() > gfVRPushLetGo) mfVRPushApart += afTimeStep;
++		else							  mfVRPushApart = 0.0f;
++		bool bTipped = VRPushTipped(vUp, mvVRPushUpTaken);
++		if(mbCanLeaveState && (mfVRPushApart > gfVRPushLetGoTime || bTipped))
++		{
++			VRBuzzHand(lHand, 0.08f, 0.6f);
++			Log("BunkerVR: the hand " + (bTipped ? "loses the heavy thing as it tips over" : "is pulled off the heavy thing, and lets go") + "\n");
++			mBaseObj.mpPlayer.ChangeState(mlPreviousState);
++			return true;
++		}
++
++		float fMass = apBody.GetMass();
++		cVector3f vSpotHelp = vSpot;
++		cVector3f vGapHelp = vGap;
++		bool bTwoHands = VRUpdatePushHelp(apBody, lHand, mtxBody, vSpotHelp, vGapHelp, afTimeStep);
++		float fTop = VRPushTopSpeed(fMass, bTwoHands);
++
++		// With both hands, each asks for half of it.
++		cVector3f vAsked = VRPushAsked(bTwoHands ? (vGap + vGapHelp) * 0.5f : vGap, fTop, afTimeStep);
++		cVector3f vNow = apBody.GetLinearVelocity();
++		mvVRPushGiven = VRPushSpeed(vAsked, VRPushGoing(mvVRPushGiven, vNow), fMass, bTwoHands, afTimeStep);
++		apBody.SetLinearVelocity(mvVRPushGiven);
++
++		// It turns as they pull across its center: pulls in opposite directions about it
++		// turn it, both the same way move it straight on. Its tipping and rolling are
++		// held back.
++		cVector3f vTurnNow = apBody.GetAngularVelocity();
++		cVector3f vMiddle = cMath_MatrixMul(mtxBody, apBody.GetMassCenter());
++		float fTurnAsked = VRPushTurn(vSpot - vMiddle, VRPushAsked(vGap, fTop, afTimeStep), fMass);
++		if(bTwoHands) fTurnAsked = (fTurnAsked + VRPushTurn(vSpotHelp - vMiddle, VRPushAsked(vGapHelp, fTop, afTimeStep), fMass)) * 0.5f;
++		if(cMath_Abs(mfVRPushTurnGiven - vTurnNow.y) > gfVRPushTurnRubbedOff) mfVRPushTurnGiven = vTurnNow.y;
++		mfVRPushTurnGiven = VRPushTurnNow(fTurnAsked, mfVRPushTurnGiven, fMass, afTimeStep);
++		apBody.SetAngularVelocity(cVector3f(vTurnNow.x * gfVRPushUprightKeep, mfVRPushTurnGiven, vTurnNow.z * gfVRPushUprightKeep));
++
++		// What the hand feels.
++		float fMoving = VRPushLevel(vNow);
++		VRHoldFeelStop(lHand, mfVRHoldLastWanted, fMoving, VRPushLevel(vGap), afTimeStep);
++		mfVRHoldLastWanted = VRPushLevel(vAsked);
++		mfVRPushScrapeWait -= afTimeStep;
++		float fScrape = VRPushScrape(fMoving);
++		if(fScrape > 0.0f && mfVRPushScrapeWait <= 0.0f)
++		{
++			mfVRPushScrapeWait = gfVRPushScrapeEvery;
++			VRBuzzHand(lHand, 0.02f, fScrape);
++		}
++
++		// Log four lines a second, for reading a drag afterwards.
++		mfVRPushLogWait -= afTimeStep;
++		if(mfVRPushLogWait <= 0.0f)
++		{
++			mfVRPushLogWait = 0.25f;
++			cVector3f vAt = mtxBody.GetTranslation();
++			cVR_Say("the heavy thing: weight " + fMass + ", top speed " + fTop + ", speed " + vNow.Length() + ", the hand " + vGap.Length() + " from its spot, at " + vAt.x + " " + vAt.y + " " + vAt.z + ", turning " + vTurnNow.y + (bTwoHands ? ", both hands" : ""));
++		}
++
++		// The player walks slower while dragging it, the heavier the slower.
++		iCharacterBody@ pCharBody = mBaseObj.mpPlayer.GetCharacterBody();
++		float fWalk = cMath_Min(gfVRPushWalk, fTop * gfVRPushWalkOverTop);
++		for(int i = 0; i < 2; ++i)
++		{
++			pCharBody.SetMaxPositiveMoveSpeed(eCharDir(i), fWalk);
++			pCharBody.SetMaxNegativeMoveSpeed(eCharDir(i), -fWalk);
++		}
++
++		mfLookSpeedMul = 1.0f; // (the stick turns at full speed: see OnAnalogInput; and nothing is left slowed when it lets go)
++		apBody.SetThrownByPlayer(true);
++		cScript_RunGlobalFunc("LuxPlayer", "", "_Global_ResetTimeSinceThrow");
++		return true;
++	}
++
++	// BunkerVR: the other hand on it too, as on a door (VRUpdateHelpHand in
++	// PlayerState_Interact_SwingDoor.hps; the mod leaves the game's button with the
++	// first hand, since the body script's VRTouchKind reports that this hand touches
++	// what that one holds). It takes hold as its squeeze starts while it touches the
++	// object, on the surface, and is drawn there ("BunkerVR_DoorHand2"...); it lets go
++	// when its squeeze ends or it is pulled off. If the first hand lets go first, the
++	// mod gives the button to this one and the game takes the object up again in it.
++	// True while it holds, with where its spot is and its gap to where it wants it.
++	bool VRUpdatePushHelp(iPhysicsBody@ apBody, int alHand, const cMatrixf &in a_mtxBody, cVector3f &out avSpot, cVector3f &out avGap, float afTimeStep)
++	{
++		avSpot = cVector3f(0.0f);
++		avGap = cVector3f(0.0f);
++		cCamera@ pCam = mBaseObj.mpPlayer.GetCamera();
++		if(pCam is null) return false;
++		int lHelp = 1 - alHand;
++		tString sHelp = lHelp == 0 ? "0" : "1";
++
++		// Is that hand squeezing for its own hold (roll 7014: 12345, then 1 left +
++		// 2 right)? And where is its palm (7011 left, 7012 right)?
++		float fRealRoll = pCam.GetRoll();
++		pCam.SetRoll(7014.0f);
++		cVector3f vUse = pCam.GetMatrix().GetTranslation();
++		pCam.SetRoll(lHelp == 0 ? 7011.0f : 7012.0f);
++		cVector3f vPalm = pCam.GetMatrix().GetTranslation();
++		pCam.SetRoll(fRealRoll);
++		bool bSqueeze = vUse.x > 12344.0f && vUse.x < 12346.0f && (int(vUse.y + 0.5f) & (lHelp == 0 ? 1 : 2)) != 0;
++		bool bJustSqueezed = bSqueeze && mbVRPushHelpSqueezeWas == false;
++		mbVRPushHelpSqueezeWas = bSqueeze;
++
++		if(mlVRPushHelp < 0 && bJustSqueezed)
++		{
++			// Only while it touches this (reported just now).
++			float fAge = float(cEngine_GetGameTime()) - cScript_GetGlobalVarFloat("BunkerVR_TouchTime" + sHelp);
++			if(fAge > -0.001f && fAge < 0.25f && cScript_GetGlobalVarID("BunkerVR_TouchBody" + sHelp) == mBodyID)
++			{
++				cVector3f vOn;
++				if(VRHoldOnHandle(apBody, vPalm, vOn) == false) vOn = vPalm;
++				mvVRPushHelpOnBody = cMath_MatrixMul(cMath_MatrixInverse(a_mtxBody), vOn);
++				mvVRPushHelpPalmOff = vPalm - vOn;
++				mfVRPushHelpApart = 0.0f;
++				mlVRPushHelp = lHelp;
++				VRBuzzHand(lHelp, 0.03f, 0.4f);
++				Log("BunkerVR: the other hand takes hold of the heavy thing too\n");
++			}
++		}
++		if(mlVRPushHelp < 0) return false;
++
++		avSpot = cMath_MatrixMul(a_mtxBody, mvVRPushHelpOnBody);
++		avGap = vPalm - mvVRPushHelpPalmOff - avSpot;
++		if(avGap.Length() > gfVRPushLetGo)	mfVRPushHelpApart += afTimeStep;
++		else								mfVRPushHelpApart = 0.0f;
++		if(bSqueeze == false || mfVRPushHelpApart > gfVRPushLetGoTime)
++		{
++			if(bSqueeze) VRBuzzHand(lHelp, 0.04f, 0.4f);
++			Log("BunkerVR: the other hand lets go of the heavy thing\n");
++			mlVRPushHelp = -1;
++			cScript_SetGlobalVarInt("BunkerVR_DoorHand2", 0);
++			return false;
++		}
++
++		// Drawn on its spot (with the first hand's stamp, set this update).
++		cScript_SetGlobalVarInt("BunkerVR_DoorHand2", lHelp + 1);
++		cScript_SetGlobalVarVector3f("BunkerVR_DoorGrip2", avSpot);
++		cScript_SetGlobalVarVector3f("BunkerVR_DoorGripAxis2", cVector3f(0.0f));
++		cScript_SetGlobalVarVector3f("BunkerVR_DoorGripOut2", cVector3f(0.0f));
++		return true;
++	}
++
++	//------------------------------------------------------------
++
+=4
++		if (VRPushByHand(cLux_ID_Body(mBodyID), afTimeStep)) return; // BunkerVR
++
+=432
++			if(mbVRHoldSet) return true; // BunkerVR (with a hand, the stick turns freely, with no limits around the object)
++			
+=132
++	[nosave] float mfVRPushApart = 0.0f;		// BunkerVR: how long the hand has been pulled off the object (seconds)
++	[nosave] float mfVRPushScrapeWait = 0.0f;	// BunkerVR: seconds until the next tick as it scrapes along
++	[nosave] float mfVRPushLogWait = 0.0f;	// BunkerVR: seconds until the next line in the log
++	[nosave] cVector3f mvVRPushGiven = cVector3f(0.0f);	// BunkerVR: the speed it was given last update (VRPushGoing)
++	[nosave] float mfVRPushTurnGiven = 0.0f;	// BunkerVR: ...and the turn
++	[nosave] cVector3f mvVRPushUpTaken = cVector3f(0.0f, 1.0f, 0.0f);	// BunkerVR: which way its own up pointed when taken
++	[nosave] int mlVRPushHelp = -1;				// BunkerVR: the other hand on it too (0 left, 1 right; -1 none; VRUpdatePushHelp)
++	[nosave] bool mbVRPushHelpSqueezeWas = false;	// BunkerVR: was that hand squeezing last update?
++	[nosave] cVector3f mvVRPushHelpOnBody = cVector3f(0.0f);	// BunkerVR: its spot, in the body's own frame
++	[nosave] cVector3f mvVRPushHelpPalmOff = cVector3f(0.0f);	// BunkerVR: its palm's offset from its spot when it took hold
++	[nosave] float mfVRPushHelpApart = 0.0f;	// BunkerVR: how long it has been pulled off (seconds)
+end

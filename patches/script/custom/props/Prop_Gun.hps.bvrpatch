@@ -1,0 +1,688 @@
+BunkerVR patch 1
+file script/custom/props/Prop_Gun.hps
+from 9031af19b099118e90b7749ab094e8644d413b48e3862e8f8534c30b629ff0df 18644
+to b381ac44fde451a873ae3b95ef98bd4defe8f0ae12235e5e08fc8a66a0805d3e 50424
+=8
++// BunkerVR: the bullet carried in the left hand (see VRUpdateRevolver), in meters.
++const float gfGun_VRBulletBack = 0.012f;	// its base sits this far behind where the fingers pinch it
++const float gfGun_VRBulletAhead = 0.02f;	// and its tip this far ahead
++const float gfGun_VRInsertReach = 0.07f;	// the tip this close to the cylinder's middle: it goes in
++// BunkerVR: the "close" animation after the cylinder has shut (see VRUpdateRevolver).
++const float gfGun_VRCloseShut = 0.70f;		// seconds into it by which the cylinder is shut
++const float gfGun_VRCloseHurry = 3.0f;		// how many times faster the rest is played
++// BunkerVR: the spent cases tipped and shaken out of the open cylinder (VRUpdateShells). Each case is held
++// at two to three and a half times its weight, so that only a shake frees it, and they come out one by one:
++// none in the first gfGun_VRShellOpenCalm after the cylinder opens (its own swing open is a jolt of about
++// 60 m/s/s, enough to free them all at once), and no two within gfGun_VRShellGap.
++const float[] gvGun_VRShellStick = { 22.0f, 31.0f, 26.0f, 35.0f, 28.0f, 33.0f };	// each chamber's case held this hard (m/s/s of pull out along its chamber: its own weight is 9.8 with the gun upright)...
++const float gfGun_VRShellDrag = 6.0f;		// ...once moving, it slides against this (m/s/s): upright it slides on, held level it stops part out
++const float gfGun_VRShellOpenCalm = 0.4f;	// none starts out this long (seconds) after the cylinder opens (its own swing and the flick)
++const float gfGun_VRShellGap = 0.1f;		// nor within this long of the last one
++const float gfGun_VRShellClinkVolume = 0.3f;	// a case clearing the cylinder: the bullet's click, this loud...
++const float gfGun_VRShellLandVolume = 0.8f;	// ...and landing (its first bounce), the game's case sound where it lands, this loud (the second half)
++const float gfGun_VRShellClear = 4.5f;		// it is clear of the cylinder's back once out this far (the model's own centimeters: a case 4 cm long, its tip 4.4 cm in)
++const float gfGun_VRShellRest = 0.6f;		// it lies on the floor this far up (the model's centimeters: its radius)
++const float[] gvGun_VRShellSpin = { 11.0f, -14.0f, 9.0f, -17.0f, 13.0f, -10.0f };	// each one tumbles this fast as it falls (radians a second)...
++const float[] gvGun_VRShellScatter = { 0.12f, -0.18f, 0.2f, -0.1f, 0.15f, -0.22f };	// ...thrown this fast to one side as it leaves (m/s)
++const float gfGun_VRShellBounce = 0.35f;	// it bounces off the floor with this much of its speed down...
++const int glGun_VRShellBounces = 2;			// ...this many times at most, then lies
++const float gfGun_VRShellLie = 1.2f;		// lying this long (seconds), then gone (its chamber empty)
++const float gfGun_VRShellFloorMost = 2.5f;	// the floor looked for this far below where it leaves (meters)...
++const float gfGun_VRShellFallMost = 1.5f;	// ...none found: gone after falling this far
++const float gfGun_VRJoltMost = 60.0f;		// the gun's jolt taken at most this (m/s/s: a tracking slip is no shake)
++
+=271
++		
++		VRUpdateRevolver(apFunctions, true, afTimeStep); // BunkerVR
+=1
++
++	//------------------------------------------------------------
++
++	// BunkerVR: the revolver worked by hand. With the VR mod running and this
++	// gun open in the right hand:
++	//  - While the mod says the left hand is carrying a bullet, the model's
++	//    spare bullet (the one the game shows being pushed in) is shown and
++	//    held between that hand's thumb and index finger.
++	//  - When that bullet's tip reaches the cylinder it goes in at once: the
++	//    cylinder turns an empty chamber to the loading place, the chamber is
++	//    filled, one bullet leaves the inventory and the loading sound plays.
++	//    Nothing goes in while spent shells are still in the cylinder.
++	//  - The open gun tipped muzzle-up and shaken, the spent cases slide out of
++	//    the cylinder one by one and fall away to the floor (VRUpdateShells).
++	// The mod answers through the camera: after setting a special roll value,
++	// reading the camera's matrix returns its data instead. News for the mod
++	// travels the other way in the camera's position.
++	//   abLogic: true for the one call a frame that may load and empty; the
++	//   body script calls again after placing the arms, only to put the bullet
++	//   back between the fingers (see _Global_VRPlaceBullet).
++	void VRUpdateRevolver(cMeshEntity@ apFunctions, bool abLogic, float afTimeStep)
++	{
++		// Only the gun in the player's hand (this script also runs for guns lying about).
++		if(apFunctions is null || mBaseObj.GetName() != Item_GetHeldEntity(eItemHandlerHand_Right))
++		{
++			mbVRBulletCarried = false;
++			mbVRInsertDone = false;
++			if(mfVRShellFall >= 0.0f) VRShellsAllGone(apFunctions); // (put away with cases on their way out: gone, their chambers empty)
++			mfVRShellFall = -1.0f;
++			return;
++		}
++
++		cLuxPlayer@ pPlayer = cLux_GetPlayer();
++		cCamera@ pCam = pPlayer !is null ? pPlayer.GetCamera() : null;
++		if(pCam is null) return;
++
++		/////////////////////////////
++		// Ask the mod what the hands are doing.
++		bool bMod = false;
++		bool bCarried = false;
++		bool bOpen = false;
++		bool bViewKnown = false;
++		cMatrixf mtxPalm = cMatrixf_Identity;
++		cMatrixf mtxView = cMatrixf_Identity;
++
++		float fRealRoll = pCam.GetRoll();
++		pCam.SetRoll(7014.0f);
++		cVector3f vStatus = pCam.GetMatrix().GetTranslation();
++		if(vStatus.x > 12344.0f && vStatus.x < 12346.0f)
++		{
++			bMod = true;
++
++			// Third number: +1 while the gun is held open, +4 while the left hand carries a bullet.
++			int lFlags = int(vStatus.z + 0.5f);
++			bCarried = lFlags >= 4 && lFlags <= 7;
++			bOpen = lFlags == 1 || lFlags == 3 || lFlags == 5 || lFlags == 7;
++			if(bCarried)
++			{
++				pCam.SetRoll(7011.0f); // where the left palm is
++				mtxPalm = pCam.GetMatrix();
++				pCam.SetRoll(7022.0f); // tell the mod this script looks after the bullet (it then draws none itself)
++				pCam.GetMatrix();
++			}
++			if(abLogic)
++			{
++				pCam.SetRoll(7007.0f); // the game's camera, level (a view matrix: the world in its terms), for the gun's jolt
++				mtxView = pCam.GetMatrix();
++				bViewKnown = true;
++			}
++		}
++		pCam.SetRoll(fRealRoll);
++		if(bMod == false) return;
++
++		/////////////////////////////
++		// Spent cases: shaken and tipped out, then falling.
++		if(abLogic) VRUpdateShells(apFunctions, bOpen, mtxView, bViewKnown, afTimeStep);
++		else VRPlaceShells(apFunctions);
++
++		/////////////////////////////
++		// The "close" animation. Once the cylinder has shut, the rest of it is
++		// only the gun settling back into its usual place in the hand, which
++		// the game times to its own arm animation. In VR the hand is the
++		// player's, so that part is hurried through.
++		if(abLogic)
++		{
++			cAnimationState@ pClose = apFunctions.GetAnimationStateFromName(gsGun_StartAnim);
++			if(pClose !is null && pClose.IsActive())
++			{
++				if(mfVRCloseSpeed < 0.0f) mfVRCloseSpeed = pClose.GetSpeed(); // its normal speed, noted once
++				bool bSettling = bOpen == false && pClose.IsOver() == false && pClose.GetTimePosition() > gfGun_VRCloseShut;
++				pClose.SetSpeed(bSettling ? mfVRCloseSpeed * gfGun_VRCloseHurry : mfVRCloseSpeed);
++			}
++		}
++
++		/////////////////////////////
++		// The bullet in the left hand.
++		// No bullets left in the inventory: the hand comes up empty.
++		if(bCarried && ItemType_GetCountInInventory("Ammunition") <= 0 && cLux_GetGodModeActivated() == false)
++			bCarried = false;
++
++		// One bullet per trip: once it has gone in, the hand is empty until
++		// the mod has stopped saying "carrying" (it stops when it hears the news).
++		if(bCarried == false) mbVRInsertDone = false;
++
++		cBoneState@ pBullet = apFunctions.GetBoneStateFromName("j_Bullet_006");
++		if(bCarried && mbVRInsertDone == false && pBullet !is null)
++		{
++			if(mbVRBulletCarried == false)
++			{
++				mbVRBulletCarried = true;
++				SetReloadBulletVisible(true);
++			}
++
++			// Which way the hand points (the palm matrix's -Z).
++			cVector3f vForward = cMath_MatrixMul3x3(mtxPalm, cVector3f(0.0f, 0.0f, -1.0f));
++			if(vForward.Length() > 0.0001f) vForward.Normalize();
++
++			// Where the thumb and index finger meet, taken from the body's own
++			// finger bones. Failing that, a little above the palm.
++			cVector3f vPinch = mtxPalm.GetTranslation() + cMath_MatrixMul3x3(mtxPalm, cVector3f(0.0f, 0.03f, -0.01f));
++			iLuxEntity@ pBody = cLux_ID_Entity(PlayerBody_GetEntityID());
++			cMeshEntity@ pBodyMesh = pBody !is null ? pBody.GetMeshEntity() : null;
++			if(pBodyMesh !is null)
++			{
++				cBoneState@ pIndexA = pBodyMesh.GetBoneStateFromName("j_L_Index_3");
++				cBoneState@ pIndexB = pBodyMesh.GetBoneStateFromName("j_L_Index_4");
++				cBoneState@ pThumb = pBodyMesh.GetBoneStateFromName("j_L_Thumb_3");
++				if(pIndexA !is null && pIndexB !is null && pThumb !is null)
++				{
++					cVector3f vIndexPad = pIndexA.GetWorldPosition() + (pIndexB.GetWorldPosition() - pIndexA.GetWorldPosition()) * 0.6f;
++					vPinch = (vIndexPad + pThumb.GetWorldPosition()) * 0.5f;
++				}
++			}
++
++			// The bullet is modeled lying along its bone's X direction, base at
++			// the bone and tip towards -X. It should point the way the hand points
++			// (the hand's -Z), so its X direction must lie along the hand's +Z:
++			// a quarter turn about the upright axis. Which direction that is
++			// depends on the math library, so try both and keep the right one.
++			cMatrixf mtxQuarter = cMath_MatrixRotateY(cMath_PiDiv2);
++			if(cMath_MatrixMul3x3(mtxQuarter, cVector3f(1.0f, 0.0f, 0.0f)).z < 0.0f)
++				mtxQuarter = cMath_MatrixRotateY(-cMath_PiDiv2);
++
++			// Keep the size the bone has now (the model is built in centimeters).
++			float fSize = cMath_MatrixMul3x3(pBullet.GetWorldMatrix(), cVector3f(1.0f, 0.0f, 0.0f)).Length();
++			if(fSize > 0.000001f)
++			{
++				cMatrixf mtxNew = cMath_MatrixMul(mtxPalm.GetRotation(), mtxQuarter);
++				mtxNew = cMath_MatrixMul(mtxNew, cMath_MatrixScale(fSize));
++
++				// The fingers hold it by the middle: its base sits a little behind them.
++				mtxNew.SetTranslation(vPinch - vForward * gfGun_VRBulletBack);
++				pBullet.SetWorldMatrix(mtxNew);
++			}
++
++			// Has its tip reached the cylinder of the open gun?
++			if(abLogic && bOpen)
++			{
++				cBoneState@ pCylinder = apFunctions.GetBoneStateFromName("j_cylinder");
++				if(pCylinder !is null)
++				{
++					cVector3f vBulletTip = vPinch + vForward * gfGun_VRBulletAhead;
++					float fDist = (vBulletTip - pCylinder.GetWorldPosition()).Length();
++					if(fDist < gfGun_VRInsertReach)					VRInsertBullet();
++					else if(fDist > gfGun_VRInsertReach + 0.06f)	mbVRInsertRefused = false;
++				}
++			}
++		}
++		else if(mbVRBulletCarried)
++		{
++			mbVRBulletCarried = false;
++			SetReloadBulletVisible(false);
++		}
++
++		/////////////////////////////
++		// News for the mod (roll 7028): what just happened
++		// (1 = a bullet went in, 2 = the shells were tipped out, 3 = a bullet
++		// was refused), whether spent shells are in the cylinder, and how many
++		// live bullets are.
++		if(abLogic)
++		{
++			cVector3f vRealPos = pCam.GetPosition();
++			fRealRoll = pCam.GetRoll();
++			// (The second number also carries the spare bullets in the inventory,
++			// times ten, for the mod's bullet counter.)
++			int lVRSpare = ItemType_GetCountInInventory("Ammunition");
++			if(lVRSpare < 0) lVRSpare = 0;
++			pCam.SetPosition(cVector3f(float(mlVREvent), (VRHasSpent() ? 1.0f : 0.0f) + float(lVRSpare * 10), float(GetUnspentBulletCount())));
++			pCam.SetRoll(7028.0f);
++			pCam.GetMatrix();
++			pCam.SetRoll(fRealRoll);
++			pCam.SetPosition(vRealPos);
++			mlVREvent = 0;
++		}
++	}
++
++	//------------------------------------------------------------
++
++	// BunkerVR: called by the body script once it has put the arms on the
++	// controllers, so that the carried bullet sits in the fingers as they are
++	// now and not as they were a moment ago.
++	void _Global_VRPlaceBullet()
++	{
++		VRUpdateRevolver(mBaseObj.GetMeshEntity(), false, 0.0f);
++	}
++
++	//------------------------------------------------------------
++
++	bool VRHasSpent()
++	{
++		for (int i = 0; i < mvBulletChambers.size(); ++i)
++		{
++			if (mvBulletChambers[i].mState == eBulletChamberState_Spent) return true;
++		}
++		return false;
++	}
++
++	//------------------------------------------------------------
++
++	// BunkerVR: the carried bullet has reached the open cylinder. Put it in.
++	void VRInsertBullet()
++	{
++		// Spent shells still in the way, or no room: nothing goes in. (The
++		// mod is told once per approach, and it taps the hand.)
++		bool bRoom = false;
++		for (int i = 0; i < mvBulletChambers.size(); ++i)
++		{
++			if (mvBulletChambers[i].mState == eBulletChamberState_Empty) bRoom = true;
++		}
++		if (bRoom == false || VRHasSpent() || mfVRShellFall >= 0.0f)
++		{
++			if (mbVRInsertRefused == false)
++			{
++				mbVRInsertRefused = true;
++				mlVREvent = 3;
++			}
++			return;
++		}
++
++		// Turn the cylinder until an empty chamber is at the loading place.
++		for (int i = 0; i < mvBulletChambers.size(); ++i)
++		{
++			if (mvBulletChambers[GetCurrentChamberId()].mState == eBulletChamberState_Empty) break;
++			RotateCylinder(true, true);
++		}
++		if (mvBulletChambers[GetCurrentChamberId()].mState != eBulletChamberState_Empty) return;
++
++		// The game's own steps for a loaded bullet: the chamber is filled, the
++		// spare bullet is hidden and one bullet leaves the inventory; then the
++		// cylinder moves on one place.
++		HandleEvent(eGunEvent_HideReloadBullet);
++		HandleEvent(eGunEvent_ReloadEnd);
++		mbVRBulletCarried = false;
++		mbVRInsertDone = true;
++		mlVREvent = 1;
++
++		Sound_PlayGui("weapons/revolver/load_bullet", 1.f, eSoundEntryType_GuiWorld);
++	}
++
++	//------------------------------------------------------------
++
++	// BunkerVR: the spent cases. Each case is held in its chamber by its own grip
++	// (gvGun_VRShellStick, a little different for each, as fired cases are), so they
++	// come out one at a time rather than all at once, and only when what pulls
++	// it out along its chamber is more than that: its weight, the more the gun is tipped
++	// muzzle-up, and the gun's own jolt (a shake or a flick, as the game's level camera
++	// sees the cylinder: walking and stick turns are none). Moving, it slides on against a
++	// lighter drag (gfGun_VRShellDrag), still in its chamber, until it is clear of the
++	// cylinder's back (gfGun_VRShellClear); then it flies free from there, as fast as it
++	// was going and the gun was moving, a little to one side, tumbling, falls to the floor
++	// below it (gfGun_VRShellFloorMost; above the player's feet only off the body), bounces
++	// (glGun_VRShellBounces, the first with the revolver's case sound), lies a moment
++	// (gfGun_VRShellLie) and is gone, its chamber empty. The cases' bones are placed in the
++	// world (VRPlaceShells), again after the arms have moved the gun (the body script's
++	// VRUpdateGunBullet, while "BunkerVR_ShellsOut").
++	void VRUpdateShells(cMeshEntity@ apFunctions, bool abOpen, const cMatrixf &in a_mtxView, bool abViewKnown, float afTimeStep)
++	{
++		uint lCount = mvBulletChambers.size();
++		VRShellsSized(lCount);
++		cBoneState@ pCylinder = apFunctions.GetBoneStateFromName("j_cylinder");
++		if (pCylinder is null || afTimeStep <= 0.0f)
++		{
++			VRPlaceShells(apFunctions);
++			return;
++		}
++		cMatrixf mtxCylinder = pCylinder.GetWorldMatrix();
++
++		//////////////////
++		// The gun's jolt and speed: the cylinder over the last four updates.
++		mfVRGunClock += afTimeStep;
++		cVector3f vSeen = abViewKnown ? cMath_MatrixMul(a_mtxView, mtxCylinder.GetTranslation()) : mtxCylinder.GetTranslation();
++		for (int i = 0; i < 3; ++i)
++		{
++			mvVRGunSeen[i] = mvVRGunSeen[i + 1];
++			mvVRGunWorld[i] = mvVRGunWorld[i + 1];
++			mvVRGunWhen[i] = mvVRGunWhen[i + 1];
++		}
++		mvVRGunSeen[3] = vSeen;
++		mvVRGunWorld[3] = mtxCylinder.GetTranslation();
++		mvVRGunWhen[3] = mfVRGunClock;
++		if (mlVRGunSeen < 4) mlVRGunSeen++;
++		cVector3f vJolt = cVector3f(0.0f);
++		cVector3f vGunSpeed = cVector3f(0.0f);
++		if (mlVRGunSeen >= 4)
++		{
++			float fNewSpan = mvVRGunWhen[3] - mvVRGunWhen[1];
++			float fOldSpan = mvVRGunWhen[2] - mvVRGunWhen[0];
++			float fBetween = 0.5f * (mvVRGunWhen[3] + mvVRGunWhen[1] - mvVRGunWhen[2] - mvVRGunWhen[0]);
++			if (fNewSpan > 0.0001f && fOldSpan > 0.0001f && fBetween > 0.0001f)
++			{
++				cVector3f vNew = (mvVRGunSeen[3] - mvVRGunSeen[1]) * (1.0f / fNewSpan);
++				cVector3f vOld = (mvVRGunSeen[2] - mvVRGunSeen[0]) * (1.0f / fOldSpan);
++				vJolt = (vNew - vOld) * (1.0f / fBetween);
++				if (vJolt.Length() > gfGun_VRJoltMost) vJolt = cMath_Vector3Normalize(vJolt) * gfGun_VRJoltMost;
++				vGunSpeed = (mvVRGunWorld[3] - mvVRGunWorld[1]) * (1.0f / fNewSpan);
++			}
++		}
++
++		// (How long the cylinder has been open, and since a case last started out.)
++		if (abOpen) mfVRShellOpenFor += afTimeStep;
++		else mfVRShellOpenFor = 0.0f;
++		mfVRShellSinceStart += afTimeStep;
++
++		//////////////////
++		// Each case.
++		bool bAnyOut = false;
++		for (uint i = 0; i < lCount; ++i)
++		{
++			cBoneState@ pShell = apFunctions.GetBoneStateFromName(mvBulletChambers[i].msBoneName);
++			if (mvBulletChambers[i].mState != eBulletChamberState_Spent)
++			{
++				mvVRShellState[i] = 0; // (empty, or a new bullet: in its chamber)
++				continue;
++			}
++			if (pShell is null) continue;
++			int lState = mvVRShellState[i];
++
++			// In its chamber: does it start to come out?
++			if (lState == 0)
++			{
++				if (abOpen == false || mfVRShellOpenFor < gfGun_VRShellOpenCalm || mfVRShellSinceStart < gfGun_VRShellGap) continue;
++				cMatrixf mtxSeat = pShell.GetWorldMatrix();
++				cVector3f vOut = cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxSeat, cVector3f(1.0f, 0.0f, 0.0f)));
++				if (VRShellPull(vOut, vJolt, a_mtxView, abViewKnown) <= gvGun_VRShellStick[i % gvGun_VRShellStick.length()]) continue;
++				mfVRShellSinceStart = 0.0f;
++				mvVRShellState[i] = 1;
++				mvVRShellRel[i] = cMath_MatrixMul(cMath_MatrixInverse(mtxCylinder), mtxSeat);
++				mvVRShellSlide[i] = 0.0f;
++				mvVRShellSpeed[i] = 0.0f;
++				if (mbVRShellsLeaving == false)
++				{
++					mbVRShellsLeaving = true;
++					mlVREvent = 2; // (the mod: a buzz, the hint used)
++				}
++				if (mlVRShellNotes < 30)
++				{
++					mlVRShellNotes++;
++					Log("BunkerVR revolver: case " + i + " starts out (pulled " + VRFixed1(VRShellPull(vOut, vJolt, a_mtxView, abViewKnown)) + " m/s/s against its " + VRFixed1(gvGun_VRShellStick[i % gvGun_VRShellStick.length()]) +
++						"; the gun tipped " + int(cMath_ToDeg(cMath_ASin(cMath_Clamp(-vOut.y, -1.0f, 1.0f))) + 0.5f) + " degrees muzzle-up, jolted " + VRFixed1(vJolt.Length()) + ")\n");
++				}
++				lState = 1;
++			}
++
++			// Sliding out along its chamber.
++			if (lState == 1)
++			{
++				if (abOpen == false)
++				{
++					// (Shut on it: pushed back in.)
++					mvVRShellState[i] = 0;
++					pShell.SetMatrix(mvBulletChambers[i].mtxDefaultLocalTransform);
++					continue;
++				}
++				cMatrixf mtxSeat = cMath_MatrixMul(mtxCylinder, mvVRShellRel[i]);
++				cVector3f vX = cMath_MatrixMul3x3(mtxSeat, cVector3f(1.0f, 0.0f, 0.0f));
++				float fUnit = vX.Length();
++				cVector3f vOut = cMath_Vector3Normalize(vX);
++				float fPull = VRShellPull(vOut, vJolt, a_mtxView, abViewKnown);
++				mvVRShellSpeed[i] = cMath_Max(0.0f, mvVRShellSpeed[i] + (fPull - gfGun_VRShellDrag) * afTimeStep);
++				mvVRShellSlide[i] += mvVRShellSpeed[i] * afTimeStep;
++				if (mvVRShellSlide[i] >= gfGun_VRShellClear * fUnit)
++				{
++					// Clear: it flies.
++					mvVRShellState[i] = 2;
++					cMatrixf mtxAt = mtxSeat;
++					mtxAt.SetTranslation(mtxSeat.GetTranslation() + vOut * mvVRShellSlide[i]);
++					mvVRShellAt[i] = mtxAt;
++					cVector3f vSide = cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxSeat, cVector3f(0.0f, 1.0f, 0.0f)));
++					mvVRShellVel[i] = vGunSpeed + vOut * mvVRShellSpeed[i] + vSide * gvGun_VRShellScatter[i % gvGun_VRShellScatter.length()];
++					mvVRShellSpinNow[i] = gvGun_VRShellSpin[i % gvGun_VRShellSpin.length()];
++					mvVRShellLying[i] = 0.0f;
++					bool bFloorFound = false;
++					mvVRShellFloor[i] = VRShellFloorBelow(mtxAt.GetTranslation(), bFloorFound);
++					mvVRShellBounced[i] = bFloorFound ? 0 : -1; // (-1: no floor below, gone as it reaches mvVRShellFloor)
++					VRShellSound("weapons/revolver/load_bullet", mtxAt.GetTranslation(), gfGun_VRShellClinkVolume); // (it clicks free)
++				}
++			}
++
++			// Falling, tumbling, bouncing.
++			else if (lState == 2)
++			{
++				cMatrixf mtxAt = mvVRShellAt[i];
++				float fUnit = cMath_MatrixMul3x3(mtxAt, cVector3f(1.0f, 0.0f, 0.0f)).Length();
++				cVector3f vPos = mtxAt.GetTranslation();
++				mvVRShellVel[i] = mvVRShellVel[i] + cVector3f(0.0f, -9.81f * afTimeStep, 0.0f);
++				vPos = vPos + mvVRShellVel[i] * afTimeStep;
++				mtxAt = cMath_MatrixMul(mtxAt, cMath_MatrixRotateZ(mvVRShellSpinNow[i] * afTimeStep));
++				float fRest = mvVRShellFloor[i] + gfGun_VRShellRest * fUnit;
++				if (vPos.y <= fRest)
++				{
++					vPos.y = fRest;
++					if (mvVRShellBounced[i] < 0)
++					{
++						VRShellGone(apFunctions, i); // (no floor found below: gone, as far down as it was let fall)
++						continue;
++					}
++					if (mvVRShellBounced[i] < glGun_VRShellBounces && mvVRShellVel[i].y < -0.5f)
++					{
++						// (Played where it lands, not at the gun.)
++						VRShellSound("weapons/revolver/empty_shells", vPos, mvVRShellBounced[i] == 0 ? gfGun_VRShellLandVolume : gfGun_VRShellLandVolume * 0.5f);
++						mvVRShellBounced[i]++;
++						mvVRShellVel[i] = cVector3f(mvVRShellVel[i].x * 0.5f, -mvVRShellVel[i].y * gfGun_VRShellBounce, mvVRShellVel[i].z * 0.5f);
++						mvVRShellSpinNow[i] = mvVRShellSpinNow[i] * 0.6f;
++					}
++					else
++					{
++						// Lies on its side, along the floor.
++						mvVRShellState[i] = 3;
++						mvVRShellLying[i] = 0.0f;
++						mtxAt = VRShellLaidFlat(mtxAt);
++					}
++				}
++				mtxAt.SetTranslation(vPos);
++				mvVRShellAt[i] = mtxAt;
++			}
++
++			// Lying, then gone.
++			else if (lState == 3)
++			{
++				mvVRShellLying[i] += afTimeStep;
++				if (mvVRShellLying[i] >= gfGun_VRShellLie)
++				{
++					VRShellGone(apFunctions, i);
++					continue;
++				}
++			}
++			if (mvVRShellState[i] >= 1 && mvVRShellState[i] <= 3) bAnyOut = true;
++		}
++		if (VRHasSpent() == false) mbVRShellsLeaving = false; // (all out: the next emptying is told afresh)
++		mfVRShellFall = bAnyOut ? 0.0f : -1.0f;
++		cScript_SetGlobalVarInt("BunkerVR_ShellsOut", bAnyOut ? 1 : 0);
++		VRPlaceShells(apFunctions);
++	}
++
++	// BunkerVR: the pull out along its chamber on a case whose chamber's back faces avOut
++	// (in the world): its weight's share, and the gun's jolt felt the other way (avJolt,
++	// in the level camera's terms, a_mtxView turning the world into them). m/s/s.
++	float VRShellPull(const cVector3f &in avOut, const cVector3f &in avJolt, const cMatrixf &in a_mtxView, bool abViewKnown)
++	{
++		cVector3f vOutSeen = abViewKnown ? cMath_MatrixMul3x3(a_mtxView, avOut) : avOut;
++		return -9.81f * avOut.y - cMath_Vector3Dot(avJolt, vOutSeen);
++	}
++
++	// BunkerVR: a case's sound at a place in the world (where it lands, not at the gun),
++	// afVolume loud; logged the first few times.
++	void VRShellSound(const tString &in asFile, const cVector3f &in avAt, float afVolume)
++	{
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		if (pMap is null) return;
++		mlVRShellSounds++;
++		cSoundEntity@ pSound = pMap.GetWorld().CreateSoundEntity("BunkerVR_Case_" + mlVRShellSounds, asFile, true);
++		if (pSound is null)
++		{
++			if (mlVRShellNotes < 30)
++			{
++				mlVRShellNotes++;
++				Log("BunkerVR revolver: the sound " + asFile + " could not be made\n");
++			}
++			return;
++		}
++		pSound.SetPosition(avAt);
++		pSound.SetScriptableIsSaved(false);
++		pSound.FadeIn(0.0f, afVolume);
++	}
++
++	// BunkerVR: the floor's height below where a case leaves the gun: what a ray
++	// down finds (a floor, a table, a crate); a hit above the player's feet, under the
++	// player's body, or one at once (the ray begun inside something), is taken for the body
++	// itself: the player's feet are the floor there. abFound false: none (the height
++	// gfGun_VRShellFallMost below, where the case is gone).
++	float VRShellFloorBelow(const cVector3f &in avFrom, bool &out abFound)
++	{
++		abFound = false;
++		cLuxPlayer@ pPlayer = cLux_GetPlayer();
++		iCharacterBody@ pBody = pPlayer !is null ? pPlayer.GetCharacterBody() : null;
++		float fDistance = 0.0f;
++		cVector3f vNormal = cVector3f(0.0f);
++		bool bHit = cLux_GetClosestBody(avFrom, cVector3f_Down, gfGun_VRShellFloorMost, fDistance, vNormal) !is null;
++		float fFloor = avFrom.y - fDistance;
++		abFound = bHit;
++		if (pBody !is null)
++		{
++			cVector3f vFeet = pBody.GetFeetPosition();
++			cVector3f vOff = avFrom - pBody.GetPosition();
++			bool bOverBody = cVector3f(vOff.x, 0.0f, vOff.z).Length() < pBody.GetSize().x * 0.5f + 0.05f;
++			if ((bHit == false || fDistance < 0.03f || (bOverBody && fFloor > vFeet.y + 0.1f)) && vFeet.y < avFrom.y && avFrom.y - vFeet.y < gfGun_VRShellFloorMost)
++			{
++				fFloor = vFeet.y;
++				abFound = true;
++			}
++		}
++		if (abFound) return fFloor;
++		if (mlVRShellNotes < 30)
++		{
++			mlVRShellNotes++;
++			Log("BunkerVR revolver: no floor found below a case: it falls " + VRFixed1(gfGun_VRShellFallMost) + " m and is gone\n");
++		}
++		return avFrom.y - gfGun_VRShellFallMost;
++	}
++
++	// BunkerVR: a falling case's turn laid on its side along the floor: its length (x) level,
++	// its y up, its size and its handedness kept.
++	cMatrixf VRShellLaidFlat(const cMatrixf &in a_mtxAt)
++	{
++		cVector3f vX = cMath_MatrixMul3x3(a_mtxAt, cVector3f(1.0f, 0.0f, 0.0f));
++		cVector3f vY = cMath_MatrixMul3x3(a_mtxAt, cVector3f(0.0f, 1.0f, 0.0f));
++		cVector3f vZ = cMath_MatrixMul3x3(a_mtxAt, cVector3f(0.0f, 0.0f, 1.0f));
++		float fUnit = vX.Length();
++		bool bMirrored = cMath_Vector3Dot(cMath_Vector3Cross(vX, vY), vZ) < 0.0f;
++		cVector3f vFlat = cVector3f(vX.x, 0.0f, vX.z);
++		if (vFlat.Length() < 0.2f * fUnit) vFlat = cVector3f(vY.x, 0.0f, vY.z);
++		if (vFlat.Length() < 0.000001f) vFlat = cVector3f(1.0f, 0.0f, 0.0f);
++		vFlat.Normalize();
++		cVector3f vUp = cVector3f(0.0f, 1.0f, 0.0f);
++		cVector3f vSide = cMath_Vector3Cross(vFlat, vUp);
++		if (bMirrored) vSide = vSide * -1.0f;
++		cMatrixf mtxFlat = cMath_MatrixUnitVectors(vFlat * fUnit, vUp * fUnit, vSide * fUnit, a_mtxAt.GetTranslation());
++		return mtxFlat;
++	}
++
++	// BunkerVR: a case out of the gun is gone: its chamber empty, its bone back in
++	// it (hidden), as the game's own emptying leaves them.
++	void VRShellGone(cMeshEntity@ apFunctions, uint alChamber)
++	{
++		mvVRShellState[alChamber] = 4;
++		mvBulletChambers[alChamber].mState = eBulletChamberState_Empty;
++		cBoneState@ pShell = apFunctions !is null ? apFunctions.GetBoneStateFromName(mvBulletChambers[alChamber].msBoneName) : null;
++		if (pShell !is null) pShell.SetMatrix(mvBulletChambers[alChamber].mtxDefaultLocalTransform);
++		UpdateBulletVisibility();
++	}
++
++	// BunkerVR: every case on its way out gone at once (the gun put away).
++	void VRShellsAllGone(cMeshEntity@ apFunctions)
++	{
++		VRShellsSized(mvBulletChambers.size());
++		for (uint i = 0; i < mvBulletChambers.size(); ++i)
++		{
++			if (mvVRShellState[i] >= 1 && mvVRShellState[i] <= 3 && mvBulletChambers[i].mState == eBulletChamberState_Spent) VRShellGone(apFunctions, i);
++		}
++		mbVRShellsLeaving = false;
++		cScript_SetGlobalVarInt("BunkerVR_ShellsOut", 0);
++	}
++
++	// BunkerVR: the cases' bones where they are: sliding, along their chambers as the
++	// cylinder is now; falling and lying, in the world.
++	void VRPlaceShells(cMeshEntity@ apFunctions)
++	{
++		if (apFunctions is null || mvVRShellState.length() < mvBulletChambers.size()) return;
++		cBoneState@ pCylinder = apFunctions.GetBoneStateFromName("j_cylinder");
++		for (uint i = 0; i < mvBulletChambers.size(); ++i)
++		{
++			int lState = mvVRShellState[i];
++			if (lState < 1 || lState > 3 || mvBulletChambers[i].mState != eBulletChamberState_Spent) continue;
++			cBoneState@ pShell = apFunctions.GetBoneStateFromName(mvBulletChambers[i].msBoneName);
++			if (pShell is null) continue;
++			if (lState == 1)
++			{
++				if (pCylinder is null) continue;
++				cMatrixf mtxSeat = cMath_MatrixMul(pCylinder.GetWorldMatrix(), mvVRShellRel[i]);
++				cVector3f vOut = cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxSeat, cVector3f(1.0f, 0.0f, 0.0f)));
++				mtxSeat.SetTranslation(mtxSeat.GetTranslation() + vOut * mvVRShellSlide[i]);
++				pShell.SetWorldMatrix(mtxSeat);
++			}
++			else pShell.SetWorldMatrix(mvVRShellAt[i]);
++		}
++	}
++
++	// BunkerVR: sizes the cases' lists to the number of chambers.
++	void VRShellsSized(uint alCount)
++	{
++		if (mvVRShellState.length() != alCount)
++		{
++			mvVRShellState.resize(alCount);
++			for (uint i = 0; i < alCount; ++i) mvVRShellState[i] = 0;
++			mvVRShellSlide.resize(alCount);
++			mvVRShellSpeed.resize(alCount);
++			mvVRShellRel.resize(alCount);
++			mvVRShellAt.resize(alCount);
++			mvVRShellVel.resize(alCount);
++			mvVRShellSpinNow.resize(alCount);
++			mvVRShellFloor.resize(alCount);
++			mvVRShellBounced.resize(alCount);
++			mvVRShellLying.resize(alCount);
++		}
++		if (mvVRGunSeen.length() != 4)
++		{
++			mvVRGunSeen.resize(4);
++			mvVRGunWorld.resize(4);
++			mvVRGunWhen.resize(4);
++			mlVRGunSeen = 0;
++		}
++	}
++
++	// BunkerVR: a number with one place after the point, for the log.
++	tString VRFixed1(float afX)
++	{
++		float fR = cMath_Abs(afX) * 10.0f + 0.5f;
++		int lTenths = int(fR);
++		return (afX < 0.0f && lTenths > 0 ? "-" : "") + (lTenths / 10) + "." + (lTenths % 10);
++	}
++
++	//------------------------------------------------------------
++
+=400
++	[nosave] bool mbVRBulletCarried = false;	// BunkerVR: is the spare bullet being shown in the left hand?
++	[nosave] bool mbVRInsertDone = false;		// BunkerVR: the carried bullet has gone in; the hand is empty until it lets go
++	[nosave] bool mbVRInsertRefused = false;	// BunkerVR: the mod has been told this approach was refused
++	[nosave] int mlVREvent = 0;					// BunkerVR: news for the mod (1 bullet in, 2 shells out, 3 refused)
++	[nosave] float mfVRShellFall = -1.0f;		// BunkerVR: 0 while spent cases are on their way out, sliding or falling (-1 = none)
++	[nosave] float mfVRCloseSpeed = -1.0f;		// BunkerVR: the "close" animation's normal speed (-1 = not noted yet)
++	[nosave] array<int> mvVRShellState;			// BunkerVR: each chamber's case: 0 in, 1 sliding out, 2 falling, 3 lying, 4 gone (VRUpdateShells)...
++	[nosave] array<float> mvVRShellSlide;		// ...how far out (meters)...
++	[nosave] array<float> mvVRShellSpeed;		// ...how fast it slides (m/s)...
++	[nosave] array<cMatrixf> mvVRShellRel;		// ...where it sat, in the cylinder's terms...
++	[nosave] array<cMatrixf> mvVRShellAt;		// ...falling or lying: where it is in the world...
++	[nosave] array<cVector3f> mvVRShellVel;		// ...its velocity (m/s)...
++	[nosave] array<float> mvVRShellSpinNow;		// ...its tumble (radians a second)...
++	[nosave] array<float> mvVRShellFloor;		// ...the height of the floor below it...
++	[nosave] array<int> mvVRShellBounced;		// ...its bounces so far...
++	[nosave] array<float> mvVRShellLying;		// ...and how long it has lain
++	[nosave] bool mbVRShellsLeaving = false;	// BunkerVR: one has begun to come out since the cylinder was last full of spent ones (the mod told once)
++	[nosave] float mfVRShellOpenFor = 0.0f;		// BunkerVR: how long the cylinder has been open...
++	[nosave] float mfVRShellSinceStart = 100.0f;	// ...since a case last started out...
++	[nosave] int mlVRShellSounds = 0;			// ...the cases' sounds made so far (their names)
++	[nosave] array<cVector3f> mvVRGunSeen;		// BunkerVR: the cylinder as the game's level camera saw it, the last four updates (for the gun's jolt)...
++	[nosave] array<cVector3f> mvVRGunWorld;		// ...in the world...
++	[nosave] array<float> mvVRGunWhen;			// ...when (seconds on mfVRGunClock)
++	[nosave] int mlVRGunSeen = 0;
++	[nosave] float mfVRGunClock = 0.0f;
++	[nosave] int mlVRShellNotes = 0;
+end

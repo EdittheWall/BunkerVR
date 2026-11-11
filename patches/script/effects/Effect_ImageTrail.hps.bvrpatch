@@ -1,0 +1,12 @@
+BunkerVR patch 1
+file script/effects/Effect_ImageTrail.hps
+from 8a088bac606ffb5813e4cc42323a8b87fb1f16d502f222b81df2108834b14b74 7106
+to d041bf9f574aec48b321181f6b79451845f95a331b033cbefbdd2fbaa5c7d671 7455
+=310
++		////////////
++		// BunkerVR: off while each eye gets its own picture. The trail blends in the picture drawn before,
++		// which in VR is the other eye's: a second, shifted picture that lags behind the head and looks like
++		// double vision when hurt. Kept for a flat picture (the cutscene screen, loading).
++		if(cVR_Active()) fAmount = 0.0f;
++
+end

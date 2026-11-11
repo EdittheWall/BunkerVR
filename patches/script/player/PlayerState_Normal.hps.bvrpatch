@@ -1,0 +1,139 @@
+BunkerVR patch 1
+file script/player/PlayerState_Normal.hps
+from e088e497d3f07f990e2f3895387b0f30513be0a7477975d636c77d44f42126a2 9655
+to a35011479b3d943c11f7fa276c2de9c96fefcc1e46866b7f1ef1bb4dade9a413 15240
+=14
++// BunkerVR: a squeeze with nothing touched waits this long (seconds) for
++// the hand to touch something, while the grip stays squeezed (see
++// VRInteractWait).
++const float gfVRInteractWait = 0.35f;
++// BunkerVR: how many squeezes with a hand are logged (VRNoteSqueeze).
++const int glVRSqueezeLogsMost = 300;
+=156
+-1
++		if (pCam !is null && mPickBasics.UpdatePickCheck(pCam, true, -1, false, true)) // BunkerVR: with a hand, only what it touches
+=15
++		VRInteractWait(afTimeStep); // BunkerVR
+=72
+-4
++			// BunkerVR: with a hand, a squeeze made before the hand touches
++			// anything waits for it a moment (see VRInteractWait). Each
++			// squeeze with a hand is logged (VRNoteSqueeze).
++			if(mPickBasics.mbVRHandPick) VRNoteSqueeze(mPickBasics.GetFocusedEntity());
++			if(mPickBasics.GetFocusedEntity() is null)
+=1
+-11
++				mfVRInteractWait = mPickBasics.mbVRHandPick ? gfVRInteractWait : 0.0f;
++				return false;
+=1
++			mfVRInteractWait = 0.0f;
++
++			InteractWithFocused();
+=6
++
++	//------------------------------------------------------------
++
++	// BunkerVR: the game's own interaction with what is in focus, moved out of
++	// OnAction so that VRInteractWait can call it too.
++	void InteractWithFocused()
++	{
++		InteractWith(mPickBasics.GetFocusedEntity(), mPickBasics.GetFocusedBody(), mPickBasics.mvFocusPosition);
++	}
++
++	// The game's own interaction with an entity, from InteractWithFocused;
++	// also used for a button pushed in by a VR hand (_Global_VRPushed).
++	void InteractWith(iLuxEntity@ apEntity, iPhysicsBody@ apBody, const cVector3f &in avPos)
++	{
++		//Call entity
++		if(apEntity.OnInteract(0, apBody, avPos, ""))
++		{
++			//Force saving of entity
++			apEntity.SetFullGameSave(true);
++
++			//Event db trigger
++			if(EventDB_UseStandardTriggers())
++			{
++				EventDB_SetGlobalFactString("InteractEntity", apEntity.GetName());
++				EventDB_SetGlobalFactString("InteractEntityTag", apEntity.GetEventTag());
++				EventDB_SetGlobalFactString("InteractEntityInstanceTag", apEntity.GetEventInstanceTag());
++				EventDB_QueryToAll(0, "PlayerInteract");
++			}
++		}
++	}
++
++	// BunkerVR: a button pushed in by a VR hand (Prop_PlayerBody.hps
++	// VRPushButtons): the game's own interaction with it, as a squeeze on it
++	// would make, when the game lets the player interact (this state, no
++	// blockers, the entity's own "can interact"). Arguments: 0 the entity, 1
++	// its body (IDs), 2 where it is pushed. Returns whether it was pressed.
++	void _Global_VRPushed()
++	{
++		cScript_SetGlobalReturnBool(false);
++		cLuxPlayer@ pPlayer = cLux_GetPlayer();
++		if(pPlayer is null || pPlayer.GetCurrentStateId() != ePlayerState_Normal || mvInteractionBlockers.length() > 0) return;
++		iLuxEntity@ pEntity = cLux_ID_Entity(cScript_GetGlobalArgID(0));
++		iPhysicsBody@ pBody = cLux_ID_Body(cScript_GetGlobalArgID(1));
++		if(pEntity is null || pBody is null || pEntity.CanInteract(0, pBody) == false) return;
++		InteractWith(pEntity, pBody, cScript_GetGlobalArgVector3f(2));
++		cScript_SetGlobalReturnBool(true);
++	}
++
++	//------------------------------------------------------------
++
++	// BunkerVR: a squeeze that came before the hand touched anything. The game
++	// takes hold only at the moment the interact button goes down, of what is
++	// in focus then, so a hand closed a moment before it reached a handle
++	// would take nothing and have to open and close again. Instead, while the
++	// grip stays squeezed, the first thing the hand touches within
++	// gfVRInteractWait is taken hold of, as if the squeeze had come then.
++	void VRInteractWait(float afTimeStep)
++	{
++		if(mfVRInteractWait <= 0.0f) return;
++		mfVRInteractWait -= afTimeStep;
++		if(cInput_IsTriggered(eAction_Interact) == false || mvInteractionBlockers.length() > 0 || mPickBasics.mbVRHandPick == false)
++		{
++			if(mlVRSqueezeLogs <= glVRSqueezeLogsMost)
++				Log("BunkerVR: squeeze " + mlVRSqueezeLogs + ": " + (cInput_IsTriggered(eAction_Interact) ? "the wait stopped" : "let go before the hand touched anything") + "\n");
++			mfVRInteractWait = 0.0f;
++			return;
++		}
++		if(mPickBasics.GetFocusedEntity() is null)
++		{
++			// The wait ran out with nothing taken: log what that hand's touch
++			// says, to help find out why.
++			if(mfVRInteractWait <= 0.0f && mlVRSqueezeLogs <= glVRSqueezeLogsMost)
++				Log("BunkerVR: squeeze " + mlVRSqueezeLogs + ": nothing taken in " + int(gfVRInteractWait * 1000.0f + 0.5f) + " ms (" + VRTouchSays(mPickBasics.mlVRPickHand) + ")\n");
++			return;
++		}
++		Log("BunkerVR: a squeeze made " + int((gfVRInteractWait - cMath_Max(mfVRInteractWait, 0.0f)) * 1000.0f + 0.5f) + " ms before the hand touched " + mPickBasics.GetFocusedEntity().GetName() + " takes hold of it\n");
++		mfVRInteractWait = 0.0f;
++		InteractWithFocused();
++	}
++
++	// BunkerVR: logs each squeeze with a hand, to diagnose grabs that fail:
++	// its number, the hand, the game's time, what is in focus (taken at once)
++	// or that it waits (VRInteractWait then logs what came of it), and what
++	// that hand's touch says. Only the first glVRSqueezeLogsMost are logged.
++	void VRNoteSqueeze(iLuxEntity@ apFocused)
++	{
++		mlVRSqueezeLogs++;
++		if(mlVRSqueezeLogs > glVRSqueezeLogsMost) return;
++		int lHand = mPickBasics.mlVRPickHand;
++		Log("BunkerVR: squeeze " + mlVRSqueezeLogs + " (" + (lHand == 0 ? "left" : (lHand == 1 ? "right" : "?")) + " hand, at " + int(cEngine_GetGameTime() * 1000.0) + " ms): " +
++			(apFocused !is null ? "takes " + apFocused.GetName() + " at once" : "nothing in focus yet, it waits") + " (" + VRTouchSays(lHand) + ")\n");
++	}
++
++	// BunkerVR: what a hand's touch currently reports, for the log
++	// (Prop_PlayerBody.hps VRHandTouchFind: "BunkerVR_TouchEntity0/1" and when).
++	tString VRTouchSays(int alHand)
++	{
++		if(alHand < 0 || alHand > 1) return "the hand not known";
++		tString sHand = alHand == 0 ? "0" : "1";
++		float fAge = float(cEngine_GetGameTime()) - cScript_GetGlobalVarFloat("BunkerVR_TouchTime" + sHand);
++		iLuxEntity@ pTouched = cLux_ID_Entity(cScript_GetGlobalVarID("BunkerVR_TouchEntity" + sHand));
++		return "its touch: " + (pTouched !is null ? pTouched.GetName() : "nothing") + ", said " + int(fAge * 1000.0f + 0.5f) + " ms ago";
++	}
+=95
++	[nosave] float mfVRInteractWait = 0.0f;	// BunkerVR: how much longer a squeeze waits for the hand to touch something
++	[nosave] int mlVRSqueezeLogs = 0;	// BunkerVR: squeezes with a hand so far (logged up to glVRSqueezeLogsMost; VRNoteSqueeze)
+end

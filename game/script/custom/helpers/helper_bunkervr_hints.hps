@@ -1,0 +1,71 @@
+// BunkerVR: the hints on the objects. A small label at the spot a hand is at,
+// in the game's own lettering, saying how the thing is worked in VR, shown
+// until the player has learned it. The mod has every hint's words
+// (BunkerVR\src\hints.cpp) and draws the labels; the scripts say which hint
+// each hand is at and where (cVR_Hint, every update while it is so), and
+// when what a hint teaches has been done (cVR_HintUsed). The body script
+// chooses (VRUpdateHints, PlayerBodyHandler.hps); other scripts that know
+// their thing better offer theirs through BunkerVR_HintOffer (the shotgun,
+// the buttons a hand pushes, the number lock).
+
+// What kind of thing an empty hand is at, besides the game's own kind (its
+// crosshair, GetInteractIconId): some things share one (a number lock and a
+// wall map both "examine", the storage box "carry", a note "pick up").
+const int glBunkerVR_HintThingOther = 0;
+const int glBunkerVR_HintThingNote = 1;		// a note or a photo (Prop_Readable): into the inventory's notes
+const int glBunkerVR_HintThingDogTag = 2;	// a dogtag or the code sign (Prop_ReadableDogTag): held and read
+const int glBunkerVR_HintThingLock = 3;		// a number lock (Prop_CombinationLock): a fingertip takes it
+const int glBunkerVR_HintThingBox = 4;		// the storage box (Prop_AuxiliaryInventory)
+const int glBunkerVR_HintThingMap = 5;		// a wall map (Area_Zoom)
+const int glBunkerVR_HintThingLadder = 6;	// a ladder (Area_Ladder)
+
+// An offer is kept this long (seconds of game time).
+const float gfBunkerVR_HintOfferFresh = 0.25f;
+
+// The hint for an empty hand at a thing of the game's kind alCrossHair
+// (eCrossHairState_...) and of the mod's kind alThing (above): its key in the
+// mod's table, or "" for none. (Script test: test_hints.hps.)
+tString BunkerVR_HintForThing(int alCrossHair, int alThing)
+{
+	if(alThing == glBunkerVR_HintThingNote) return alCrossHair == eCrossHairState_PickUp ? "note" : "";
+	if(alThing == glBunkerVR_HintThingDogTag) return "dogtag";
+	if(alThing == glBunkerVR_HintThingLock) return ""; // (the fingertip's own: offered by the buttons' code, VRPushButtons)
+	if(alThing == glBunkerVR_HintThingBox) return "box";
+	if(alThing == glBunkerVR_HintThingMap) return "map";
+	if(alThing == glBunkerVR_HintThingLadder) return "ladder";
+	if(alCrossHair == eCrossHairState_PickUp) return "take";
+	if(alCrossHair == eCrossHairState_PullDoor || alCrossHair == eCrossHairState_PullDoorHatch || alCrossHair == eCrossHairState_PullOut ||
+	   alCrossHair == eCrossHairState_PullSideways || alCrossHair == eCrossHairState_PullVertical) return "handle";
+	if(alCrossHair == eCrossHairState_PullLever || alCrossHair == eCrossHairState_PullLeverSmall) return "lever";
+	if(alCrossHair == eCrossHairState_Rotate || alCrossHair == eCrossHairState_RotateOneHanded) return "wheel";
+	if(alCrossHair == eCrossHairState_PushButton) return "press";
+	if(alCrossHair == eCrossHairState_Push) return "crate";
+	if(alCrossHair == eCrossHairState_CarryOneHanded) return "pick_up";
+	if(alCrossHair == eCrossHairState_ClimbLadder) return "ladder";
+	if(alCrossHair == eCrossHairState_ExitLevel) return "exit";
+	return "";
+}
+
+// A script that knows its thing offers the hint for a hand (0 left, 1 right) at
+// avAt in the world, every update while it is so; the body script takes it
+// before what the hand touches (VRUpdateHints).
+void BunkerVR_HintOffer(int alHand, const tString &in asKey, const cVector3f &in avAt)
+{
+	if(alHand < 0 || alHand > 1) return;
+	tString sHand = alHand == 0 ? "0" : "1";
+	cScript_SetGlobalVarString("BunkerVR_HintKey" + sHand, asKey);
+	cScript_SetGlobalVarVector3f("BunkerVR_HintAt" + sHand, avAt);
+	cScript_SetGlobalVarFloat("BunkerVR_HintTime" + sHand, float(cEngine_GetGameTime()));
+}
+
+// The offer for a hand, if fresh: its key ("" none) and where.
+tString BunkerVR_HintOffered(int alHand, cVector3f &out avAt)
+{
+	avAt = cVector3f(0.0f);
+	if(alHand < 0 || alHand > 1) return "";
+	tString sHand = alHand == 0 ? "0" : "1";
+	float fAge = float(cEngine_GetGameTime()) - cScript_GetGlobalVarFloat("BunkerVR_HintTime" + sHand);
+	if(fAge < -0.001f || fAge > gfBunkerVR_HintOfferFresh) return "";
+	avAt = cScript_GetGlobalVarVector3f("BunkerVR_HintAt" + sHand);
+	return cScript_GetGlobalVarString("BunkerVR_HintKey" + sHand);
+}

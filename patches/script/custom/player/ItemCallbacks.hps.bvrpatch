@@ -1,0 +1,32 @@
+BunkerVR patch 1
+file script/custom/player/ItemCallbacks.hps
+from 8c842857501e09a04f2a1f0d58e800638ee71b99cc6fd3b886f202b8174a134a 16669
+to af833d3854b1e82faa796d09e0e32f70b11144c7474df11cd2c2a6a18f0325c7 18045
+=225
++			// BunkerVR: in the headset the mask is taken into the hand and put
++			// on by bringing it to the face: requested here, done by VRUpdateMask
++			// in PlayerBodyHandler.hps (in a hand: put back; on the face: left
++			// on, as it comes off only by hand).
++			if (cVR_Active())
++			{
++				cScript_SetGlobalVarInt("BunkerVR_MaskAsked", 1);
++				return true;
++			}
+=225
++
++		// BunkerVR: when the flare burning in the hand (lit by its cord,
++		// PlayerState_UsingFlare.hps) is dropped from the inventory, the burning
++		// one falls instead of an unlit one. The game has just made the unlit one
++		// from the flare in the hand (ItemHandler.hps DropAsEntity names it after
++		// the item), so it is destroyed here.
++		tString sVRLitItem = cScript_GetGlobalVarString("BunkerVR_FlareLitItem");
++		if (asItemType == "Flare" && sVRLitItem != "" && asItemEntity != "" && cString_GetFirstStringPos(asItemEntity, sVRLitItem) == 0)
++		{
++			cLuxMap@ pVRMap = cLux_GetCurrentMap();
++			iLuxEntity@ pVRUnlit = pVRMap !is null ? pVRMap.GetEntityByName(asItemEntity) : null;
++			if (pVRUnlit !is null) pVRMap.DestroyEntity(pVRUnlit);
++			cScript_SetGlobalVarString("BunkerVR_FlareLitItem", ""); // (the game takes the item out of the inventory itself, next)
++			cScript_SetGlobalArgVector3f(0, cVector3f(0.0f));
++			cScript_RunGlobalFunc("State_UsingFlare", "", "_Global_VRDropLit");
++		}
+end

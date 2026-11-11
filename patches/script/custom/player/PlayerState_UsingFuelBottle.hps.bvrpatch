@@ -1,0 +1,22 @@
+BunkerVR patch 1
+file script/custom/player/PlayerState_UsingFuelBottle.hps
+from e83ecca6c646502b1d8be71fd2331b3c7172a03b16bbe87862b0968eaff89e15 3033
+to 0dc6fcc23d894c5bd49f8b30a4f92091ef6dab403090fec160a968d5add26804 3615
+=55
+-1
++	void OnUse()
+=1
++		// BunkerVR: in the headset the cork must be out first (pulled by the
++		// left hand: PlayerBodyHandler.hps VRUpdateLid). While it is corked,
++		// only a hint saying so is shown.
++		if(cVR_Active() && cScript_GetGlobalVarInt("BunkerVR_FuelOpen") != 1)
++		{
++			Hint_ShowHint("Hints", "HintVRFuelLid");
++			return;
++		}
+=14
++		// BunkerVR: in the headset a bottle is thrown by hand (the right grip
++		// held, then let go in a swing), not by the game's throw. This button
++		// still uses it on things, as above (the save lamp, the generator).
++		if (VRUsingItemModActive()) return;
+end

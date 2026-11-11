@@ -1,0 +1,26 @@
+BunkerVR patch 1
+file script/custom/player/PlayerState_UsingEmptyBottle.hps
+from 34fb606a0a2e72a82ce38c0ea7cf9c072392e630c553f1e049ffda90849087d7 3679
+to 3860058c03bbe334c5a5e3b8547f89cfe5833d33ca28d9c9f64bd6fa1eaa8645 4742
+=44
++
++		// BunkerVR: also what a thrown bottle or molotov breaks into, with its
++		// spill and the spill's fire and dust. The game preloads only the thrown
++		// ones here; the rest would load at the first break, freezing the game
++		// for about a second. By file name alone: the thrown bottles name their
++		// broken ones by a path on the game makers' own disk, and the game finds
++		// its files by name.
++		Entity_Preload("full_bottle_broken.ent");
++		Entity_Preload("empty_bottle_broken.ent");
++		Entity_Preload("molotov_cocktail_broken.ent");
++		Entity_Preload("fuel_spill.ent");
++		Entity_Preload("molotov_cocktail_fire_effects.ent");
++		ParticleSetting_PreloadParticles("molotov_fire.ps");
++		ParticleSetting_PreloadParticles("molotov_fire_02.ps");
++		cLux_PreloadParticleSystem("dust_impact_simple_oneshot.ps");
+=49
++		// BunkerVR: in the headset a bottle is thrown by hand (the right grip
++		// held, then let go in a swing), not by the game's throw. This button
++		// still uses it on things, as above (the fuel tap).
++		if (VRUsingItemModActive()) return;
+end

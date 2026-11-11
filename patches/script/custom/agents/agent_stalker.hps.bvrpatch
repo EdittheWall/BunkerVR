@@ -1,0 +1,15 @@
+BunkerVR patch 1
+file script/custom/agents/agent_stalker.hps
+from d882fd8082866f6f3de84a6a2dc542fd473943942089147d47b5a461a785ed15 650389
+to 62b4edbe5c5e710c95113dff2265abb4aaf923bd42711d660f583c86c03effb2 650875
+=16679
++		//////////////////////
++		// BunkerVR: where the Beast and the player are placed for the kill, and
++		// which Beast, so the VR view can turn to face it (PlayerBodyHandler.hps
++		// VRStartKillView).
++		cScript_SetGlobalVarVector3f("BunkerVR_KillBeastAt", vPos);
++		cScript_SetGlobalVarVector3f("BunkerVR_KillPlayerAt", vPlayerPos);
++		cScript_SetGlobalVarID("BunkerVR_KillBeast", mBaseObj.GetID());
++		cScript_SetGlobalVarFloat("BunkerVR_KillTime", float(cEngine_GetGameTime()));
++
+end

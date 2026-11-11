@@ -1,0 +1,68 @@
+BunkerVR patch 1
+file script/effects/Effect_Screen.hps
+from 830ad4dc767d0be7afa75628c3002865411f709dd849847b22fca43a91484b4e 9602
+to 7ce63de4e2ff3908fab172157c5126b09a4d67bb0bca3904ed774182416b33fa 12355
+=4
++// BunkerVR: 1 normally, 0 while the VR mod is running (see cScrEffect_Screen::Update).
++float gfVRScreenOverlayShown = 1.0f;
++
+=137
+-1
++		// BunkerVR: in the headset these flat pictures (blood on the screen,
++		// dark edges) hang in front of the eyes like a board, so the game
++		// draws them fully see-through there (gfVRScreenOverlayShown is 0 in
++		// VR) and the VR mod draws them itself, across both eyes. It is told
++		// how strong each one is in cScrEffect_Screen::Update.
++		mpEffect.SetScreenMaterialAlpha(mlID, mfAlpha * gfVRScreenOverlayShown);
+=30
+-1
++		mpEffect.SetScreenMaterialAlpha(mlID, mfAlpha * gfVRScreenOverlayShown); // BunkerVR: see Update
+=229
++		///////////////
++		// BunkerVR: is the VR mod running? It answers through the camera: after
++		// setting a special roll value, reading the camera's matrix returns
++		// the mod's data (12345 as its first number) instead.
++		gfVRScreenOverlayShown = 1.0f;
++		cLuxPlayer@ pVRPlayer = cLux_GetPlayer();
++		cCamera@ pVRCam = pVRPlayer !is null ? pVRPlayer.GetCamera() : null;
++		if(pVRCam !is null)
++		{
++			float fVRRealRoll = pVRCam.GetRoll();
++			pVRCam.SetRoll(7006.0f);
++			cVector3f vVRStatus = pVRCam.GetMatrix().GetTranslation();
++			pVRCam.SetRoll(fVRRealRoll);
++			if(vVRStatus.x > 12344.0f && vVRStatus.x < 12346.0f) gfVRScreenOverlayShown = 0.0f;
++		}
++		
++		///////////////
++		// BunkerVR: tell the mod how strongly each kind of picture should
++		// show; it draws them across the eyes. The numbers travel in the
++		// camera's position, which is put straight back.
++		if(gfVRScreenOverlayShown < 0.5f && pVRCam !is null)
++		{
++			float fMajor = 0.0f, fMinor = 0.0f, fEven = 0.0f, fRed = 0.0f, fDark = 0.0f, fMask = 0.0f;
++			for(int i = 0; i < mvScreenMaterials.size(); ++i)
++			{
++				tString sMat = mvScreenMaterials[i].msMaterial;
++				float fA = mvScreenMaterials[i].mfAlpha;
++				if(cString_GetFirstStringPos(sMat, "damage_screen_major") >= 0)		fMajor = cMath_Max(fMajor, fA);
++				else if(cString_GetFirstStringPos(sMat, "damage_screen_minor") >= 0)	fMinor = cMath_Max(fMinor, fA);
++				else if(cString_GetFirstStringPos(sMat, "player_damage_screen") >= 0)	fEven = cMath_Max(fEven, fA);
++				else if(cString_GetFirstStringPos(sMat, "player_health_screen") >= 0)	fRed = cMath_Max(fRed, fA);
++				else if(cString_GetFirstStringPos(sMat, "vignette_screen") >= 0)		fDark = cMath_Max(fDark, fA);
++				else if(cString_GetFirstStringPos(sMat, "gasmask_screen") >= 0)		fMask = cMath_Max(fMask, fA);
++			}
++			
++			cVector3f vVRRealPos = pVRCam.GetPosition();
++			float fVRRoll = pVRCam.GetRoll();
++			pVRCam.SetPosition(cVector3f(fMajor, fMinor, fEven));
++			pVRCam.SetRoll(7023.0f);
++			pVRCam.GetMatrix();
++			pVRCam.SetPosition(cVector3f(fRed, fDark, fMask));
++			pVRCam.SetRoll(7024.0f);
++			pVRCam.GetMatrix();
++			pVRCam.SetRoll(fVRRoll);
++			pVRCam.SetPosition(vVRRealPos);
++		}
++		
+end

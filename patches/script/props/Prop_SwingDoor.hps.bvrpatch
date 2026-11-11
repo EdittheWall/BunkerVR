@@ -1,0 +1,261 @@
+BunkerVR patch 1
+file script/props/Prop_SwingDoor.hps
+from 1f269861b3f362cde0e76147b65e2cadc77bc4cf6bd187a0c71153f262788bdb 32898
+to c6b3b20db16f0c99f80d7835a0ac569048f31a418123bc3c9b3c48041ebdead2 44161
+=14
++// BunkerVR: a VR hand takes hold of a door's handle when its palm is within this distance of it (meters).
++const float gfVRDoorGripReach = 0.25f;
++
+=571
++		mbVRWaitForTurn = false; // BunkerVR
+=7
++				VRBuzz(2, 0.10f, 0.9f); // BunkerVR: the holding hand feels the rattle
+=11
+-2
++			// BunkerVR: a shut door taken hold of by a VR hand stays latched
++			// until the hand turns its handle (see the VR part of
++			// PlayerState_Interact_SwingDoor.hps, which calls _Global_VRUnlatch),
++			// when the mod's "door handles need turning" is on (option 30). A
++			// door without a handle of its own opens on taking hold.
++			mbVRWaitForTurn = mbClosed && mpHandleBody !is null && VRHandHolds() && VROption(30) == 1;
++			if(mbVRWaitForTurn == false)
++			{
++				SetClosed(false, true);
++				PlayAnimation(msHandleDownAnimation, 0.25f);
++			}
+=423
++
++	//------------------------------------------------------------
++
++	/////////////////////////////////////////
++	// BunkerVR: the door taken hold of by a VR hand.
++	// The VR part of PlayerState_Interact_SwingDoor.hps calls these.
++
++	// Where a VR hand whose palm is at the given place (argument 0) takes hold
++	// of this door: the nearest point on one of its handles, if one is within
++	// reach (`gfVRDoorGripReach`); _Global_VRGripFound then says whether one was.
++	//
++	// None of The Bunker's doors has a handle of its own (their HandleBody is
++	// empty): the pull bars are part of the door's own shape. Their positions,
++	// taken from the door models, are in the model's space with its own scale
++	// applied; each door has the same bar on both faces:
++	//   metal doors (parts "door" and "frame"; plain, window, mirrored, 90, 100):
++	//       x -0.59, from 1.09 to 1.35 m up, z -0.234 and +0.016
++	//   wooden and de Lisle doors (parts "door" and "hinge"):
++	//       x +0.59, from 1.33 to 1.53 m up, z -0.11 and +0.11
++	//   the mirrored wooden door (part "door_2"): the same at x -0.59
++	// The bronze door has handle parts of its own ("handle1", "handle2"), and
++	// a door with a separate handle body (other doors) has that. The size the
++	// map puts a door at is applied as its bars are placed.
++	void _Global_VRFindGrip()
++	{
++		cVector3f vPalm = cScript_GetGlobalArgVector3f(0);
++		mbVRGripFound = false;
++		mvVRGripBest = vPalm;
++		mfVRGripBestDist = gfVRDoorGripReach;
++
++		mvVRGripAxis = cVector3f(0.0f);
++		mvVRGripOut = cVector3f(0.0f);
++		if(mpHandleBody !is null) VRTryGrip(mpHandleBody.GetLocalPosition(), vPalm);
++
++		cMeshEntity@ pMesh = mBaseObj.GetMeshEntity();
++		if(pMesh !is null)
++		{
++			cSubMeshEntity@ pRing = VRDoorPart(pMesh, "handle1");
++			if(pRing !is null && VRTryGrip(pRing.GetWorldCenterPosition(), vPalm)) { mvVRGripAxis = cVector3f(0.0f); mvVRGripOut = cVector3f(0.0f); }
++			@pRing = VRDoorPart(pMesh, "handle2");
++			if(pRing !is null && VRTryGrip(pRing.GetWorldCenterPosition(), vPalm)) { mvVRGripAxis = cVector3f(0.0f); mvVRGripOut = cVector3f(0.0f); }
++
++			// Which kind of door this is, and the part that moves with it.
++			cSubMeshEntity@ pDoorPart = null;
++			float fBarX = 0.0f, fBarLow = 0.0f, fBarHigh = 0.0f, fBarZA = 0.0f, fBarZB = 0.0f;
++			if(VRDoorPart(pMesh, "frame") !is null && VRDoorPart(pMesh, "door") !is null)
++			{
++				@pDoorPart = VRDoorPart(pMesh, "door");
++				fBarX = -0.59f; fBarLow = 1.09f; fBarHigh = 1.35f; fBarZA = -0.234f; fBarZB = 0.016f;
++			}
++			else if(VRDoorPart(pMesh, "hinge") !is null && VRDoorPart(pMesh, "door") !is null)
++			{
++				@pDoorPart = VRDoorPart(pMesh, "door");
++				fBarX = 0.59f; fBarLow = 1.33f; fBarHigh = 1.53f; fBarZA = -0.11f; fBarZB = 0.11f;
++				// The window door's bar is 22 cm higher (wooden_door_window.dae:
++				// its mounts at 1.51 to 1.55 m and 1.75 to 1.79 m, the plain door's
++				// at 1.29 to 1.33 and 1.53 to 1.58). Told apart by its window part.
++				if(VRDoorPart(pMesh, "window") !is null) { fBarLow = 1.55f; fBarHigh = 1.75f; }
++			}
++			else if(VRDoorPart(pMesh, "door_2") !is null)
++			{
++				@pDoorPart = VRDoorPart(pMesh, "door_2");
++				fBarX = -0.59f; fBarLow = 1.33f; fBarHigh = 1.53f; fBarZA = -0.11f; fBarZB = 0.11f;
++			}
++
++			if(pDoorPart !is null)
++			{
++				// The part's place and turn in the world, without its size (the
++				// bar positions above already have the size applied).
++				cMatrixf mtxPart = pDoorPart.GetWorldMatrix();
++				cVector3f vAxisX = cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxPart, cVector3f(1.0f, 0.0f, 0.0f)));
++				cVector3f vAxisY = cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxPart, cVector3f(0.0f, 1.0f, 0.0f)));
++				cVector3f vAxisZ = cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxPart, cVector3f(0.0f, 0.0f, 1.0f)));
++				cVector3f vOrigin = mtxPart.GetTranslation();
++				// The size of the part's own model is included above; the size
++				// the map puts the whole door at is not, and the bars move with it
++				// (the trenches' steel doors are at 0.85, and without this the hand
++				// closes 9 cm off the bar, towards the door's edge). Read off the
++				// door's whole model.
++				float fMapSize = cMath_MatrixMul3x3(pMesh.GetWorldMatrix(), cVector3f(1.0f, 0.0f, 0.0f)).Length();
++				if(fMapSize < 0.5f || fMapSize > 2.0f) fMapSize = 1.0f;
++				if(mbVRMapSizeLogged == false)
++				{
++					mbVRMapSizeLogged = true;
++					Log("BunkerVR: the door " + mBaseObj.GetName() + ": its pull bars placed at " + int(fMapSize * 100.0f + 0.5f) + "% of the model's size (the door's size in the map)\n");
++				}
++				for(int lFace = 0; lFace < 2; ++lFace)
++				{
++					float fZ = (lFace == 0 ? fBarZA : fBarZB) * fMapSize;
++					cVector3f vLow = vOrigin + vAxisX * (fBarX * fMapSize) + vAxisY * (fBarLow * fMapSize) + vAxisZ * fZ;
++					cVector3f vHigh = vOrigin + vAxisX * (fBarX * fMapSize) + vAxisY * (fBarHigh * fMapSize) + vAxisZ * fZ;
++					// The nearest point on the bar to the palm.
++					cVector3f vAlong = vHigh - vLow;
++					float fT = cMath_Clamp(cMath_Vector3Dot(vPalm - vLow, vAlong) / cMath_Max(cMath_Vector3Dot(vAlong, vAlong), 0.000001f), 0.0f, 1.0f);
++					if(VRTryGrip(vLow + vAlong * fT, vPalm))
++					{
++						mvVRGripAxis = vAxisY; // the hand closes around the bar
++						// and faces the door from this side: the bar is on the face
++						// away from the middle of the door's thickness.
++						mvVRGripOut = vAxisZ * (fZ > (fBarZA + fBarZB) * 0.5f * fMapSize ? 1.0f : -1.0f);
++					}
++				}
++			}
++		}
++		cScript_SetGlobalReturnVector3f(mvVRGripBest);
++	}
++
++	// The line along the handle the hand holds (a pull bar), or nothing (0 0 0)
++	// for a ring or a handle of its own: the hand then turns freely.
++	void _Global_VRGripAxis()
++	{
++		cScript_SetGlobalReturnVector3f(mbVRGripFound ? mvVRGripAxis : cVector3f(0.0f));
++	}
++
++	// Which way the door's face looks where the bar held is (0 0 0: not a bar).
++	void _Global_VRGripOut()
++	{
++		cScript_SetGlobalReturnVector3f(mbVRGripFound ? mvVRGripOut : cVector3f(0.0f));
++	}
++
++	void _Global_VRGripFound()
++	{
++		cScript_SetGlobalReturnBool(mbVRGripFound);
++	}
++
++	// Keeps avPoint as the grip if it is the nearest to the palm so far.
++	bool VRTryGrip(const cVector3f &in avPoint, const cVector3f &in avPalm)
++	{
++		float fDist = (avPoint - avPalm).Length();
++		if(fDist >= mfVRGripBestDist) return false;
++		mfVRGripBestDist = fDist;
++		mvVRGripBest = avPoint;
++		mbVRGripFound = true;
++		return true;
++	}
++
++	// One of the door's parts, by the name it has in the door's model.
++	cSubMeshEntity@ VRDoorPart(cMeshEntity@ apMesh, const tString &in asPart)
++	{
++		cSubMeshEntity@ pPart = apMesh.GetSubMeshEntityName(asPart);
++		if(pPart !is null) return pPart;
++		int lIndex = apMesh.GetSubMeshEntityIndex(mBaseObj.GetName() + "_" + asPart);
++		if(lIndex >= 0) return apMesh.GetSubMeshEntity(lIndex);
++		return null;
++	}
++
++	// The line the handle turns about (the door's own face direction, when
++	// the handle has no hinge of its own).
++	void _Global_VRGetHandleAxis()
++	{
++		cVector3f vAxis = mvDoorwayDir;
++		if(mpHandleJoint !is null) vAxis = mpHandleJoint.GetPinDir();
++		if(vAxis.Length() < 0.001f) vAxis = cMath_Vector3Cross(mpDoorBody.GetLocalPosition() - mpHingeJoint.GetPivotPoint(), mpHingeJoint.GetPinDir());
++		cScript_SetGlobalReturnVector3f(cMath_Vector3Normalize(vAxis));
++	}
++
++	// Is the door still latched, waiting for its handle to be turned?
++	void _Global_VRWaitingForTurn()
++	{
++		cScript_SetGlobalReturnBool(mbVRWaitForTurn && mbClosed);
++	}
++
++	// The handle has been turned far enough: the latch lets go, with the
++	// game's own handle movement and sound.
++	void _Global_VRUnlatch()
++	{
++		if(mbVRWaitForTurn == false) return;
++		mbVRWaitForTurn = false;
++		if(mbLocked) return;
++		SetClosed(false, true);
++		PlayAnimation(msHandleDownAnimation, 0.25f);
++	}
++
++	// A locked handle turned against its lock: the rattle, as when taking hold.
++	void _Global_VRRattle()
++	{
++		if(mbLocked == false || mfInteractSoundCount > 0) return;
++		Effect_Rumble_Start(0.3, 0.5);
++		mBaseObj.PlaySound("InteractLocked", msInteractLockedSound, true, true);
++		mfInteractSoundCount = 0.4f;
++		PlayAnimation(msHandleLockedAnimation, 0.25f);
++		VRBuzz(2, 0.10f, 0.9f);
++	}
++
++	// Is a VR hand holding something (the mod answers through the camera:
++	// special roll 7002, see camera.cpp)?
++	bool VRHandHolds()
++	{
++		cCamera@ pCam = cLux_GetPlayer().GetCamera();
++		if(pCam is null) return false;
++		float fRealRoll = pCam.GetRoll();
++		pCam.SetRoll(7002.0f);
++		cVector3f vAnswer = pCam.GetMatrix().GetTranslation();
++		pCam.SetRoll(fRealRoll);
++		return vAnswer.x > 12344.0f && vAnswer.x < 12346.0f && vAnswer.y > 0.5f;
++	}
++
++	// One of the mod's VR settings (special roll 7060); -1 without the mod.
++	int VROption(int alIndex)
++	{
++		cCamera@ pCam = cLux_GetPlayer().GetCamera();
++		if(pCam is null) return -1;
++		float fRealRoll = pCam.GetRoll();
++		cVector3f vRealPos = pCam.GetPosition();
++		pCam.SetPosition(cVector3f(float(alIndex), 0.0f, 0.0f));
++		pCam.SetRoll(7060.0f);
++		cVector3f vAnswer = pCam.GetMatrix().GetTranslation();
++		pCam.SetPosition(vRealPos);
++		pCam.SetRoll(fRealRoll);
++		if(vAnswer.x < 12344.0f || vAnswer.x > 12346.0f) return -1;
++		return int(vAnswer.y + 0.5f);
++	}
++
++	// Buzzes a controller (special roll 7064): 0 left, 1 right, 2 the holding hand.
++	void VRBuzz(int alHand, float afSeconds, float afStrength)
++	{
++		cCamera@ pCam = cLux_GetPlayer().GetCamera();
++		if(pCam is null) return;
++		float fRealRoll = pCam.GetRoll();
++		cVector3f vRealPos = pCam.GetPosition();
++		pCam.SetPosition(cVector3f(float(alHand), afSeconds, afStrength));
++		pCam.SetRoll(7064.0f);
++		pCam.GetMatrix();
++		pCam.SetPosition(vRealPos);
++		pCam.SetRoll(fRealRoll);
++	}
+=114
++	[nosave] bool mbVRWaitForTurn = false;	// BunkerVR: shut and taken hold of by a VR hand: latched until its handle is turned
++	[nosave] bool mbVRGripFound = false;	// BunkerVR: did _Global_VRFindGrip find a handle within reach?
++	[nosave] bool mbVRMapSizeLogged = false;	// BunkerVR: the door's size in the map has been written to the log
++	[nosave] cVector3f mvVRGripBest = cVector3f(0.0f);	// BunkerVR: the nearest point on a handle found so far
++	[nosave] float mfVRGripBestDist = 0.0f;	// BunkerVR: and how far it is from the palm
++	[nosave] cVector3f mvVRGripAxis = cVector3f(0.0f);	// BunkerVR: the line along the bar of the grip found (0 0 0: not a bar)
++	[nosave] cVector3f mvVRGripOut = cVector3f(0.0f);	// BunkerVR: which way the door's face at that bar looks
+end

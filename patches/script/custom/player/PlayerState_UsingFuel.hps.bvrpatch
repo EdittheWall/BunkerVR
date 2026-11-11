@@ -1,0 +1,25 @@
+BunkerVR patch 1
+file script/custom/player/PlayerState_UsingFuel.hps
+from c880f46f5ea20a9a3fe25cf612562ccf9a0d69189ed7fe3b7ff7dc93fdd7a8cd 11814
+to afd4b932bd175e697999f65ad64b020bd783d49c90a9ecbb0555d76a6fbbaf1a 12466
+=296
+-2
++	void OnUse()
++	{
++		// BunkerVR: in the headset the lid must be off first (opened by the
++		// left hand: PlayerBodyHandler.hps VRUpdateLid). While it is closed,
++		// only a hint saying so is shown.
++		if(cVR_Active() && cScript_GetGlobalVarInt("BunkerVR_FuelOpen") != 1)
++		{
++			Hint_ShowHint("Hints", "HintVRFuelLid");
++			return;
++		}
++
+=19
++
++		// BunkerVR: in the headset the fuel is splashed out by a flick of the
++		// open can (VRUpdateFuelSplash in PlayerBodyHandler.hps), as far and in
++		// the direction it is flicked, not by the game's throw ahead of the eyes
++		// (the rule for hands-on items: no button does what the hands do).
++		if (cVR_Active()) return;
+end

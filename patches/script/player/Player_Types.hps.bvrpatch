@@ -1,0 +1,19 @@
+BunkerVR patch 1
+file script/player/Player_Types.hps
+from f75d0a92e145a8632aaf279973b0c9f55907135229ac5b2772a74171d0af6173 7970
+to 2f1b5beffa01e3fb402d12bfbdfdeeb1ea544b47c600c2f013db80b67a76e94e 8428
+=260
+-3
++// BunkerVR: 56 cm across instead of the game's 70, so a door swung open doesn't hit
++// the body. Still wide enough that the eyes, some 15 to 19 cm ahead of the body's
++// center, stay inside it and don't look into walls.
++const cVector3f gvBodySize = cVector3f(0.56, 1.95, 0.56);
++const cVector3f gvBodyCrouchSize = cVector3f(0.56, 1.15, 0.56);
++const cVector3f gvBodyHideSize = cVector3f(0.56, 0.6, 0.56);
+=2
+-1
++// BunkerVR: the game uses layer 1, drawn on top of the world so that the arms
++// and held things never poke into walls. In VR the hands are the player's own,
++// so they are drawn in the world like everything else (layer 0).
++int glArmsRenderLayer = 0;
+end

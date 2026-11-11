@@ -1,0 +1,16 @@
+BunkerVR patch 1
+file script/player/PlayerState_Interact_Lever.hps
+from e1c8dafb5470d377698579113412ef39f57bed28c6b87f6194be01a213bcb10a 6282
+to 561838883d9cb6397334b401280e071dd385db703a49954f6ec8dbb0bdd2ee01 6778
+=138
++	// BunkerVR: a lever held by a VR hand (see VRTurnByHand in
++	// PlayerState_Interact_RotateBase.hps). No ticks: the hand feels it
++	// stop at each end (VRHoldFeelStop).
++	tString VRHoldWhat() override { return "the lever"; }
++	// Lighter than the default: the lever catches up half the way to the hand
++	// each update instead of a quarter, with twice the speed and push.
++	float VRHandStrength() override { return 2.0f; }
++
++	//------------------------------------------------------------
++
+end

@@ -1,0 +1,8 @@
+BunkerVR patch 1
+file script/custom/modules/GameStatsHandler.hps
+from c0ae0672a025f1fb3d37b0ef9b13f17ca585c1f505a0f88f18fc795c80b6997a 28838
+to a3292842999669e7ade27af8625ebedfc0fdceee95768de20455b60667bb1698 28921
+=390
+-1
++		ImGui_SetShowMouseAutomatically(cVR_Active() == false); // BunkerVR: none in the headset, which uses the mod's own cursor
+end

@@ -1,0 +1,111 @@
+BunkerVR patch 1
+file script/player/PlayerState_Interact_RotateBase.hps
+from 42d18dd53c5de9130efcdab2b238ca8f05b18b447ba8e2a1e165fd3cc0938002 27337
+to 0cfdf0671a3bb80a0cb493ad0ef0deab95ea355da0518c6afd3348b33612a60c 32076
+=108
++	// BunkerVR: what a VR hand holds here, for the log, and how far it turns
++	// between two ticks in the hand (radians; 0: no ticks).
++	tString VRHoldWhat() { return "the thing on a hinge"; }
++	float VRTickAngle() { return 0.0f; }
++	// BunkerVR: how readily it follows the hand. The share caught up each
++	// update, the top speed and the most push are all multiplied by this
++	// (1: the default; levers use 2 to feel lighter).
++	float VRHandStrength() { return 1.0f; }
++	// BunkerVR: is what the hand holds a rim around the hinge (a wheel's),
++	// held like a door's bar?
++	bool VRHoldsRim() { return false; }
++
++	//------------------------------------------------------------
++
++	// BunkerVR: a lever or wheel held by a VR hand (see VRHoldSpot in
++	// PlayerState_Interact.hps). It turns so that the spot held follows the
++	// hand around the hinge: a quarter of the angle between them each
++	// update, no faster than its own top speed, driven by the game's own
++	// turning push (as for the mouse: the torque is capped at the object's
++	// own maximum, so a stiff one lags and resists). The spot stays on the
++	// object, so a wheel can be turned round and round. The game's turning
++	// of the view (towards something to look at, or to keep the spot on
++	// the screen) and its moving of the player to a standing spot are left out.
++	void VRTurnByHand(iPhysicsBody@ apBody, iPhysicsJoint@ apJoint, int alHand, const cVector3f &in avPalm, float afTimeStep)
++	{
++		cVector3f vSpot = VRHoldSpot(apBody, alHand, avPalm, VRHoldWhat());
++		if(VRHoldPulledOff(alHand, avPalm, vSpot, afTimeStep))
++		{
++			cLux_GetPlayer().ChangeState(mlPreviousState);
++			return;
++		}
++
++		// How far around the hinge the hand is from the spot, both seen along
++		// its pin (too near the pin, the angle means nothing).
++		cVector3f vPin = cMath_Vector3Normalize(apJoint.GetPinDir());
++		cVector3f vPivot = apJoint.GetPivotPoint();
++		cVector3f vToSpot = vSpot - vPivot;
++		vToSpot = vToSpot - vPin * cMath_Vector3Dot(vPin, vToSpot);
++
++		// A wheel's rim is held like a door's bar, so the hand twists about
++		// the rim instead of spinning around through the wheel: the bar runs
++		// along the rim where it is held (square to the axle and to the
++		// direction out from it), with the hand facing into the wheel.
++		if(VRHoldsRim() && vToSpot.Length() > 0.03f)
++		{
++			cVector3f vOut = vPin;
++			if(cMath_Vector3Dot(vOut, cLux_GetPlayer().GetCamera().GetPosition() - vSpot) < 0.0f) vOut = vOut * -1.0f;
++			VRHoldSetBar(alHand, cMath_Vector3Normalize(cMath_Vector3Cross(vPin, vToSpot)), vOut);
++		}
++		cVector3f vToHand = avPalm - vPivot;
++		vToHand = vToHand - vPin * cMath_Vector3Dot(vPin, vToHand);
++		float fWanted = 0.0f;
++		float fGap = 0.0f;
++		float fStrength = VRHandStrength();
++		float fMostSpeed = mfMoveMaxSpeed * fStrength;
++		if(vToSpot.Length() > 0.03f && vToHand.Length() > 0.03f)
++		{
++			float fAngle = cMath_ATan2(cMath_Vector3Dot(vPin, cMath_Vector3Cross(vToSpot, vToHand)), cMath_Vector3Dot(vToSpot, vToHand));
++			float fCatchUp = cMath_Min(gfVRHoldCatchUp * fStrength, 0.75f);
++			fWanted = cMath_Clamp(fAngle * (fCatchUp / cMath_Max(afTimeStep, 0.004f)), -fMostSpeed, fMostSpeed);
++			fGap = cMath_Abs(fAngle) * vToSpot.Length();
++		}
++		float fTurning = cMath_Vector3Dot(vPin, apBody.GetAngularVelocity());
++		VRHoldFeelStop(alHand, mfVRHoldLastWanted, fTurning, fGap, afTimeStep);
++		mfVRHoldLastWanted = fWanted;
++
++		// A tick in the hand for every VRTickAngle turned (a wheel's notches).
++		float fTick = VRTickAngle();
++		if(fTick > 0.0f)
++		{
++			mfVRHoldTurned += cMath_Abs(fTurning) * afTimeStep;
++			if(mfVRHoldTurned >= fTick)
++			{
++				mfVRHoldTurned = 0.0f;
++				VRBuzzHand(alHand, 0.015f, 0.3f);
++			}
++		}
++
++		// The game's own turning push (as in Update, for the mouse).
++		mfRotSpeed = fWanted;
++		cVector3f vBodyVel = apBody.GetAngularVelocity();
++		cVector3f vHingeVel = vPin * cMath_Vector3Dot(vPin, vBodyVel);
++		cVector3f vWantedVel = vPin * mfRotSpeed;
++		cVector3f vTorque = mRotatePid.Output(vWantedVel - vHingeVel, afTimeStep);
++		vTorque = cMath_MatrixMul(apBody.GetInertiaMatrix(), vTorque);
++		vTorque = cMath_Vector3MaxLength(vTorque, mfMaxAngularImpulse*apBody.GetMass()*fStrength);
++		apBody.AddTorque(vTorque);
++
++		mvLastMouseAdd = mvMoveAdd;
++		mvMoveAdd = cVector2f(0);
++		if (cMath_Abs(mfRotSpeed) > (mfMoveMaxSpeed * 0.1f))
++			mfInteractCount += afTimeStep;
++	}
++
+=256
++			// BunkerVR: held by a VR hand, turned by it (see VRTurnByHand).
++			// Doors have their own version, in their own Update.
++			int lVRHand = 1;
++			cVector3f vVRPalm = cVector3f(0.0f);
++			if(VRGrabbingHand(lVRHand, vVRPalm))
++			{
++				VRTurnByHand(pBody, pJoint, lVRHand, vVRPalm, afTimeStep);
++				return;
++			}
++
+end

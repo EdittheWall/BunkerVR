@@ -1,0 +1,9 @@
+BunkerVR patch 1
+file script/custom/props/Prop_AuxiliaryInventory.hps
+from c073086bf487586d10bd5d3813001f5fe5970eb56f5e8bdc4010ff7b16007e6e 4372
+to 795763d2a4f9af9384b1502632ac2314c059eba5e1b7868c7ef2cc358bea8acb 4575
+=142
++		// BunkerVR: which box was opened, so the headset can stand its book at
++		// the box (SketchbookUIHandler.hps VRSendStorageBoxAt).
++		cScript_SetGlobalVarID("BunkerVR_StorageBox", mBaseObj.GetID());
+end

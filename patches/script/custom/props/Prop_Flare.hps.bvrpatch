@@ -1,0 +1,16 @@
+BunkerVR patch 1
+file script/custom/props/Prop_Flare.hps
+from fd441c0c22016a3302e53505face582452f791283f2488b82852a252aca3e9cf 11644
+to ff1e96e43f9e514b1a7dc30560f9687f578a6f5b7a4350b14ece753dfd75d789 12038
+=203
++			///////////////////
++			// BunkerVR: while it burns in the player's hand (lit by its cord,
++			// PlayerState_UsingFlare.hps) it never counts as stopped, so it
++			// leaves no blocker for the creatures' paths until it is let go.
++			if (cScript_GetGlobalVarBool("BunkerVR_FlareInHand_" + mBaseObj.GetName()))
++			{
++				mvPrevPos = mBaseObj.GetPosition();
++				mfStoppedCount = 0;
++			}
++
+end

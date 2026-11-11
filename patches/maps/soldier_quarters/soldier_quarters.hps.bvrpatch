@@ -1,0 +1,33 @@
+BunkerVR patch 1
+file maps/soldier_quarters/soldier_quarters.hps
+from d1cf36e250437c4454ab44985dfef7c7ba2f13e32537e7090e3c7d041ed705d5 42531
+to 76d07b6ffee88243b7113aea1829fe4f05923a8526611da7babda69d4530a4c4 43456
+=1017
++		// BunkerVR: in the headset there is no scene (it takes over the body and
++		// plays the key's turn on its own): the key has been put in the lock and
++		// turned by hand (VRUpdateFit in PlayerBodyHandler.hps), or the use button
++		// was pressed at the lock. The door unlocks at once, and the release timer
++		// runs right away to leave the key as the scene's end would.
++		if (cVR_Active())
++		{
++			Entity_SetActive("Lock_CoomsRoomDoor_Proxy", false);
++			OnTimer_CommunicationsKeyUnlock("");
++			Map_AddTimer("Timer_CommunicationsKeyRelease", 0.05f, "OnTimer_CommunicationsKeyRelease");
++			return false;
++		}
++		
+=25
+-3
++		// BunkerVR: in the headset the used key is left in the lock only when
++		// the held one was put in it by hand ("BunkerVR_FitIn"); with the use
++		// button the held key is in the hand, not in the lock.
++		if (cVR_Active() == false || cScript_GetGlobalVarInt("BunkerVR_FitIn") == 1)
++		{
++			tString sHeld = Item_GetHeldEntity(eItemHandlerHand_Right);
++			Entity_SetActive("UsedKey", true);
++			Entity_PlaceAtEntity("UsedKey", sHeld, 0.f, true);
++		}
+=303
+-1
++}
+end

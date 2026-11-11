@@ -1,0 +1,32 @@
+BunkerVR patch 1
+file script/props/Prop_ReadableDogTag.hps
+from 1abac75439ba58305035796a16d8183d777a36e11943d966fec819ab7d90c9c0 14002
+to 104760fc603700b6dc7e9203c147ffb31397775f8077a80083b1a553c8d744c0 15198
+=6
++// BunkerVR: anything the game shows from this far away or further is a paper
++// (the generator room's code sign, at 0.3), read at once in the headset; every
++// dogtag is shown nearer (0.15, one at 0.22). See OnInteract.
++const float gfVRPaperSeenAt = 0.25f;
++
+=189
++
++		// BunkerVR: in the headset a code written on paper (the generator room's
++		// sign: anything the game shows from gfVRPaperSeenAt or further, while
++		// every dogtag is nearer) is taken the way notes are: its code is read at
++		// once by the game's own reading (the code into the sketchbook, the hint,
++		// the map's callback; the paper is deactivated where it lay), then the
++		// close callback the reading would run is called.
++		if(cVR_Active() && mfDistanceFromCamera >= gfVRPaperSeenAt)
++		{
++			_Global_OnItemRead();
++			cLuxMap@ pVRMap = cLux_GetCurrentMap();
++			if(msCloseCallback != "" && pVRMap.ScriptPrepare("void " + msCloseCallback + "(const tString &in asEntity)"))
++			{
++				tString sVRName = mBaseObj.GetName();
++				pVRMap.SetArgString(0, sVRName);
++				pVRMap.ScriptExecute();
++			}
++			Log("BunkerVR: " + mBaseObj.GetName() + " is a paper: read and kept at once, as a note\n");
++			return false;
++		}
+end

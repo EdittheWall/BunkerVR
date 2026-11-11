@@ -1,0 +1,24 @@
+# BunkerVR: how the game's items sit in the hand, and how the hands are posed.
+# Made by the hand poses tool (F11 on the PC) and the "Grips" page of the mod's menu (Y); it can be
+# changed here too, with the game closed. One line per pose (anything with no line is as the game has it):
+#   name hand: place forwards up right (cm, from the middle of the palm) turned-right tipped-up leaning-right
+#              (degrees), or place game; fingers thumb first middle ring little (0 straight to 1 closed), or
+#              fingers game; spread the same five (degrees sideways: + towards the little finger; the thumb:
+#              + out, - across the palm); cup (0 flat to 1 cupped)
+#   pose "name": fingers ...; spread ...; cup ...   (poses of your own)
+Fuel right: place 14.1 7.1 -33.1 171 68 -121; fingers 0.60 0.80 0.85 0.88 0.90; spread 10 0 0 0 0; cup 0.30
+EmptyBottle right: place 5.9 5.4 0.3 -13 -33 23; fingers 1.00 0.32 0.42 0.35 0.20; spread 45 1 0 -3 -2; cup 0.30
+FuelBottle right: place 6.7 7.0 -0.3 -6 -35 16; fingers 1.00 0.32 0.42 0.35 0.20; spread 45 1 0 -3 -2; cup 0.30
+Cutters right: place 19.1 33.3 -3.4 92 -4 -30; fingers 0.60 0.75 0.80 0.82 0.85; spread 20 0 0 0 0; cup 0.40
+Bandage left: place 2.5 0.9 1.7 128 40 -130; fingers 1.00 0.20 0.47 0.49 0.42; spread 32 4 5 8 6; cup 0.00
+DynamiteBundle right: place 4.2 0.7 -2.7 -61 -13 141; fingers game
+CommunicationsKey right: place 11.5 4.2 -2.9 0 0 -90; fingers 0.13 0.69 0.87 0.89 0.85; spread 14 40 15 25 17; cup 1.00
+PillboxKey right: place 11.5 4.2 -2.9 0 0 -90; fingers 0.13 0.69 0.87 0.89 0.85; spread 14 40 15 25 17; cup 1.00
+Fuse right: place 7.0 3.0 -2.5 180 0 0; fingers 0.31 0.27 0.48 0.82 0.85; spread 33 31 26 8 14; cup 0.55
+BandageRoll right: place 1.1 1.0 -1.7 -105 16 125; fingers 0.96 0.26 0.41 0.43 0.35; spread 56 -19 -19 -15 1; cup 0.75
+Dogtag right: place 1.9 4.4 -5.4 -172 -11 -3; fingers 0.13 0.69 0.87 0.89 0.85; spread 14 40 15 25 17; cup 1.00
+Dogtag left: place 2.8 4.2 6.0 167 -22 1; fingers 0.13 0.69 0.87 0.89 0.85; spread 14 40 15 25 17; cup 1.00
+pose "Medkit Tin Open": fingers 1.00 0.20 0.47 0.49 0.42; spread 32 4 5 8 6; cup 0.00
+pose "bottleee": fingers 1.00 0.32 0.42 0.35 0.20; spread 45 1 0 -3 -2; cup 0.30
+pose "bottle fuel": fingers 1.00 0.32 0.42 0.35 0.20; spread 45 1 0 -3 -2; cup 0.30
+pose "dogtag": fingers 0.13 0.69 0.87 0.89 0.85; spread 14 40 15 25 17; cup 1.00

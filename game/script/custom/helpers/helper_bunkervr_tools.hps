@@ -1,0 +1,812 @@
+// BunkerVR: the hand tools worked by hand: the bolt cutters held in both
+// hands and squeezed shut; the wrench fitted on a bolt and swung around; the
+// gas mask taken from the inventory into the hand and brought to the face; the
+// pocket watch wound and started with the right trigger. The rules each
+// follows, kept apart from the game so that the script tests can try them
+// (test_tools.hps); the body handler works them (PlayerBodyHandler.hps,
+// VRUpdateWrench and the rest).
+// (Uses helper_bunkervr.hps, which its includers include first.)
+
+//------------------------------------------------------------
+
+// BunkerVR: the angle of avTo about avAxis (a unit direction), counted from
+// avRef (square to the axis): + turning right-handed about avAxis. 0 when avTo
+// lies along the axis.
+float BunkerVR_AngleAbout(const cVector3f &in avAxis, const cVector3f &in avRef, const cVector3f &in avTo)
+{
+	cVector3f vTo = avTo - avAxis * cMath_Vector3Dot(avTo, avAxis);
+	if(vTo.Length() < 0.000001f) return 0.0f;
+	cVector3f vSide = cMath_Vector3Cross(avAxis, avRef);
+	return cMath_ATan2(cMath_Vector3Dot(vTo, vSide), cMath_Vector3Dot(vTo, avRef));
+}
+
+// BunkerVR: afNow (an angle, radians) taken the way round nearest afWas, so
+// that an angle counted on and on past a half turn does not jump back.
+float BunkerVR_Unwrap(float afWas, float afNow)
+{
+	float fStep = afNow - afWas;
+	while(fStep > cMath_Pi) fStep -= cMath_PiMul2;
+	while(fStep < -cMath_Pi) fStep += cMath_PiMul2;
+	return afWas + fStep;
+}
+
+// BunkerVR: a placement turned by afAngle (radians, right-handed) about the
+// line through avPoint along avAxis (a unit direction), then moved by avShift.
+// (Its size, if any, is kept.)
+cMatrixf BunkerVR_TurnAboutLine(const cMatrixf &in a_mtx, const cVector3f &in avPoint, const cVector3f &in avAxis, float afAngle, const cVector3f &in avShift)
+{
+	cMatrixf mtxTurn = BunkerVR_TurnBy(avAxis * afAngle);
+	cMatrixf mtxOut = cMath_MatrixMul(mtxTurn, a_mtx);
+	mtxOut.SetTranslation(avPoint + cMath_MatrixMul3x3(mtxTurn, a_mtx.GetTranslation() - avPoint) + avShift);
+	return mtxOut;
+}
+
+// BunkerVR: the turn that takes "X" to avX and "Y" to avY (unit directions,
+// square to each other). (As VRFrameMatrix in Prop_PlayerBody.hps.)
+cMatrixf BunkerVR_FrameMatrix(const cVector3f &in avX, const cVector3f &in avY)
+{
+	cMatrixf mtxFirst = BunkerVR_TurnBetween(cVector3f(1.0f, 0.0f, 0.0f), avX, cVector3f(0.0f, 1.0f, 0.0f));
+	cVector3f vYNow = cMath_MatrixMul3x3(mtxFirst, cVector3f(0.0f, 1.0f, 0.0f));
+	cMatrixf mtxSecond = BunkerVR_TurnBetween(vYNow, avY, avX);
+	return cMath_MatrixMul(mtxSecond, mtxFirst);
+}
+
+//------------------------------------------------------------
+// The wrench: fitted on a grating's bolt, swung round it the way it comes out.
+// (In the game's own scene the wrench turns about its root, the end
+// of its head bar, along the root's x: that end sits on the bolt, and its x
+// points out of the bolt towards the handle. Its own animations while held,
+// "idle" and "focus_idle", move only the handle about its own length: the
+// root stays the model's origin, its x the model's x.)
+// The gratings' bolts (every level's: bolt_bolt.ent, a model with no body,
+// made for the game's scene: its origin on the floor of the opening, as the
+// grating's, the bolt itself 1.15 m above it, along the origin's z, its head
+// the -z end, 2 cm long, from -7.8 cm; the shaft running on to +7.1 cm; so
+// it comes out along -z. In the scene, played from the bolt's own place and
+// facing, the wrench's root starts 1.4 cm onto the head and backs out with
+// it.) The loose bolt the wrench leaves (bolt_rigid.ent, the same bolt as a
+// thing that falls) lies along its x, its head the +x end (7.4 cm).
+
+const float gfBunkerVR_BoltLineY = 1.1545f;			// the bolt's line, this far above its origin (its bone j_Bolt_2; meters, its own size)...
+const float gfBunkerVR_BoltHeadZ = -0.078f;			// ...its head's end, along its z
+const float gfBunkerVR_WrenchOver = 0.014f;			// the wrench's socket goes this far onto the head (as in the game's scene)
+const float gfBunkerVR_LooseBoltHeadX = 0.074f;		// the loose bolt's head's end, along its x
+const float gfBunkerVR_WrenchFitReach = 0.045f;		// its root this near a bolt's outer end...
+const float gfBunkerVR_WrenchFitAim = 0.75f;		// ...and its x within 41 degrees of the bolt's way out: it goes on
+const float gfBunkerVR_WrenchPullOut = 0.12f;		// the real hand drawn back this far along the bolt's way out from where it is drawn on the wrench: it comes off...
+const float gfBunkerVR_WrenchPullOff = 0.25f;		// ...or this far from it in any direction (15 cm is reached while cranking)
+const float gfBunkerVR_WrenchCrank = 1.74533f;		// a crank: the bolt turned 100 degrees (less than a natural cranking stroke, some 130 degrees)...
+const int glBunkerVR_WrenchCranks = 2;				// ...and two take it out
+const float gfBunkerVR_BoltOutBy = 0.03f;			// how far it has backed out when it comes out (meters: 1.5 cm a crank, enough to be seen)
+const float gfBunkerVR_WrenchNotch = 0.34907f;		// a notch felt every 20 degrees the bolt turns (its thread catching)
+const float gfBunkerVR_WrenchBreakaway = 0.2618f;	// a bolt not yet turned is seized: the hand pushed this far ahead of the wrench (15 degrees) breaks it loose
+const float gfBunkerVR_WrenchForcedStart = 0.105f;	// the hand pushed the wrong way this far past the wrench (6 degrees): it will not go...
+const float gfBunkerVR_WrenchForcedStep = 0.26f;	// ...reported again every 15 degrees further...
+const float gfBunkerVR_WrenchSlipOff = 1.22f;		// ...and 70 degrees past it the hand slips off the handle
+const float gfBunkerVR_WrenchAxisNear = 0.03f;		// the hand this near the bolt's line: its angle about it is not read (it would jump)
+const int glBunkerVR_WrenchTurned = 1;		// events of a step: the bolt turned...
+const int glBunkerVR_WrenchNotch = 2;		// ...past a notch...
+const int glBunkerVR_WrenchCrankDone = 4;	// ...past a crank's worth...
+const int glBunkerVR_WrenchForced = 8;		// ...the hand pushed it the wrong way (it will not go)...
+const int glBunkerVR_WrenchOut = 16;		// ...the bolt is out...
+const int glBunkerVR_WrenchForcedMore = 32;	// ...pushed on the wrong way, a step further...
+const int glBunkerVR_WrenchFreed = 64;		// ...back to the wrench after pushing it the wrong way...
+const int glBunkerVR_WrenchBrokeLoose = 128;	// ...a seized bolt broke loose...
+const int glBunkerVR_WrenchStraining = 256;	// ...the hand pushes a seized bolt the right way (it holds, so far)
+
+// BunkerVR: how far the bolt turns in all to come out (radians: 200 degrees).
+float BunkerVR_WrenchNeeded()
+{
+	return gfBunkerVR_WrenchCrank * float(glBunkerVR_WrenchCranks);
+}
+
+// The bolt and the wrench on it, one way only, so the player can tell the
+// right way from the wrong one. The hand's angle about the bolt (+ the way the
+// bolt comes out: right-handed about its way out, anticlockwise seen from in
+// front) carries the wrench, and the bolt with it, that way; the other way
+// the wrench stays where it is (the bolt will not tighten) and the hand is
+// held at it: mfForced, how far the real hand has gone the wrong way past it.
+// So the bolt comes out by cranking the handle around and around.
+// All that only while the hand grips it (the right grip held): not gripped,
+// the wrench spins freely with the hand either way, turning nothing, and
+// nothing is reported (no events).
+// A bolt not yet turned is seized: gripped and pushed the right way, the
+// wrench holds (mfStrain, how far the hand is ahead of it) until the hand is
+// gfBunkerVR_WrenchBreakaway ahead; then it breaks loose, the wrench and the
+// bolt jumping on to the hand. Two cranks of 100 degrees take it out.
+class cBunkerVRBoltTurn
+{
+	float mfBolt = 0.0f;		// how far the bolt has been turned out (radians)
+	float mfWrench = 0.0f;		// the wrench's angle about the bolt (radians, counted on and on): never back while gripped
+	float mfForced = 0.0f;		// how far the hand is the wrong way past the wrench (radians, 0 or more)
+	float mfForcedTold = 0.0f;	// ...where that was last reported (0: not since the hand was with the wrench)
+	float mfStrain = 0.0f;		// how far the hand is the right way ahead of the wrench on a seized bolt (radians, 0 or more)
+	bool mbGripped = false;		// does the hand grip it (the right grip held)?
+	int mlEvents = 0;			// what the last step did (glBunkerVR_Wrench...)
+
+	void Start(float afAngle)
+	{
+		mfWrench = afAngle;
+		mfForced = 0.0f;
+		mfForcedTold = 0.0f;
+		mfStrain = 0.0f;
+		mbGripped = false;
+	}
+	
+	// The hand grips the wrench, or lets go of it. Let go, the wrench is free
+	// again: it is where the hand is (afAngle) from the next step, back from
+	// wherever it was held the wrong way.
+	void Grip(bool abGripped)
+	{
+		mbGripped = abGripped;
+	}
+
+	void Step(float afAngle)
+	{
+		mlEvents = 0;
+		if(mbGripped == false)
+		{
+			mfWrench = afAngle;
+			mfForced = 0.0f;
+			mfForcedTold = 0.0f;
+			mfStrain = 0.0f;
+			return;
+		}
+		float fStep = afAngle - mfWrench;
+		float fNeeded = BunkerVR_WrenchNeeded();
+		if(fStep > 0.0f)
+		{
+			if(mfForcedTold > 0.0f) mlEvents |= glBunkerVR_WrenchFreed;
+			mfForced = 0.0f;
+			mfForcedTold = 0.0f;
+			if(mfBolt >= fNeeded)
+			{
+				mfWrench = afAngle;
+				return;
+			}
+			// Seized: it holds until the hand is far enough ahead, then gives at once.
+			if(mfBolt <= 0.0f)
+			{
+				if(fStep < gfBunkerVR_WrenchBreakaway)
+				{
+					mfStrain = fStep;
+					mlEvents |= glBunkerVR_WrenchStraining;
+					return;
+				}
+				mlEvents |= glBunkerVR_WrenchBrokeLoose;
+			}
+			mfStrain = 0.0f;
+			mfWrench = afAngle;
+			float fWas = mfBolt;
+			mfBolt = cMath_Min(mfBolt + fStep, fNeeded);
+			mlEvents |= glBunkerVR_WrenchTurned;
+			if(cMath_Floor(mfBolt / gfBunkerVR_WrenchNotch + 0.0001f) > cMath_Floor(fWas / gfBunkerVR_WrenchNotch + 0.0001f)) mlEvents |= glBunkerVR_WrenchNotch;
+			if(cMath_Floor(mfBolt / gfBunkerVR_WrenchCrank + 0.0001f) > cMath_Floor(fWas / gfBunkerVR_WrenchCrank + 0.0001f)) mlEvents |= glBunkerVR_WrenchCrankDone;
+			if(mfBolt >= fNeeded) mlEvents |= glBunkerVR_WrenchOut;
+			return;
+		}
+		mfStrain = 0.0f;
+		mfForced = -fStep;
+		if(mfForced < gfBunkerVR_WrenchForcedStart)
+		{
+			if(mfForcedTold > 0.0f && mfForced < gfBunkerVR_WrenchForcedStart * 0.5f)
+			{
+				mfForcedTold = 0.0f;
+				mlEvents |= glBunkerVR_WrenchFreed;
+			}
+			return;
+		}
+		if(mfForcedTold <= 0.0f)
+		{
+			mfForcedTold = mfForced;
+			mlEvents |= glBunkerVR_WrenchForced;
+		}
+		else if(mfForced >= mfForcedTold + gfBunkerVR_WrenchForcedStep)
+		{
+			mfForcedTold = mfForced;
+			mlEvents |= glBunkerVR_WrenchForcedMore;
+		}
+	}
+
+	// Has the hand gone so far the wrong way that it slips off the handle?
+	bool SlippedOff()
+	{
+		return mfForced >= gfBunkerVR_WrenchSlipOff;
+	}
+	
+	// How far the bolt has backed out (meters).
+	float BackedOut()
+	{
+		return BunkerVR_BoltBackedOut(mfBolt);
+	}
+
+	bool Out()
+	{
+		return mfBolt >= BunkerVR_WrenchNeeded();
+	}
+	
+	// How far along it is (0 not turned .. 1 out).
+	float Done()
+	{
+		return cMath_Clamp(mfBolt / BunkerVR_WrenchNeeded(), 0.0f, 1.0f);
+	}
+}
+
+// BunkerVR: how far a bolt turned afTurned (radians) has backed out (meters).
+float BunkerVR_BoltBackedOut(float afTurned)
+{
+	return afTurned / BunkerVR_WrenchNeeded() * gfBunkerVR_BoltOutBy;
+}
+
+// BunkerVR: the way a bolt placed at a_mtxBolt comes out (a unit direction).
+cVector3f BunkerVR_BoltOut(const cMatrixf &in a_mtxBolt)
+{
+	return cMath_Vector3Normalize(cMath_MatrixMul3x3(a_mtxBolt, cVector3f(0.0f, 0.0f, -1.0f)));
+}
+
+// BunkerVR: a point on its line (where it turns about).
+cVector3f BunkerVR_BoltLinePoint(const cMatrixf &in a_mtxBolt)
+{
+	return cMath_MatrixMul(a_mtxBolt, cVector3f(0.0f, gfBunkerVR_BoltLineY, 0.0f));
+}
+
+// BunkerVR: where the wrench's socket end sits on it: on its head,
+// gfBunkerVR_WrenchOver in from the head's end.
+cVector3f BunkerVR_BoltMouth(const cMatrixf &in a_mtxBolt)
+{
+	return cMath_MatrixMul(a_mtxBolt, cVector3f(0.0f, gfBunkerVR_BoltLineY, gfBunkerVR_BoltHeadZ)) - BunkerVR_BoltOut(a_mtxBolt) * gfBunkerVR_WrenchOver;
+}
+
+// BunkerVR: where the loose bolt goes for it (the same bolt, the same size:
+// its x the way out, its y the bolt's y, the heads together).
+cMatrixf BunkerVR_LooseBoltPlace(const cMatrixf &in a_mtxBolt)
+{
+	float fSize = cMath_MatrixMul3x3(a_mtxBolt, cVector3f(0.0f, 0.0f, 1.0f)).Length();
+	cVector3f vOut = BunkerVR_BoltOut(a_mtxBolt);
+	cVector3f vY = cMath_Vector3Normalize(cMath_MatrixMul3x3(a_mtxBolt, cVector3f(0.0f, 1.0f, 0.0f)));
+	cMatrixf mtxLoose = BunkerVR_FrameMatrix(vOut, vY);
+	mtxLoose.SetTranslation(cMath_MatrixMul(a_mtxBolt, cVector3f(0.0f, gfBunkerVR_BoltLineY, gfBunkerVR_BoltHeadZ)) - vOut * (gfBunkerVR_LooseBoltHeadX * fSize));
+	return mtxLoose;
+}
+
+//------------------------------------------------------------
+// The cutters: the right hand on one handle, the left taking the other; the
+// hands open the jaws (see the two-handed hold below; the game's own
+// "cutter_cut_air" holds the pose, so the jaws move as its linkage has them);
+// closed on a chain, a padlock's shackle or a trap's wire, they are squeezed
+// through by the hands, not cut by an animation.
+
+// The jaws bite at any opening down to gfBunkerVR_CutterBiteLeast as they close around a thing,
+// so jaws only part open don't shut through it. The cut then moves only while the hands squeeze
+// past gfBunkerVR_CutterPress of the way in, the harder the faster, never quicker than
+// BunkerVR_CutSeconds: a chain takes 1.5 s of a full squeeze, a padlock's shackle 1.1, a wire 0.45.
+// So a fast close doesn't cut a chain in one update.
+const float gfBunkerVR_CutterOpenMost = 1.150f;		// the handles' angle apart, all the way open (radians: 2 x 32.9 degrees)
+const float gfBunkerVR_CutterBite = 0.35f;			// the jaws meet what is between them at this opening (opened wider, they bite there)...
+const float gfBunkerVR_CutterBiteLeast = 0.10f;	// ...or at the opening they had, closing around it, down to this
+const float gfBunkerVR_CutterReopen = 0.10f;		// opened this much past where they bit, they let go of it
+const float gfBunkerVR_CutterPress = 0.4f;			// biting, the cut moves only once the hands are this far into the squeeze (of the way from the bite to BunkerVR_CutThrough)...
+const float gfBunkerVR_CutterGive = 0.15f;			// ...the jaws giving this much of the way as the hands press (the rest held back by what they bite)...
+const float gfBunkerVR_CutterSqueezeLeast = 0.08f;	// ...a full squeeze at least this much past the bite
+const float gfBunkerVR_CutterInJaws = 0.045f;		// a thing this near the jaws' middle is between them...
+const float gfBunkerVR_CutterHold = 0.12f;			// ...and once bitten, kept within this, so the cutters need not be held perfectly still
+const float gfBunkerVR_CutterTake = 0.09f;			// the left palm this near the other handle's grip, anywhere along it: a squeeze takes it
+const int glBunkerVR_CutCrunches = 6;				// the squeeze through felt in this many crunches
+const int glBunkerVR_CutBite = 1;			// events of a step: the jaws closed on it...
+const int glBunkerVR_CutSqueeze = 2;		// ...the hands begin to squeeze it...
+const int glBunkerVR_CutLetGo = 4;			// ...opened again, letting go of it...
+const int glBunkerVR_Cut = 8;				// ...cut through...
+const int glBunkerVR_CutCrunch = 16;		// ...a crunch on the way through
+
+// BunkerVR: the hands' opening (as cBunkerVRCut's afWanted) to which the hands
+// must close, once biting, to cut through a thing of kind alKind (1 a chain
+// lock's chain: all the way shut, or as near as the hands come; 2 a padlock's
+// shackle; 3 a trap's wire): from the bite, 0.33, 0.25 and 0.12 of the way
+// all open.
+float BunkerVR_CutThrough(int alKind)
+{
+	if(alKind == 1) return 0.02f;
+	if(alKind == 2) return 0.10f;
+	return gfBunkerVR_CutterBite - 0.12f;
+}
+
+// BunkerVR: how long a thing of kind alKind (as BunkerVR_CutThrough) takes to cut with the
+// hands squeezed all the way (seconds; a lighter squeeze goes slower, and one short of
+// gfBunkerVR_CutterPress doesn't cut at all).
+float BunkerVR_CutSeconds(int alKind)
+{
+	if(alKind == 1) return 1.5f;
+	if(alKind == 2) return 1.1f;
+	return 0.45f;
+}
+
+// The handle's turn from its shut place against the time in "cutter_cut_air"
+// (degrees, every 60th of a second from 0.0833 s, its shut end; taken from
+// its .fbx). The pose for an opening is the time where the handle has turned
+// that far.
+const float[] gvBunkerVR_CutterAnimTurn = { 0.0f, 0.55f, 1.82f, 2.91f, 5.99f, 9.07f, 13.18f, 17.51f, 21.62f, 25.64f, 28.07f, 30.90f, 31.71f, 32.51f, 32.94f };
+const float gfBunkerVR_CutterAnimFrom = 0.08333f;	// (seconds)
+const float gfBunkerVR_CutterAnimLength = 0.8667f;	// "cutter_cut_air" (seconds)
+
+// BunkerVR: where in "cutter_cut_air" the cutters are opened afOpen of the
+// way (0 shut, 1 all the way): its time there, relative to its length.
+float BunkerVR_CutterPoseTime(float afOpen)
+{
+	float fTurn = cMath_Clamp(afOpen, 0.0f, 1.0f) * gvBunkerVR_CutterAnimTurn[gvBunkerVR_CutterAnimTurn.length() - 1];
+	uint lLast = gvBunkerVR_CutterAnimTurn.length() - 1;
+	float fTime = gfBunkerVR_CutterAnimFrom + float(lLast) / 60.0f;
+	for(uint i = 1; i <= lLast; ++i)
+	{
+		if(gvBunkerVR_CutterAnimTurn[i] < fTurn) continue;
+		float fSpan = gvBunkerVR_CutterAnimTurn[i] - gvBunkerVR_CutterAnimTurn[i - 1];
+		float fPart = fSpan > 0.0001f ? (fTurn - gvBunkerVR_CutterAnimTurn[i - 1]) / fSpan : 0.0f;
+		fTime = gfBunkerVR_CutterAnimFrom + (float(i - 1) + fPart) / 60.0f;
+		break;
+	}
+	return fTime / gfBunkerVR_CutterAnimLength;
+}
+
+// The jaws: afWanted, the opening the hands hold (0..1, the handles' angle apart
+// as a share of gfBunkerVR_CutterOpenMost; below 0 squeezed past shut);
+// abInJaws, is something to cut between them; afThrough, the opening (from
+// gfBunkerVR_CutterBite) the hands close to for a full squeeze (BunkerVR_CutThrough);
+// afSeconds, how long a full squeeze takes to cut it (BunkerVR_CutSeconds);
+// afTimeStep, this update's length. Closing around it from any opening down to
+// gfBunkerVR_CutterBiteLeast, the jaws bite (mfBiteAt: at most gfBunkerVR_CutterBite).
+// Biting, how hard the hands squeeze (mfPress: 0 at the bite, 1 the hands closed
+// to afThrough) drives the cut (mfCut), only past
+// gfBunkerVR_CutterPress, the harder the faster, a full squeeze cutting it in
+// afSeconds; let off, it waits where it got to. The jaws are drawn closing into it
+// as the cut goes (the hands drawn held back: VRUpdateCutters shares that between
+// them); through, they snap shut to the hands.
+class cBunkerVRCut
+{
+	float mfOpen = 0.0f;		// the opening drawn (0 shut .. 1 all the way)
+	int mlState = 0;			// 0 free; 1 biting on something
+	float mfBiteAt = 0.0f;		// biting: the opening at which the jaws bit
+	float mfPress = 0.0f;		// ...how hard the hands squeeze (0 .. 1)
+	float mfCut = 0.0f;			// ...how far through (0 .. 1)
+	int mlCrunches = 0;			// ...crunches felt so far
+	int mlEvents = 0;			// what the last step did (glBunkerVR_Cut...)
+
+	void Step(float afWanted, bool abInJaws, float afThrough, float afSeconds, float afTimeStep)
+	{
+		mlEvents = 0;
+		float fWanted = cMath_Clamp(afWanted, 0.0f, 1.0f);
+		if(mlState == 0)
+		{
+			// (Closing: by a little more than a hand's tremble, and the hands in to where the jaws meet
+			// it, gfBunkerVR_CutterBite or less. Without the second test a close begun wider bites at once
+			// and lets go the next update, the hands still past gfBunkerVR_CutterReopen of it, again and
+			// again, with the bite's sound each time.)
+			if(abInJaws && fWanted < mfOpen - 0.004f && mfOpen >= gfBunkerVR_CutterBiteLeast && fWanted <= gfBunkerVR_CutterBite)
+			{
+				mlState = 1;
+				mfBiteAt = cMath_Min(mfOpen, gfBunkerVR_CutterBite);
+				mfPress = 0.0f;
+				mfCut = 0.0f;
+				mlCrunches = 0;
+				mlEvents |= glBunkerVR_CutBite;
+			}
+			else
+			{
+				mfOpen = fWanted;
+				return;
+			}
+		}
+		if(fWanted > mfBiteAt + gfBunkerVR_CutterReopen || abInJaws == false)
+		{
+			mlState = 0;
+			mfPress = 0.0f;
+			mfCut = 0.0f;
+			mlCrunches = 0;
+			mfOpen = fWanted;
+			mlEvents |= glBunkerVR_CutLetGo;
+			return;
+		}
+		// (A full squeeze: the hands closed to afThrough; for a bite at a small opening, at least
+		// gfBunkerVR_CutterSqueezeLeast past it.)
+		float fSpan = cMath_Max(mfBiteAt - afThrough, gfBunkerVR_CutterSqueezeLeast);
+		mfPress = cMath_Clamp((mfBiteAt - afWanted) / fSpan, 0.0f, 1.0f);
+		if(mfPress > gfBunkerVR_CutterPress && afSeconds > 0.0f && afTimeStep > 0.0f)
+		{
+			if(mfCut <= 0.0f) mlEvents |= glBunkerVR_CutSqueeze;
+			float fRate = (mfPress - gfBunkerVR_CutterPress) / (1.0f - gfBunkerVR_CutterPress);
+			mfCut = cMath_Min(1.0f, mfCut + fRate * afTimeStep / afSeconds);
+			int lCrunch = int(mfCut * float(glBunkerVR_CutCrunches));
+			if(lCrunch > mlCrunches && mfCut < 1.0f)
+			{
+				mlCrunches = lCrunch;
+				mlEvents |= glBunkerVR_CutCrunch;
+			}
+		}
+		if(mfCut >= 1.0f)
+		{
+			mlState = 0;
+			mfPress = 0.0f;
+			mfCut = 0.0f;
+			mlCrunches = 0;
+			mfOpen = fWanted;
+			mlEvents |= glBunkerVR_Cut;
+			return;
+		}
+		// Drawn: the jaws close into it as the cut goes (most of the way to where a full
+		// squeeze has the hands), and give a little as the hands press.
+		float fDeepest = cMath_Max(mfBiteAt - fSpan, 0.0f);
+		mfOpen = mfBiteAt - (mfBiteAt - fDeepest) * cMath_Min(1.0f, gfBunkerVR_CutterGive * mfPress + 0.8f * mfCut);
+	}
+}
+
+//------------------------------------------------------------
+// The two-handed hold. Both hands hold the cutters alike, so the pivot is felt in the middle and
+// both hands drive the cut. (Don't let the right palm place the cutters alone: the left wrist then
+// ends at an unnatural angle, and cutters kept on what they bit by sliding them slip off when the
+// player pushes down.) The hold:
+// - how far open: from how far apart the hands are (BunkerVR_CutterOpeningApart), the distance the two
+//   palms' places on their handles are apart at an opening (BunkerVR_CutterPalmsApart), less what it
+//   was as the left hand took hold;
+// - where: the middle between the hands on the middle between the palms' places, the line between them
+//   along the real one, the jaws (the cutters' y) the way both hands point, an even share
+//   (BunkerVR_CutterBetween); bitten, the jaws stay on what they bit and the cutters turn about it to
+//   the hands (BunkerVR_CutterPinned), slipping off only when the hands pull away from it
+//   (gfVRCutterPullSlip in PlayerBodyHandler.hps);
+// - each hand drawn on its handle turned about the handle as its real hand is (BunkerVR_PalmRolled):
+//   the wrists as the player holds them.
+
+// BunkerVR: a palm on a handle (a_mtxShut: its place shut, in the cutters' own terms) with the cutters
+// afOpen of the way open: their own animation turns each handle half the angle about the hinge, the
+// handle afHand (as BunkerVR_CutterHand: +1 the first) +afHand x half gfBunkerVR_CutterOpenMost x afOpen.
+cMatrixf BunkerVR_CutterPalmOpen(const cMatrixf &in a_mtxShut, float afHand, float afOpen)
+{
+	return BunkerVR_TurnAboutLine(a_mtxShut, gvBunkerVR_CutterHinge, gvBunkerVR_CutterAxis, afHand * 0.5f * gfBunkerVR_CutterOpenMost * afOpen, cVector3f(0.0f));
+}
+
+// BunkerVR: how far apart the two palms' places are (meters), the right one on the handle afHand (its
+// place shut avRightShut), the left one on the other (avLeftShut), the cutters afOpen of the way open.
+float BunkerVR_CutterPalmsApart(const cVector3f &in avRightShut, const cVector3f &in avLeftShut, float afHand, float afOpen)
+{
+	cMatrixf mtxRight = cMatrixf_Identity;
+	mtxRight.SetTranslation(avRightShut);
+	cMatrixf mtxLeft = cMatrixf_Identity;
+	mtxLeft.SetTranslation(avLeftShut);
+	cVector3f vRight = BunkerVR_CutterPalmOpen(mtxRight, afHand, afOpen).GetTranslation();
+	cVector3f vLeft = BunkerVR_CutterPalmOpen(mtxLeft, -afHand, afOpen).GetTranslation();
+	return (vLeft - vRight).Length();
+}
+
+// BunkerVR: the opening at which the palms' places are afApart apart (from a little past shut, -0.25,
+// where the handles would cross, to all the way open and a little past, 1.3; clamped to those).
+float BunkerVR_CutterOpeningApart(const cVector3f &in avRightShut, const cVector3f &in avLeftShut, float afHand, float afApart)
+{
+	float fLow = -0.25f;
+	float fHigh = 1.3f;
+	if(afApart <= BunkerVR_CutterPalmsApart(avRightShut, avLeftShut, afHand, fLow)) return fLow;
+	if(afApart >= BunkerVR_CutterPalmsApart(avRightShut, avLeftShut, afHand, fHigh)) return fHigh;
+	for(int i = 0; i < 24; ++i)
+	{
+		float fMid = (fLow + fHigh) * 0.5f;
+		if(BunkerVR_CutterPalmsApart(avRightShut, avLeftShut, afHand, fMid) < afApart) fLow = fMid;
+		else fHigh = fMid;
+	}
+	return (fLow + fHigh) * 0.5f;
+}
+
+// BunkerVR: the turn that takes avA to avAWorld exactly and avB as near avBWorld as that leaves it
+// (each pair a unit long; avB not along avA). (The second way taken square to the first in both.)
+cMatrixf BunkerVR_TurnTwoWays(const cVector3f &in avA, const cVector3f &in avB, const cVector3f &in avAWorld, const cVector3f &in avBWorld)
+{
+	cVector3f vB = avB - avA * cMath_Vector3Dot(avB, avA);
+	cVector3f vBWorld = avBWorld - avAWorld * cMath_Vector3Dot(avBWorld, avAWorld);
+	if(vB.Length() < 0.0001f || vBWorld.Length() < 0.0001f) return BunkerVR_TurnBetween(avA, avAWorld, cMath_Vector3Cross(avA, cVector3f(0.0f, 0.0f, 1.0f)));
+	cMatrixf mtxIn = BunkerVR_FrameMatrix(avA, cMath_Vector3Normalize(vB));
+	cMatrixf mtxWorld = BunkerVR_FrameMatrix(avAWorld, cMath_Vector3Normalize(vBWorld));
+	return cMath_MatrixMul(mtxWorld, mtxIn.GetTranspose());
+}
+
+// BunkerVR: where a thing is (its own terms to the world) held by both hands (the cutters, the fuel
+// can): the palms' places in it avRightIn and avLeftIn, the real palms at avRight and avLeft; the
+// middle between the places on the middle between the palms, the line from the right one to the left
+// along the real one, and its own direction avSecondIn as near avSecond (the world) as that leaves it.
+// afScale: the size it is drawn at (its own terms to the world's meters; a held thing may be drawn at
+// another).
+cMatrixf BunkerVR_HeldBetween(const cVector3f &in avRightIn, const cVector3f &in avLeftIn, const cVector3f &in avRight, const cVector3f &in avLeft,
+							  const cVector3f &in avSecondIn, const cVector3f &in avSecond, float afScale)
+{
+	cVector3f vAcrossIn = avLeftIn - avRightIn;
+	cVector3f vAcross = avLeft - avRight;
+	cMatrixf mtxTurn = cMatrixf_Identity;
+	if(vAcrossIn.Length() > 0.001f && vAcross.Length() > 0.001f)
+		mtxTurn = BunkerVR_TurnTwoWays(cMath_Vector3Normalize(vAcrossIn), cMath_Vector3Normalize(avSecondIn), cMath_Vector3Normalize(vAcross), cMath_Vector3Normalize(avSecond));
+	cVector3f vMiddleIn = (avRightIn + avLeftIn) * (0.5f * afScale);
+	cVector3f vMiddle = (avRight + avLeft) * 0.5f;
+	cVector3f vAt = vMiddle - cMath_MatrixMul3x3(mtxTurn, vMiddleIn);
+	cMatrixf mtxOut = cMath_MatrixMul(mtxTurn, cMath_MatrixScale(cVector3f(afScale, afScale, afScale)));
+	mtxOut.SetTranslation(vAt);
+	return mtxOut;
+}
+
+// BunkerVR: where the cutters are (their own terms to the world) held by both hands: the palms' places
+// in them avRightIn and avLeftIn (as drawn at this opening), the real palms at avRight and avLeft; the
+// middle between the places on the middle between the palms, the line from the right one to the left
+// along the real one, and their forward direction (y, towards the jaws) as near avForward as that
+// leaves it.
+cMatrixf BunkerVR_CutterBetween(const cVector3f &in avRightIn, const cVector3f &in avLeftIn, const cVector3f &in avRight, const cVector3f &in avLeft,
+								const cVector3f &in avForward, float afScale)
+{
+	return BunkerVR_HeldBetween(avRightIn, avLeftIn, avRight, avLeft, cVector3f(0.0f, 1.0f, 0.0f), avForward, afScale);
+}
+
+// BunkerVR: the same, bitten: the jaws (gvBunkerVR_CutterJaws) on avPin, the cutters turned about the pin
+// so that the middle between the palms' places lies the way the real hands' middle is from it, and the
+// line between the hands as near the real one as that leaves it (their turn about their own length).
+cMatrixf BunkerVR_CutterPinned(const cVector3f &in avRightIn, const cVector3f &in avLeftIn, const cVector3f &in avRight, const cVector3f &in avLeft,
+							   const cVector3f &in avPin, float afScale)
+{
+	cVector3f vAcrossIn = avLeftIn - avRightIn;
+	cVector3f vAcross = avLeft - avRight;
+	cVector3f vMiddleIn = (avRightIn + avLeftIn) * 0.5f;
+	cVector3f vMiddle = (avRight + avLeft) * 0.5f;
+	cVector3f vToJawsIn = gvBunkerVR_CutterJaws - vMiddleIn;
+	cVector3f vToJaws = avPin - vMiddle;
+	cMatrixf mtxTurn = cMatrixf_Identity;
+	if(vAcrossIn.Length() > 0.001f && vAcross.Length() > 0.001f && vToJawsIn.Length() > 0.001f && vToJaws.Length() > 0.001f)
+		mtxTurn = BunkerVR_TurnTwoWays(cMath_Vector3Normalize(vToJawsIn), cMath_Vector3Normalize(vAcrossIn), cMath_Vector3Normalize(vToJaws), cMath_Vector3Normalize(vAcross));
+	cVector3f vAt = avPin - cMath_MatrixMul3x3(mtxTurn, gvBunkerVR_CutterJaws * afScale);
+	cMatrixf mtxOut = cMath_MatrixMul(mtxTurn, cMath_MatrixScale(cVector3f(afScale, afScale, afScale)));
+	mtxOut.SetTranslation(vAt);
+	return mtxOut;
+}
+
+// BunkerVR: a palm drawn at a_mtxDrawn (unit, in the world) turned about the line of what it holds (avBar,
+// a unit way in the palm's own terms, through its middle) as far as brings it nearest the real palm
+// a_mtxReal: a bar may be held at any turn round it, so the wrist is as the player holds it.
+cMatrixf BunkerVR_PalmRolled(const cMatrixf &in a_mtxDrawn, const cMatrixf &in a_mtxReal, const cVector3f &in avBar)
+{
+	cVector3f vBar = cMath_Vector3Normalize(cMath_MatrixMul3x3(a_mtxDrawn, avBar));
+	// (Measured on the palm's own x and z, whichever lies more across the bar.)
+	cVector3f vRefIn = cMath_Abs(avBar.x) < 0.7f ? cVector3f(1.0f, 0.0f, 0.0f) : cVector3f(0.0f, 0.0f, 1.0f);
+	cVector3f vDrawnRef = cMath_MatrixMul3x3(a_mtxDrawn, vRefIn);
+	cVector3f vRealRef = cMath_MatrixMul3x3(a_mtxReal, vRefIn);
+	vDrawnRef = vDrawnRef - vBar * cMath_Vector3Dot(vDrawnRef, vBar);
+	if(vDrawnRef.Length() < 0.0001f) return a_mtxDrawn;
+	vDrawnRef.Normalize();
+	float fTurn = BunkerVR_AngleAbout(vBar, vDrawnRef, vRealRef);
+	return BunkerVR_TurnAboutLine(a_mtxDrawn, a_mtxDrawn.GetTranslation(), vBar, fTurn, cVector3f(0.0f));
+}
+
+// BunkerVR: the way a handle runs (a unit way, the cutters' terms) at an opening: the first's middle line
+// rises gfBunkerVR_CutterGripSlope in z per meter of y, the second's is its mirror, each turned with the
+// opening.
+cVector3f BunkerVR_CutterHandleWay(float afHand, float afOpen)
+{
+	cVector3f vWay = cMath_Vector3Normalize(cVector3f(0.0f, 1.0f, afHand > 0.0f ? gfBunkerVR_CutterGripSlope : -gfBunkerVR_CutterGripSlope));
+	return cMath_MatrixMul3x3(BunkerVR_TurnBy(gvBunkerVR_CutterAxis * (afHand * 0.5f * gfBunkerVR_CutterOpenMost * afOpen)), vWay);
+}
+
+// The cutters' own model (cutter_model.fbx, where its skin binds each
+// handle): both handles turn about the model's x through the hinge, the
+// first (j_handle_1, the -z side) +x-ways as they open, the second the other
+// way, each up to 32.9 degrees; the plane z = the hinge's z lies between them;
+// the jaws close on it 8.7 cm beyond the hinge. All as the cutters are drawn,
+// animated (always, while held): the hinge's bone at the model's origin.
+// Don't use the bind pose: there the hinge is 29.3 cm along y and 5.4 cm
+// along z from the origin, and the jaws would be looked for 29 cm beyond the
+// drawn ones.
+const cVector3f gvBunkerVR_CutterHinge = cVector3f(0.0f, 0.0f, 0.0f);
+const cVector3f gvBunkerVR_CutterJaws = cVector3f(0.0f, 0.087f, 0.0f);
+const cVector3f gvBunkerVR_CutterAxis = cVector3f(1.0f, 0.0f, 0.0f);
+const cVector3f gvBunkerVR_CutterSide = cVector3f(0.0f, 0.0f, 1.0f);
+
+// BunkerVR: which handle the right hand holds, from where the right palm is
+// in the model's terms (as the right hand holds them): +1 the first (it
+// turns +x-ways as they open), -1 the second.
+float BunkerVR_CutterHand(const cVector3f &in avRightInModel)
+{
+	return avRightInModel.z <= gvBunkerVR_CutterHinge.z ? 1.0f : -1.0f;
+}
+
+// BunkerVR: the cutters held shut (as the right hand holds them) turned so
+// that the right hand's handle stays where it is while they are drawn afOpen
+// of the way open (their own animation turns both handles): the turn about
+// the hinge, in the model's terms (afHand as BunkerVR_CutterHand).
+cMatrixf BunkerVR_CutterKeepHandle(float afHand, float afOpen)
+{
+	return BunkerVR_TurnAboutLine(cMatrixf_Identity, gvBunkerVR_CutterHinge, gvBunkerVR_CutterAxis, -afHand * 0.5f * gfBunkerVR_CutterOpenMost * afOpen, cVector3f(0.0f));
+}
+
+// Each handle's grip, shut, in the model's terms as drawn (from its mesh
+// slices; the hinge at the origin): the first's middle runs from
+// (0, -0.443, -0.069) towards the hinge, rising 8.5 cm in z per meter; the
+// second's is its mirror across the middle. The grips run from 45.3 cm to 9.3
+// cm behind the hinge (there the handles meet the head).
+const float gfBunkerVR_CutterGripZ = -0.0315f;		// the first handle's middle at y = 0 (the hinge's level)...
+const float gfBunkerVR_CutterGripSlope = 0.085f;	// ...rising this much in z for each meter of y
+const float gfBunkerVR_CutterGripFrom = -0.453f;	// the grips, along y: from...
+const float gfBunkerVR_CutterGripTo = -0.093f;		// ...to
+
+// BunkerVR: the nearest point to avAt (in the model's terms) on the middle of
+// the handle the left hand takes (the other one than the right hand's:
+// afHand as BunkerVR_CutterHand), shut. Any point along the grip counts, so
+// the handle can be taken anywhere on it.
+cVector3f BunkerVR_CutterOtherGrip(float afHand, const cVector3f &in avAt)
+{
+	// (A point on the line level with avAt, then the nearest on the line from
+	// there; beyond the grip's ends, its end.)
+	float fY = cMath_Clamp(avAt.y, gfBunkerVR_CutterGripFrom, gfBunkerVR_CutterGripTo);
+	cVector3f vFirst = cVector3f(0.0f, fY, gfBunkerVR_CutterGripZ + gfBunkerVR_CutterGripSlope * fY);
+	cVector3f vWay = cMath_Vector3Normalize(cVector3f(0.0f, 1.0f, gfBunkerVR_CutterGripSlope));
+	if(afHand > 0.0f)
+	{
+		vFirst = BunkerVR_MirrorAcross(vFirst, gvBunkerVR_CutterHinge, gvBunkerVR_CutterSide);
+		vWay = BunkerVR_MirrorWay(vWay, gvBunkerVR_CutterSide);
+	}
+	float fAlong = cMath_Vector3Dot(avAt - vFirst, vWay);
+	cVector3f vNear = vFirst + vWay * fAlong;
+	if(vNear.y < gfBunkerVR_CutterGripFrom || vNear.y > gfBunkerVR_CutterGripTo) return vFirst;
+	return vNear;
+}
+
+// BunkerVR: the left palm on the other handle where it took hold of it
+// (avLeftAt, shut, in the model's terms), turned as the right palm a_mtxRight
+// is, mirrored across the middle (the palm's x, towards its right, turned
+// back, as a left palm's is), the cutters afOpen of the way open with the
+// right hand's handle kept still. In the model's terms.
+cMatrixf BunkerVR_CutterLeftPalm(const cMatrixf &in a_mtxRight, const cVector3f &in avLeftAt, float afHand, float afOpen)
+{
+	cVector3f vX = cMath_Vector3Normalize(BunkerVR_MirrorWay(cMath_MatrixMul3x3(a_mtxRight, cVector3f(1.0f, 0.0f, 0.0f)), gvBunkerVR_CutterSide)) * -1.0f;
+	cVector3f vY = cMath_Vector3Normalize(BunkerVR_MirrorWay(cMath_MatrixMul3x3(a_mtxRight, cVector3f(0.0f, 1.0f, 0.0f)), gvBunkerVR_CutterSide));
+	cMatrixf mtxLeft = BunkerVR_FrameMatrix(vX, vY);
+	mtxLeft.SetTranslation(avLeftAt);
+	return BunkerVR_TurnAboutLine(mtxLeft, gvBunkerVR_CutterHinge, gvBunkerVR_CutterAxis, -afHand * gfBunkerVR_CutterOpenMost * afOpen, cVector3f(0.0f));
+}
+
+// BunkerVR: how far open the hands hold the cutters (0 shut, 1 all the way;
+// beyond either end as it is): avLeftAt, where the left hand took hold of the
+// other handle, shut; avLeft, the left palm now; both in the model's terms as
+// the right hand holds them shut: the left one's angle about the hinge from
+// where it took hold. (In the game the opening comes from
+// BunkerVR_CutterOpeningApart; this is kept for the script tests, which read
+// back the left palm's turn about the hinge with it.)
+float BunkerVR_CutterOpening(const cVector3f &in avLeftAt, const cVector3f &in avLeft, float afHand)
+{
+	cVector3f vShut = avLeftAt - gvBunkerVR_CutterHinge;
+	cVector3f vNow = avLeft - gvBunkerVR_CutterHinge;
+	vShut.x = 0.0f;
+	vNow.x = 0.0f;
+	if(vShut.Length() < 0.01f || vNow.Length() < 0.01f) return 0.0f;
+	return -afHand * BunkerVR_AngleAbout(gvBunkerVR_CutterAxis, cMath_Vector3Normalize(vShut), vNow) / gfBunkerVR_CutterOpenMost;
+}
+
+// BunkerVR: a place mirrored across the cutters' middle (the plane through
+// avHinge square to avSide, between the two handles).
+cVector3f BunkerVR_MirrorAcross(const cVector3f &in avAt, const cVector3f &in avHinge, const cVector3f &in avSide)
+{
+	return avAt - avSide * (2.0f * cMath_Vector3Dot(avAt - avHinge, avSide));
+}
+
+// BunkerVR: a direction mirrored the same way.
+cVector3f BunkerVR_MirrorWay(const cVector3f &in avWay, const cVector3f &in avSide)
+{
+	return avWay - avSide * (2.0f * cMath_Vector3Dot(avWay, avSide));
+}
+
+// BunkerVR: the nearest point of a box (its middle avMiddle, its axes avX,
+// avY, avZ, its half sizes avHalf) to avAt.
+cVector3f BunkerVR_NearestInBox(const cVector3f &in avAt, const cVector3f &in avMiddle, const cVector3f &in avX, const cVector3f &in avY,
+								const cVector3f &in avZ, const cVector3f &in avHalf)
+{
+	cVector3f vRel = avAt - avMiddle;
+	float fX = cMath_Clamp(cMath_Vector3Dot(vRel, avX), -avHalf.x, avHalf.x);
+	float fY = cMath_Clamp(cMath_Vector3Dot(vRel, avY), -avHalf.y, avHalf.y);
+	float fZ = cMath_Clamp(cMath_Vector3Dot(vRel, avZ), -avHalf.z, avHalf.z);
+	return avMiddle + avX * fX + avY * fY + avZ * fZ;
+}
+
+//------------------------------------------------------------
+// The gas mask: taken out of the inventory into the right hand (or pulled
+// off the face into either), put on by bringing it to the face.
+
+const float gfBunkerVR_MaskOnReach = 0.14f;		// its middle this near the face: it goes on
+const float gfBunkerVR_MaskTakeReach = 0.17f;	// a hand squeezed this near the face takes hold of it there...
+const float gfBunkerVR_MaskOffPull = 0.24f;		// ...and pulled this far from the face takes it off
+const float gfBunkerVR_MaskBackOn = 0.30f;		// once off, it goes on again only after being this far away
+
+// BunkerVR: where the face is, for the mask: in front of the eyes and a
+// little below them (avHead the eyes, avForward and avUp which way the head
+// looks and its top).
+cVector3f BunkerVR_FacePoint(const cVector3f &in avHead, const cVector3f &in avForward, const cVector3f &in avUp)
+{
+	return avHead + avForward * 0.07f - avUp * 0.04f;
+}
+
+// The mask in the hand (gas_mask_cutscene.ent, the model the game's own
+// putting on shows in the hand: its front the model's +z, its top +y, its
+// straps running back along -z; from gas_mask_m2.fbx): held by
+// its front, the palm on the outside of it, its top along the fingers. In
+// the right palm's terms (the controller's: x right, y up, z back; the right
+// palm faces -x): its x and y, and where its origin is.
+const cVector3f gvBunkerVR_MaskInPalmX = cVector3f(0.0f, -1.0f, 0.0f);
+const cVector3f gvBunkerVR_MaskInPalmY = cVector3f(0.0f, 0.0f, -1.0f);
+const cVector3f gvBunkerVR_MaskInPalmAt = cVector3f(-0.04f, 0.0f, -0.05f);
+const cVector3f gvBunkerVR_MaskSeat = cVector3f(0.0f, -0.06f, 0.02f);	// where the face point is in it when it is worn
+const float gfBunkerVR_MaskFacing = 0.5f;		// its front within 60 degrees of the way the head looks: it goes on
+
+// BunkerVR: the mask's placement in a palm's terms (alHand 0 left, 1 right:
+// the left one the right one mirrored across the palm's x, the mask's own x
+// turned back so that it stays a proper turn).
+cMatrixf BunkerVR_MaskInPalm(int alHand)
+{
+	float fSide = alHand == 0 ? -1.0f : 1.0f;
+	cMatrixf mtxMask = BunkerVR_FrameMatrix(cVector3f(gvBunkerVR_MaskInPalmX.x, gvBunkerVR_MaskInPalmX.y * fSide, gvBunkerVR_MaskInPalmX.z * fSide),
+											cVector3f(gvBunkerVR_MaskInPalmY.x * fSide, gvBunkerVR_MaskInPalmY.y, gvBunkerVR_MaskInPalmY.z));
+	mtxMask.SetTranslation(cVector3f(gvBunkerVR_MaskInPalmAt.x * fSide, gvBunkerVR_MaskInPalmAt.y, gvBunkerVR_MaskInPalmAt.z));
+	return mtxMask;
+}
+
+//------------------------------------------------------------
+// The pocket watch: a pull of the right trigger winds and starts it
+// (PlayerBodyHandler.hps VRUpdateWatch); no twist of the crown is needed.
+// cBunkerVRWind keeps how far it is wound. Its Step, the crown twisted round
+// (wound the way a watch winds: clockwise seen from above the crown; the
+// other way the crown slips), is used only by the script tests.
+
+const float gfBunkerVR_WindTurn = 2.094f;		// a wind: 120 degrees of the crown turned the winding way
+const int glBunkerVR_WindsNeeded = 3;			// the game's three winds
+const float gfBunkerVR_WindTick = 0.349f;		// a tick every 20 degrees
+const float gfBunkerVR_WatchTriggerPull = 0.6f;		// the right trigger pulled past this: a pull...
+const float gfBunkerVR_WatchTriggerLetGo = 0.35f;	// ...and let go below this (as the mod's own presses)
+const float gfBunkerVR_WatchStartWait = 20.0f;	// not started this long when wanted (seconds): it starts by itself
+// The watch's crown in its own model (stopwatch.fbx: the button bone j_button
+// and its points): its middle, and its top (pressed); it stands out of the
+// case along the model's z; the face looks along +y. The top also places the
+// crown hint (VRUpdateHints).
+const cVector3f gvBunkerVR_WatchCrown = cVector3f(0.0f, 0.0075f, 0.053f);
+const cVector3f gvBunkerVR_WatchCrownTop = cVector3f(0.0f, 0.0075f, 0.058f);
+const int glBunkerVR_WindTicked = 1;	// events of a step: a tick...
+const int glBunkerVR_WindOne = 2;		// ...a wind done...
+const int glBunkerVR_WindDone = 4;		// ...wound fully...
+const int glBunkerVR_WindSlip = 8;		// ...turned the other way (it slips)
+
+class cBunkerVRWind
+{
+	float mfTurned = 0.0f;		// how far the crown has been wound (radians)
+	float mfSlip = 0.0f;		// how far turned the other way since the last slip
+	int mlEvents = 0;
+
+	// afTwist: how far the crown has turned since the last step (radians, + winding).
+	void Step(float afTwist)
+	{
+		mlEvents = 0;
+		float fMost = gfBunkerVR_WindTurn * float(glBunkerVR_WindsNeeded);
+		if(afTwist > 0.0f)
+		{
+			mfSlip = 0.0f;
+			if(mfTurned >= fMost) return;
+			float fWas = mfTurned;
+			mfTurned = cMath_Min(mfTurned + afTwist, fMost);
+			if(cMath_Floor(mfTurned / gfBunkerVR_WindTick) > cMath_Floor(fWas / gfBunkerVR_WindTick)) mlEvents |= glBunkerVR_WindTicked;
+			if(cMath_Floor(mfTurned / gfBunkerVR_WindTurn + 0.0001f) > cMath_Floor(fWas / gfBunkerVR_WindTurn + 0.0001f)) mlEvents |= glBunkerVR_WindOne;
+			if(mfTurned >= fMost) mlEvents |= glBunkerVR_WindDone;
+		}
+		else if(afTwist < 0.0f)
+		{
+			mfSlip -= afTwist;
+			if(mfSlip >= gfBunkerVR_WindTick)
+			{
+				mfSlip = 0.0f;
+				mlEvents |= glBunkerVR_WindSlip;
+			}
+		}
+	}
+
+	// The winds done (0 .. glBunkerVR_WindsNeeded).
+	int Winds()
+	{
+		return cMath_Min(int(mfTurned / gfBunkerVR_WindTurn + 0.0001f), glBunkerVR_WindsNeeded);
+	}
+
+	bool Wound()
+	{
+		return Winds() >= glBunkerVR_WindsNeeded;
+	}
+}

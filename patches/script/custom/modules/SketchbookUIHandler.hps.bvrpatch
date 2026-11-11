@@ -1,0 +1,285 @@
+BunkerVR patch 1
+file script/custom/modules/SketchbookUIHandler.hps
+from 686c73ff11cef78a208ba8919fef9d145c16376f435f7832b7ca7169191370e2 175289
+to 2ea5666da3691a02978411f33617c2d68fc97b13773bdf095ec6fa15a7cf5f5e 187841
+=95
++// BunkerVR: the storage box's book stands this far above the top of the
++// box in the headset (in world units; see VRSendStorageBoxAt).
++const float gfVRStorageBookAbove = 0.35f;
++// BunkerVR: behind the book the room is blurred past this
++// distance from the eyes (in world units; see VRUpdateStorageView).
++const float gfVRStorageSharp = 0.1f;
++
+=551
+-1
++		// BunkerVR: not in the headset: on the flat screen it darkens the
++		// world around the player's raised hand beside the book; on the
++		// floating panel it would be a gray shadow over nothing. The player's
++		// own hands are there instead, their blood showing how hurt they are
++		// (VRUpdateHandBlood).
++		if (cVR_Active() == false)
++			ImGui_DoImage(maskGfx, ImGui_NrmPos(0, 0, 1.0f), ImGui_NrmSizeGroup(1));
+=3
+-1
++		// (BunkerVR: not in the headset, where it would be a solid black
++		// panel behind the book, hiding the room; the book stands at the box
++		// there, VRSendStorageBoxAt.)
++		if (mbAuxiliaryBoxActive && cVR_Active() == false)
+=8
++		// BunkerVR: in the headset the book is shown at once: the delay lets
++		// the flat game's check-health animation begin, which the headset
++		// leaves out. The game's pause (with the difficulty's "game paused in
++		// inventory") still waits as long, so that state starts as usual
++		// ("Timer_VRPauseDelay").
+=2
+-1
++			if (cVR_Active())
++				ImGui_AddTimer("Timer_VRPauseDelay", gfSketchbookOpenDelay);
++			else
++				ImGui_AddTimer("Timer_OpenGuiDelay", gfSketchbookOpenDelay);
+=24
+-1
++		// (BunkerVR: and only while the book is open. In the headset the book shows at once and
++		// can be shut within the 0.4 s, which the flat game's delay never allows; the game would
++		// then be paused after it had shut: no moving, the menu's pointers up.)
++		if (GameDifficulty_GetSettingValueByID_Bool(eGameDifficultySetting_GamePausedInInventory) && mbDelayedPauseGame && mbGamePaused==false &&
++			ImGui_TimerExists("Timer_VRPauseDelay") == false && mbOpen) // BunkerVR (see above)
+=5
++		VRUpdateStorageView(); // BunkerVR
++
+=3
++		VRSendInventoryNews(); // BunkerVR
++		VRSendStorageBoxAt(); // BunkerVR
++		
+=7
+-1
++		ImGui_SetShowMouseAutomatically(cVR_Active() == false); // BunkerVR: none in the headset, which uses the mod's own cursor
+=77
++		mvVRBookGroupPos = vGroupPos; // BunkerVR: kept for an opened photo's center (VRTellPhotoFocus)
++		mvVRBookGroupSize = vGroupSize;
+=333
++		// BunkerVR: a pause still waiting to begin is dropped with the book (see OnGui).
++		mbDelayedPauseGame = false;
++		mbGamePaused = false;
+=2476
++	cVector3f mvVRBookGroupPos = cVector3f(0.0f);	// BunkerVR: the sketchbook's whole group as last drawn...
++	cVector2f mvVRBookGroupSize = cVector2f(0.0f);	// ...for VRTellPhotoFocus
++
++	// BunkerVR: tells the mod where an opened photo's center is in the interface's picture, as fractions of it across and
++	// down, every frame it is open. The mod puts that point in front of the player instead of the book's center, which is
++	// to its right; otherwise the photo appears about 40% of the panel's width off to the left (cVR_PanelFocus; vr.cpp
++	// kInventoryBookMiddle). Worked out from where it comes to rest (avPos and afScale, DoPhotosPage's
++	// vDesiredSelectedPhotoPos and fDesiredSelectedPhotoScale), not from its growing out of the grid, so the panel has one
++	// place to glide to: a square of afScale of the page's height,
++	// its top-left corner at avPos in the photos page, which starts at 0.26, 0.14 of the sketchbook's group and is as big
++	// (DoPhotosPage's ImGui_GroupBegin), all from the top left (ImGui_SetAlignment in OnGui). The sketchbook's group starts
++	// at the picture's top.
++	void VRTellPhotoFocus(const cVector3f &in avPos, float afScale)
++	{
++		cVector2f vScreen = ImGui_GetSize();
++		if (vScreen.x <= 0.0f || vScreen.y <= 0.0f || mvVRBookGroupSize.x <= 0.0f || mvVRBookGroupSize.y <= 0.0f) return;
++		float fSide = afScale * mvVRBookGroupSize.y;
++		float fAcross = mvVRBookGroupPos.x + (0.26f + avPos.x) * mvVRBookGroupSize.x + fSide * 0.5f;
++		float fDown = (0.14f + avPos.y) * mvVRBookGroupSize.y + fSide * 0.5f;
++		cVR_PanelFocus(fAcross / vScreen.x, fDown / vScreen.y);
++	}
+=77
++				if (cVR_Active() && mbCloseSelectedPhoto == false) VRTellPhotoFocus(vDesiredSelectedPhotoPos, fDesiredSelectedPhotoScale); // BunkerVR
+=131
++	// BunkerVR: is the VR mod running? The VR mod answers through the camera:
++	// after setting a special roll value (7006, as VRUsingItemModActive in
++	// PlayerState_UsingItem_Base.hps), reading the camera's matrix returns the
++	// mod's data (12345 as its first number) instead. Without the mod the
++	// answer does not match.
++	bool VRModActive()
++	{
++		cLuxPlayer@ pVRPlayer = cLux_GetPlayer();
++		if (pVRPlayer is null) return false;
++		cCamera@ pVRCam = pVRPlayer.GetCamera();
++		if (pVRCam is null) return false;
++		
++		float fVRRealRoll = pVRCam.GetRoll();
++		pVRCam.SetRoll(7006.0f);
++		cVector3f vVRStatus = pVRCam.GetMatrix().GetTranslation();
++		pVRCam.SetRoll(fVRRealRoll);
++		
++		return vVRStatus.x > 12344.0f && vVRStatus.x < 12346.0f;
++	}
++	
++	// BunkerVR: was the last press in a menu made with a controller's grip
++	// button (rather than its trigger)? Asked the same way, with the special
++	// roll value 7017; always false without the mod.
++	bool VRPressWasGrip()
++	{
++		cLuxPlayer@ pVRPlayer = cLux_GetPlayer();
++		cCamera@ pVRCam = pVRPlayer !is null ? pVRPlayer.GetCamera() : null;
++		if (pVRCam is null) return false;
++		
++		float fVRRealRoll = pVRCam.GetRoll();
++		pVRCam.SetRoll(7017.0f);
++		cVector3f vVRAnswer = pVRCam.GetMatrix().GetTranslation();
++		pVRCam.SetRoll(fVRRealRoll);
++		
++		return vVRAnswer.x > 12344.0f && vVRAnswer.x < 12346.0f && vVRAnswer.y > 0.5f;
++	}
++	
++	// BunkerVR: tells the VR mod, on every frame the inventory is drawn, that
++	// it is open (special roll value 7092, as the body script's news in
++	// PlayerBodyHandler.hps), so that X and A do the inventory's drop and
++	// combine. The body script's news stops once the inventory has paused the
++	// game, and the mod forgets news older than 0.4 s, so without this X would
++	// drop only in the moment after the inventory opened.
++	void VRSendInventoryNews()
++	{
++		cLuxPlayer@ pVRPlayer = cLux_GetPlayer();
++		cCamera@ pVRCam = pVRPlayer !is null ? pVRPlayer.GetCamera() : null;
++		if (pVRCam is null) return;
++		
++		cVector3f vVRRealPos = pVRCam.GetPosition();
++		float fVRRealRoll = pVRCam.GetRoll();
++		pVRCam.SetPosition(cVector3f(1.0f, 0.0f, 0.0f));
++		pVRCam.SetRoll(7092.0f);
++		pVRCam.GetMatrix();
++		pVRCam.SetRoll(fVRRealRoll);
++		pVRCam.SetPosition(vVRRealPos);
++	}
++	
++	// BunkerVR: the storage box's book stands at the box in the headset, above
++	// it rather than at the player's face. While the box's book is open, on
++	// every frame it is drawn (the game may be paused: see VRSendInventoryNews),
++	// the mod is told where it is to stand: gfVRStorageBookAbove above the
++	// center of the top of the box that was opened ("BunkerVR_StorageBox", set
++	// by Prop_AuxiliaryInventory.hps), from the real head (the mod's rolls 7006
++	// and 7005): how far around from the way the head faces (radians, plus to
++	// the left), how far off level and how high, in the world's own units
++	// (cVR_StorageBoxAt; the mod keeps it within reach and below the eyes).
++	void VRSendStorageBoxAt()
++	{
++		if (mbAuxiliaryBoxActive == false || cVR_Active() == false) return;
++		iLuxEntity@ pBox = cLux_ID_Entity(cScript_GetGlobalVarID("BunkerVR_StorageBox"));
++		cMeshEntity@ pMesh = pBox !is null ? pBox.GetMeshEntity() : null;
++		cBoundingVolume@ pBounds = pMesh !is null ? pMesh.GetBoundingVolume() : null;
++		cLuxPlayer@ pVRPlayer = cLux_GetPlayer();
++		cCamera@ pVRCam = pVRPlayer !is null ? pVRPlayer.GetCamera() : null;
++		if (pBounds is null || pVRCam is null) return;
++
++		float fVRRealRoll = pVRCam.GetRoll();
++		pVRCam.SetRoll(7006.0f);
++		cVector3f vVRStatus = pVRCam.GetMatrix().GetTranslation();
++		bool bVRHead = vVRStatus.x > 12344.0f && vVRStatus.x < 12346.0f && vVRStatus.y > 0.5f;
++		cMatrixf mtxVRHead = cMatrixf_Identity;
++		if (bVRHead)
++		{
++			pVRCam.SetRoll(7005.0f);
++			mtxVRHead = pVRCam.GetMatrix();
++		}
++		pVRCam.SetRoll(fVRRealRoll);
++		if (bVRHead == false) return;
++
++		cVector3f vBook = pBounds.GetWorldCenter();
++		vBook.y = pBounds.GetMax().y + gfVRStorageBookAbove;
++		cVector3f vToBook = vBook - mtxVRHead.GetTranslation();
++		cVector3f vFlat = cVector3f(vToBook.x, 0.0f, vToBook.z);
++		cVector3f vFacing = cMath_MatrixMul3x3(mtxVRHead, cVector3f(0.0f, 0.0f, -1.0f));
++		vFacing.y = 0.0f;
++		if (vFlat.Length() < 0.01f || vFacing.Length() < 0.01f) return;
++		cVector3f vFlatDir = cMath_Vector3Normalize(vFlat);
++		vFacing.Normalize();
++		float fAngle = cMath_ATan2(vFacing.z * vFlatDir.x - vFacing.x * vFlatDir.z, cMath_Vector3Dot(vFacing, vFlatDir));
++		cVR_StorageBoxAt(fAngle, vFlat.Length(), vToBook.y);
++	}
++
++	// BunkerVR: while the book (the inventory or the storage box's) is open in
++	// the headset, the room behind it is blurred and the player's body (with
++	// its hands) hidden; left visible, its arms would be blurred along with the
++	// room. Both are set at once, as the game may be paused then, which stops
++	// its own fading: the world's depth of field set straight on the world
++	// (sharp only within gfVRStorageSharp of the eyes; the book is a layer of
++	// its own, not blurred), and the body's coverage at none with what hangs
++	// on it, as the game's number lock hides them in the flat game. All put
++	// back as the book shuts. On every frame drawn.
++	void VRUpdateStorageView()
++	{
++		bool bWanted = mbOpen && cVR_Active();
++		if (bWanted == mbVRStorageView) return;
++		mbVRStorageView = bWanted;
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		cWorld@ pWorld = pMap !is null ? pMap.GetWorld() : null;
++		if (pWorld !is null)
++		{
++			if (bWanted)
++			{
++				pWorld.SetDepthOfFieldFocusStart(0.0f);
++				pWorld.SetDepthOfFieldFocusEnd(gfVRStorageSharp);
++				pWorld.SetDepthOfFieldFalloff(1.0f);
++			}
++			pWorld.SetDepthOfFieldActive(bWanted);
++		}
++		PlayerBody_SetCoverageAmount(bWanted ? 0.0f : 1.0f, false);
++		cScript_SetGlobalArgBool(0, bWanted == false);
++		cScript_RunGlobalFunc(PlayerBody_GetEntityName(), "cScrPropPlayerBody", "_Global_SetAttachmentPropsActive");
++		Log("BunkerVR: the book " + (bWanted ? "opens: the room blurred, the body hidden" : "shuts: the room and the body back") + "\n");
++	}
++
++	//------------------------------------------------------------
++	
+=10
++				// BunkerVR: in the headset the item dropped is the one the hand's
++				// pointer is over. The drop is a key (the VR mod sends X), and the
++				// item in focus follows the pointer only for the mouse's own
++				// buttons, so otherwise only the item under the pointer as the
++				// inventory opened could be dropped. With the pointer over no
++				// item, the game's own way below.
++				if (msVRPointedItem != "" && VRModActive())
++				{
++					if (mbVRPointedCanDrop)
++					{
++						DropItem(msVRPointedItem);
++						return true;
++					}
++					Log("BunkerVR: the inventory's drop key with " + msVRPointedItem + " pointed at, which cannot be dropped\n");
++					return true;
++				}
+=5
++				// BunkerVR: logged, for debugging drops.
++				tString sVRWhat = "nothing chosen";
++				if (msCurrentItem != "") sVRWhat = msCurrentItem + ", which cannot be dropped";
++				Log("BunkerVR: the inventory's drop key with " + sVRWhat + "\n");
+=78
+-1
++							// BunkerVR: the grip button only drags. Letting go of it
++							// where the drag began does nothing; the trigger selects.
++							if (VRPressWasGrip() == false)
++								EquipOrTransferItem();
+=165
++		msVRPointedItem = ""; // BunkerVR
++		mbVRPointedCanDrop = false;
+=249
++			// BunkerVR: the item under the mouse pointer (in the headset, the
++			// hand's pointer), for the drop key (see OnInventoryAction).
++			if (ImGui_PrevMouseOver())
++			{
++				msVRPointedItem = pItem.GetID();
++				mbVRPointedCanDrop = mbAuxiliaryBoxActive==false && pItem.GetType().CanDrop();
++			}
++			
+=561
++		// BunkerVR: logged, for debugging drops.
++		Log("BunkerVR: the inventory drops " + sItemID + "\n");
+=1
++		// (And where it was put, relative to the eyes.)
++		cLuxMap@ pVRMap = cLux_GetCurrentMap();
++		iLuxEntity@ pVRDropped = null;
++		if (pVRMap !is null) @pVRDropped = pVRMap.GetEntityByName(sItemID + "_drop");
++		cLuxPlayer@ pVRPlayer = cLux_GetPlayer();
++		if (pVRDropped !is null && pVRPlayer !is null && pVRPlayer.GetCamera() !is null)
++		{
++			cVector3f vVRFrom = pVRDropped.GetMatrix().GetTranslation() - pVRPlayer.GetCamera().GetPosition();
++			Log("BunkerVR: ...put " + int(vVRFrom.Length() * 100.0f + 0.5f) + " cm from the eyes, " + int(-vVRFrom.y * 100.0f + 0.5f) + " cm below them\n");
++		}
+=397
++	[nosave] tString msVRPointedItem = "";	// BunkerVR: the item under the mouse pointer this frame (see OnInventoryAction)...
++	[nosave] bool mbVRPointedCanDrop = false;	// ...and may it be dropped
+=14
++	[nosave] bool mbVRStorageView = false;	// BunkerVR: the room blurred and the body hidden for the open book (VRUpdateStorageView)
+end

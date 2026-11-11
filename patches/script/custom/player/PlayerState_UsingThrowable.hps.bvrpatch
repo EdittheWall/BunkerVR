@@ -1,0 +1,232 @@
+BunkerVR patch 1
+file script/custom/player/PlayerState_UsingThrowable.hps
+from d2295316736421adc88c911a2e75eb8bf833f2fc6eaf6b4b590968cea1d8d717 10737
+to 625507fa3cd1be6ac33c11de58888ac423786b2dbf94c54d2fc58033933c5604 20402
+=9
++#include "custom/helpers/helper_bunkervr_items.hps"
+=5
++// BunkerVR: how many throws by hand have had their making timed for the log
++// (at most 20), to track down stalls when a thrown bottle is made.
++int glVRThrowNotes = 0;
++
+=166
++		///////////////////////////
++		// BunkerVR: in the headset an item whose profile has the throw move
++		// (helper_bunkervr_items.hps; the molotovs, the meat and the rabbit
++		// doll) is thrown by hand (the right grip held, then let go in a
++		// swing), not by the game's throw.
++		if ((BunkerVR_ItemMoves(msItemType) & glBunkerVR_Move_Throw) != 0 && VRUsingItemModActive())
++			return;
++		
+=33
++	// BunkerVR: throw the item in the right hand by hand. The VR mod requests
++	// this (through the body script) when an armed grenade is let go of in a
++	// swing; avVelocity is how fast the hand was moving, in meters per second.
++	// It works from any player state: nothing is animated, the item in the
++	// hand is swapped for its thrown version and sent off at the hand's speed.
++	// With abPutDown (meat and the rabbit doll let go of with a still hand)
++	// it is put down where it is instead: moving as the hand was, not spun,
++	// touching the world at once (so it can be put on a table), and with none
++	// of a throw's sound or marks.
++	// With abUnlit (a molotov whose cloth was not set burning by hand) a
++	// molotov goes unlit: no fire in flight, it does not burn what it hits,
++	// and it breaks into spilt fuel that is not burning and tells no creature
++	// of fire (Prop_MolotovCocktail.hps reads the mark left for the broken
++	// molotov). The spill can be lit later.
++	void VRThrow(const cVector3f &in avVelocity, bool abPutDown = false, bool abUnlit = false)
++	{
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		if (pMap is null) return;
++		
++		tString sItem = Item_GetHeld(eItemHandlerHand_Right);
++		if (sItem == "") return;
++		tString sVRType = Item_GetHeldType(eItemHandlerHand_Right); // (for its throw's sound)
++		cLuxProp@ pProp = cLux_ToProp(pMap.GetEntityByName(Item_GetHeldEntity(eItemHandlerHand_Right)));
++		if (pProp is null) return;
++		// (Nothing named to throw it as: it stays in the hand, rather than
++		// being taken away with nothing thrown.)
++		if (msThrowEnt == "") return;
++		
++		tString sProp = pProp.GetName();
++		cMatrixf mtxTransform = pProp.GetMatrix();
++		
++		/////////////////
++		// Remove item
++		Item_SetPlayUnequipAnim(sItem, false);
++		Item_Unequip(sItem, true);
++		Item_RemoveFromInventory(sItem);
++		
++		//////////////////
++		// Create throw prop
++		uint lVRMakeStart = cSystem_GetApplicationTime(); // (timed for the log)
++		cLuxProp@ pThrownProp = null;
++		if(mbUseQualitySetting)
++		{
++			@pThrownProp = cLux_ToProp(ParticleSetting_CreateEntityFromSetting(pMap, sProp + "_thrown", msThrowEnt, mtxTransform, cVector3f(1.f)));
++		}
++		else
++		{
++			pMap.CreateEntity(sProp + "_thrown", msThrowEnt, mtxTransform, cVector3f(1.f));
++			@pThrownProp = cLux_ToProp(pMap.GetLatestEntity());
++		}
++		if (pThrownProp is null) return;
++		if (glVRThrowNotes < 20)
++		{
++			glVRThrowNotes++;
++			Log("BunkerVR: throwing: making " + pThrownProp.GetName() + " (" + msThrowEnt + ") took " + (cSystem_GetApplicationTime() - lVRMakeStart) + " ms\n");
++		}
++		
++		//////////////////
++		// Send it off. For a moment it cannot touch anything, so that it does
++		// not bounce off the hand or the body. (Put down: it touches the world
++		// at once, or it would sink into a table it is put on, and only the
++		// body is left out for a moment.)
++		pMap.AddTimer(pThrownProp.GetName(), abPutDown ? 0.3f : 0.1f, "$_Throwable_ActivateThrownCollision");
++		// (Woken, as the game's own dropping wakes what it makes:
++		// SpawnTypeAsEntity in ItemHandler.hps. Otherwise an object made with
++		// almost no speed, put down with a still hand, sleeps where it was
++		// made and floats in the air for a second before it drops.)
++		pThrownProp.WakeUp();
++		for (int i=0; i<pThrownProp.GetBodyNum(); ++i)
++		{
++			iPhysicsBody@ pBody = pThrownProp.GetBody(i);
++			pBody.Enable();
++			pBody.SetLinearVelocity(avVelocity);
++			pBody.SetCollideCharacter(false);
++			if (abPutDown) continue;
++			
++			cVector3f vTorque = cMath_Vector3ClampLength(cMath_RandomSphereSurfacePoint(1.f), 0.5f, 1.f);
++			pBody.SetThrownByPlayer(true);
++			pBody.AddTorque(vTorque);
++			pBody.SetCollide(false);
++		}
++		
++		pThrownProp.EnableBodyCollisionCallback();
++		pThrownProp.SetStaticPhysics(false);
++		pThrownProp.SetAllowBreakCloseToCreation(true);
++		
++		//////////////////////
++		// Special flags
++		// (An unlit molotov: not marked as a molotov, which the
++		// Beast takes fire damage from; its fire, light and sound in flight
++		// off; and the mark for the molotov it breaks into, named after it as
++		// WoodenBreakableComponent names it, set for an unlit one and cleared
++		// for a lit one, as the names can come again.)
++		bool bVRUnlitMolotov = abUnlit && mBaseObj.GetId() == ePlayerState_Custom_UsingMolotovCocktail;
++		if (mBaseObj.GetId() == ePlayerState_Custom_UsingMolotovCocktail)
++		{
++			if (bVRUnlitMolotov == false) pThrownProp.SetVarBool("IsMolotovCocktail", true);
++			else pThrownProp.SetEffectsActive(false, false);
++			cScript_SetGlobalVarBool("BunkerVR_UnlitMolotov_" + pThrownProp.GetName() + "_broken", bVRUnlitMolotov);
++		}
++		if (mBaseObj.GetId() == ePlayerState_Custom_UsingGasGrenade)
++		{
++			pThrownProp.SetVarBool("IsGasGrenade", true);
++		}
++		if (mBaseObj.GetId() == ePlayerState_Custom_UsingGrenade)
++		{
++			Player_AddAimAssistTarget(pThrownProp.GetID());
++		}
++		// (The rabbit doll can be carried to other levels again, as after
++		// the game's own throw: ThrowProp in PlayerState_UsingRabbitDoll.hps.)
++		if (mBaseObj.GetId() == ePlayerState_Custom_UsingRabbitDoll)
++		{
++			pThrownProp.SetAllowMapTransfer(true);
++		}
++		
++		if (abPutDown == false)
++		{
++			//////////////////////
++			// Callback
++			tString sCallback = "void OnThrowItem(const tString &in asEntity)";
++			if (pMap.ScriptMethodExists(sCallback) &&
++				pMap.ScriptPrepare(sCallback))
++			{
++				tString sThrown = pThrownProp.GetName();
++				pMap.SetArgString(0, sThrown);
++				pMap.ScriptExecute();
++			}
++			
++			// (Its own throw's sound, as the game's throw plays it.)
++			tString sVRSound = BunkerVR_ItemThrowSound(sVRType);
++			if (sVRSound != "")
++				Sound_PlayGui(sVRSound, 1.f, eSoundEntryType_GuiWorld);
++			
++			// (Counted as the game's own throw counts it: ThrowProp in
++			// PlayerState_UsingMolotovCocktail.hps. Not an unlit one, which is
++			// no petrol bomb.)
++			if (mBaseObj.GetId() == ePlayerState_Custom_UsingMolotovCocktail && bVRUnlitMolotov == false)
++				GameStats_IncreaseEntryAmount(eHeroStats_PetrolBombsThrown);
++			if (bVRUnlitMolotov)
++				Log("BunkerVR: FIRE: the molotov was thrown unlit: it breaks into spilt fuel, not burning (" + pThrownProp.GetName() + ")\n");
++		}
++		
++		// If the game's own throwing state happens to be going on, end it at
++		// once. (Its usual way out plays an animation on the thing in the
++		// hand, which is gone now.) The game's lighter in the left hand (the
++		// molotov held ready) goes with it: the game's throw takes it away as
++		// its throw animation ends, and that is not played here, so it is
++		// taken away at once (an animation that does not exist is "over" at
++		// once).
++		if (mBaseObj.mpPlayer.GetCurrentStateId() == mBaseObj.GetId())
++		{
++			if (mbEquipLighterInLeftHand)
++				Item_RemoveTempRTUItem("BunkerVR_NoAnimation");
++			mBaseObj.mpPlayer.ChangeState(ePlayerState_Normal);
++		}
++	}
++	
++	// BunkerVR: VRThrow from the body script (argument 0, how the hand moves),
++	// with what it is thrown as named (argument 1): a bottle's state only learns
++	// that as it is entered. Argument 2: a molotov goes unlit; see VRThrow.
++	void _Global_VRThrowAs()
++	{
++		tString sThrowEnt = cScript_GetGlobalArgString(1);
++		if (sThrowEnt != "") msThrowEnt = sThrowEnt;
++		VRThrow(cScript_GetGlobalArgVector3f(0), false, cScript_GetGlobalArgBool(2));
++	}
++	
++	// BunkerVR: the same, but put down where it is in the hand, not thrown
++	// (the grip let go with a still hand; meat and the rabbit doll).
++	// Argument 0 is how the hand moves, argument 1 as for _Global_VRThrowAs.
++	void _Global_VRPutDown()
++	{
++		tString sThrowEnt = cScript_GetGlobalArgString(1);
++		if (sThrowEnt != "") msThrowEnt = sThrowEnt;
++		VRThrow(cScript_GetGlobalArgVector3f(0), true);
++	}
++	
++	// BunkerVR: the other hand has pulled the pin of the grenade in the right
++	// hand. The pin (any part of the model with "pin" in its name) is taken
++	// off and the game's pin sound is played. The grenade itself only starts
++	// counting down once it is thrown.
++	void _Global_VRPullPin()
++	{
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		if (pMap is null) return;
++		cLuxProp@ pProp = cLux_ToProp(pMap.GetEntityByName(Item_GetHeldEntity(eItemHandlerHand_Right)));
++		if (pProp is null) return;
++		
++		cMeshEntity@ pMesh = pProp.GetMeshEntity();
++		if (pMesh !is null)
++		{
++			for (int i = 0; i < pMesh.GetSubMeshEntityNum(); ++i)
++			{
++				cSubMeshEntity@ pSub = pMesh.GetSubMeshEntity(i);
++				if (pSub is null) continue;
++				if (cString_GetFirstStringPos(cString_ToLowerCase(pSub.GetName()), "pin") >= 0)
++					pSub.SetVisible(false);
++			}
++		}
++		
++		Sound_PlayGui("weapons/throwables/grenade/pull_pin", 1.f, eSoundEntryType_GuiWorld);
++	}
++	
++	//------------------------------------------------------------
++	
+=106
++				// BunkerVR: the game's own throw is always lit: no mark from a
++				// throw by hand of the same name is left for its broken molotov
++				// (see VRThrow).
++				cScript_SetGlobalVarBool("BunkerVR_UnlitMolotov_" + pThrownProp.GetName() + "_broken", false);
+end

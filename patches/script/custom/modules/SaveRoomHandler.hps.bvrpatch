@@ -1,0 +1,15 @@
+BunkerVR patch 1
+file script/custom/modules/SaveRoomHandler.hps
+from 296f9f73507688aec5403c71231f0d6a2cbeb92de22d8963c09226614b4c3bf9 12097
+to c4c1abb480b717d1a1b1b1736848574b41cc7f5213d5c992f0671b4de34b5259 12385
+=197
++		// BunkerVR: after one of the mod's debug jumps nothing is saved: the
++		// player is not where the game's own story has them, and Continue must
++		// still find their real game.
++		if(cVR_JumpedThisRun())
++		{
++			Log("BunkerVR: no save: this run has jumped\n");
++			return;
++		}
++		
+end

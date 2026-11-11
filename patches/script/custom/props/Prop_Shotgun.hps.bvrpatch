@@ -1,0 +1,604 @@
+BunkerVR patch 1
+file script/custom/props/Prop_Shotgun.hps
+from 288c2bcb5a999b4159fbe8fca1fe8dceb6a9c3015d89ef3bb988b402c0aad7b7 7955
+to 1cf65dcf51ceb2f532497ef53036d589078fe46b75b3bcd74f001c32265e1668 38757
+=2
++#include "custom/helpers/helper_bunkervr_shotgun.hps" // BunkerVR: the shotgun worked by hand
++#include "custom/helpers/helper_bunkervr_hints.hps" // BunkerVR: the hints on the objects
++
++//------------------------------------------------------------
++
++// BunkerVR: places on the gun, in meters in its model's own terms
++// (x towards the stock, y up; its bones at rest). See VRUpdateShotgun.
++const cVector3f gvShotgun_VRBoltRest = cVector3f(0.0589f, 0.0429f, 0.0f);	// j_pump_chamber: the bolt, which goes back with it
++const cVector3f gvShotgun_VREjectRest = cVector3f(0.0142f, 0.0377f, 0.0f);	// j_shell_eject: the shell in the chamber (its base)
++const cVector3f gvShotgun_VRReloadRest = cVector3f(0.0142f, 0.0126f, 0.0f);	// j_shell_reload: the shell being loaded (its base)
++const cVector3f gvShotgun_VRPort = cVector3f(-0.0085f, -0.012f, 0.0f);		// the loading port, under the receiver (below the tube's front shell)
++const float gfShotgun_VRPumpReach = 0.12f;		// the left palm this near the fore-end's line...
++const float gfShotgun_VRPumpAlong = 0.15f;		// ...and within this of its middle along the barrel: a squeeze there takes the pump
++const float gfShotgun_VRLoadReach = 0.06f;		// a carried shell's nose this near the loading port goes in
++const float gfShotgun_VRCheckVolume = 0.55f;	// the press-check's pump sounds, this loud
++const float gfShotgun_VRShellLength = 0.045f;	// a shell, base to nose (m_Shotgun_Shell_02)
++const float gfShotgun_VRShellBack = 0.015f;		// held in the fingers with its base this far behind the pinch
++const tString gsShotgun_VRFireAnim = "shotgun_fire_empty";	// the gun's own fire in the headset (PlayerState_UsingShotgun_Aim.hps)...
++const float gfShotgun_VRHammerDown = 0.3125f;	// ...held this far through (0.25 of its 0.8 s: the hammer down, before it pumps by itself)
++const tString gsShotgun_VRDryFireSound = "weapons/shotgun/dry_fire";	// the empty click (the game's dry fire: it racks the pump after the click)...
++const float gfShotgun_VRDryClickCut = 0.33f;	// ...cut short after this long (seconds), before the rack (much shorter cuts off the click itself)...
++const float gfShotgun_VRDryClickFade = 0.07f;	// ...faded out over this long
+=138
++			// BunkerVR: in the headset the shot leaves a spent shell
++			// in the chamber, for the pump worked by hand to throw out.
++			if (cVR_Active() && mbChamberedShell)
++			{
++				mVRPump.mbChamberLive = true;
++				mVRPump.Fired();
++			}
+=92
++	/////////////////////////////////////////
++	// BUNKERVR: WORKED BY HAND
++	/////////////////////////////////////////
++	
++	//------------------------------------------------------------
++	
++	void OnAfterAnimationUpdate(cMeshEntity@ apFunctions, float afTimeStep) override
++	{
++		VRUpdateShotgun(apFunctions, true, afTimeStep);
++	}
++	
++	//------------------------------------------------------------
++	
++	// BunkerVR: the shotgun worked by hand. With the VR mod running and this
++	// shotgun in the right hand:
++	//  - Where the left palm is, against the fore-end, is reported to the mod
++	//    (cVR_LeftAtPump): a left squeeze there takes the pump, and the body
++	//    script then aims the barrel through the left hand (Prop_PlayerBody.hps).
++	//    Held, the fore-end slides back and forward with the hand along the
++	//    barrel, the bolt and the shell in the chamber with it. All the way back
++	//    the action opens: a shell in the chamber is thrown out to the right (a
++	//    live one goes back into the pockets: the game has no single shell to
++	//    pick up again) and the hammer is cocked; all the way forward it shuts,
++	//    the tube's next shell in the chamber. It is locked shut while there is
++	//    nothing for it to do (a live shell in the chamber, until the shot; or
++	//    the gun empty): a pull on it is felt as a tap.
++	//    The action is a cBunkerVRPump (helper_bunkervr_shotgun.hps); the game's
++	//    own numbers (mlMagazineCount, mbChamberedShell) are copied in and out.
++	//  - A shot (PlayerState_UsingShotgun_Aim.hps) leaves a spent shell in the
++	//    chamber, and nothing pumps it but the hand. The gun's own fire
++	//    animation drops the hammer and is held there (VRHoldHammer).
++	//  - While the mod says the left hand carries a shell (taken at the hip
++	//    pouch), the model's loading shell is held between that hand's thumb and
++	//    index finger, nose forward; brought to the loading port under the
++	//    receiver it goes into the tube (whenever there is room).
++	// The mod answers through the camera (roll values, as for the revolver:
++	// VRUpdateRevolver in Prop_Gun.hps). It is called from the gun's
++	// after-animation update and by the body script once it has placed the arms
++	// (_Global_VRPlaceShell); the first call in a frame works the action and
++	// loads, the second only puts the parts and the carried and thrown shells
++	// where they are now. (abLogic, afTimeStep: what the caller says; the
++	// frame's own clock decides.)
++	void VRUpdateShotgun(cMeshEntity@ apMesh, bool abLogic, float afTimeStep)
++	{
++		if (apMesh is null) return;
++		VRDryClickCut(); // (the empty click cut short)
++		if (cVR_Active() == false || mBaseObj.GetName() != Item_GetHeldEntity(eItemHandlerHand_Right))
++		{
++			if (mbVRWasHeld) VRLeaveHand(apMesh);
++			return;
++		}
++		mbVRWasHeld = true;
++		
++		cLuxPlayer@ pPlayer = cLux_GetPlayer();
++		cCamera@ pCam = pPlayer !is null ? pPlayer.GetCamera() : null;
++		cBoneState@ pRoot = apMesh.GetBoneStateFromName("j_trench_shotgun");
++		iPhysicsBody@ pMuzzle = mBaseObj.GetBodyFromName("Body_BulletStart");
++		if (pCam is null || pRoot is null || pMuzzle is null) return;
++		
++		/////////////////////////////
++		// The gun as it is now: its root bone, how many meters one of the
++		// root's own units is in the world (fScale) and in the model as made
++		// (fUnit: the gun itself may be drawn at another size, as held things
++		// are), the way the barrel points (the muzzle's Z, as the game's shot),
++		// up, right.
++		cMatrixf mtxRoot = pRoot.GetWorldMatrix();
++		float fScale = cMath_MatrixMul3x3(mtxRoot, cVector3f(1.0f, 0.0f, 0.0f)).Length();
++		float fSize = cMath_MatrixMul3x3(mBaseObj.GetMatrix(), cVector3f(1.0f, 0.0f, 0.0f)).Length();
++		if (fSize < 0.000001f) return;
++		float fUnit = fScale / fSize;
++		cVector3f vFwd = cMath_MatrixMul3x3(pMuzzle.GetWorldMatrix(), cVector3f(0.0f, 0.0f, 1.0f));
++		cVector3f vUp = cMath_MatrixMul3x3(mtxRoot, cVector3f(0.0f, 1.0f, 0.0f));
++		if (fScale < 0.000001f || vFwd.Length() < 0.0001f) return;
++		vFwd.Normalize();
++		vUp = vUp - vFwd * cMath_Vector3Dot(vUp, vFwd);
++		if (vUp.Length() < 0.000001f) return;
++		vUp.Normalize();
++		cVector3f vRight = cMath_Vector3Cross(vFwd, vUp);
++		
++		/////////////////////////////
++		// What the mod says the hands are doing, and where the left palm is.
++		bool bMod = false;
++		bool bLeftOnGun = false;
++		bool bCarried = false;
++		bool bCheck = false;
++		bool bLeftKnown = false;
++		cMatrixf mtxLeft = cMatrixf_Identity;
++		float fRealRoll = pCam.GetRoll();
++		pCam.SetRoll(7014.0f);
++		cVector3f vStatus = pCam.GetMatrix().GetTranslation();
++		if (vStatus.x > 12344.0f && vStatus.x < 12346.0f)
++		{
++			bMod = true;
++			// Third number (z): +2 while the left hand holds the gun (the
++			// shotgun's pump), +4 while it carries a shell, +8 while A is held
++			// (a press-check).
++			int lFlags = int(vStatus.z + 0.5f);
++			bLeftOnGun = (lFlags & 2) != 0;
++			bCarried = (lFlags & 4) != 0;
++			bCheck = (lFlags & 8) != 0;
++			pCam.SetRoll(7010.0f);
++			cVector3f vPalms = pCam.GetMatrix().GetTranslation();
++			if (vPalms.x > 12344.0f && vPalms.x < 12346.0f && (int(vPalms.y + 0.5f) & 1) != 0)
++			{
++				pCam.SetRoll(7011.0f); // where the left palm is
++				mtxLeft = pCam.GetMatrix();
++				bLeftKnown = true;
++			}
++			if (bCarried)
++			{
++				pCam.SetRoll(7022.0f); // tell the mod this script looks after the shell (it then draws none itself)
++				pCam.GetMatrix();
++			}
++		}
++		pCam.SetRoll(fRealRoll);
++		if (bMod == false) return;
++		
++		// A frame's work is done by whichever call comes first in it (the gun's
++		// own after-animation update, or the body script's once it has placed
++		// the arms: a gun that is not animating has no after-animation update).
++		double fNow = cEngine_GetGameTime();
++		bool bLogic = fNow > mfVRLogicAt + 0.000001 || fNow < mfVRLogicAt;
++		float fStep = bLogic ? cMath_Clamp(float(fNow - mfVRLogicAt), 0.0f, 0.1f) : 0.0f;
++		if (bLogic) mfVRLogicAt = fNow;
++		
++		/////////////////////////////
++		// The action, worked by the left hand (once a frame).
++		if (bLogic)
++		{
++			mVRPump.mlMagazine = mlMagazineCount;
++			mVRPump.mbChamberLive = mbChamberedShell;
++			if (mVRPump.mbChamberLive) mVRPump.mbChamberSpent = false;
++			
++			// Where the left palm is along the barrel (from a point fixed on
++			// the gun), and whether it is at the fore-end (as it is now). A
++			// shot's kick pushes the gun back under the hand and lets it come
++			// forward again (Prop_PlayerBody.hps, which says how far it pushed
++			// it as it placed the gun): left out, or it would work the freed
++			// pump by itself.
++			cVector3f vLeft = mtxLeft.GetTranslation();
++			float fKickPush = cScript_GetGlobalVarFloat("BunkerVR_GunKickPushed");
++			float fAlong = (cMath_Vector3Dot(vLeft - mtxRoot.GetTranslation(), vFwd) - fKickPush) / fSize; // (in the model's meters, as the pump's travel)
++			cVector3f vForeEnd = BunkerVR_ShotgunPoint(mtxRoot, fUnit, gvBunkerVR_ShotgunForeEnd) - vFwd * (gfBunkerVR_PumpTravel * mVRPump.mfSlide * fSize);
++			float fOffAlong = cMath_Vector3Dot(vLeft - vForeEnd, vFwd);
++			float fOffAcross = ((vLeft - vForeEnd) - vFwd * fOffAlong).Length();
++			cVR_LeftAtPump(bLeftKnown && cMath_Abs(fOffAlong) < gfShotgun_VRPumpAlong && fOffAcross < gfShotgun_VRPumpReach);
++			
++			if (bLeftOnGun && bLeftKnown)
++			{
++				if (mVRPump.mbHeld == false)
++				{
++					mVRPump.Hold(fAlong);
++					VRNote("the left hand takes the pump (the fore-end " + int(mVRPump.mfSlide * 100.0f) + "% back; " + mlMagazineCount + " in the tube, " +
++						   (mbChamberedShell ? "a live shell" : (mVRPump.mbChamberSpent ? "a spent shell" : "nothing")) + " in the chamber)");
++				}
++			}
++			else if (mVRPump.mbHeld)
++			{
++				mVRPump.LetGo();
++				VRNote("the left hand lets go of the pump (the fore-end " + int(mVRPump.mfSlide * 100.0f) + "% back)");
++			}
++			// A held: a press-check. The fore-end draws back partway, the shell in the
++			// chamber back with the bolt where it shows, nothing thrown out; the counter
++			// above the gun (the news below) says how many are loaded and how many are
++			// spare.
++			bool bShowedWas = mVRPump.CheckShows();
++			mVRPump.mbCheck = bCheck;
++			mVRPump.Step(fAlong, fStep);
++			if(mVRPump.CheckShows() && bShowedWas == false)
++			{
++				VRNote("a press-check (A held): the fore-end " + int(mVRPump.mfSlide * 100.0f) + "% back; " + mlMagazineCount + " in the tube, " +
++					   (mVRPump.mbChamberLive ? "a live shell" : (mVRPump.mbChamberSpent ? "a spent shell" : "nothing")) + " in the chamber, " +
++					   ItemType_GetCountInInventory("ShotgunAmmunition") + " spare");
++				// (The action's own sounds, softer, partway back and home again; a tick in the
++				// left hand.)
++				Sound_PlayGui("weapons/shotgun/breech_open", gfShotgun_VRCheckVolume, eSoundEntryType_GuiWorld);
++				BunkerVR_GunBuzz(0, 0.03f, 0.35f);
++			}
++			else if(mVRPump.CheckShows() == false && bShowedWas)
++			{
++				Sound_PlayGui("weapons/shotgun/breech_close", gfShotgun_VRCheckVolume, eSoundEntryType_GuiWorld);
++				BunkerVR_GunBuzz(0, 0.03f, 0.35f);
++			}
++			mlMagazineCount = mVRPump.mlMagazine;
++			mbChamberedShell = mVRPump.mbChamberLive;
++			cScript_SetGlobalVarFloat("BunkerVR_PumpSlide", mVRPump.mfSlide); // (the body script draws the left hand on the fore-end: VRLeftOnPump)
++			
++			int lEvents = mVRPump.mlEvents;
++			if ((lEvents & glBunkerVR_PumpJumped) != 0 && mlVRJumpNotes < 10)
++			{
++				mlVRJumpNotes++;
++				VRNote("the left hand's place jumped along the barrel from one update to the next (the tracking?): left out of the pump");
++			}
++			if ((lEvents & glBunkerVR_PumpShortPull) != 0)
++				VRNote("a short pull: the fore-end " + int(mVRPump.mfShortPullMost * 100.0f) + "% back, home again (it opens at " + int(gfBunkerVR_PumpOpenAt * 100.0f + 0.5f) + "%)");
++			if ((lEvents & glBunkerVR_PumpBlocked) != 0)
++			{
++				// Pulled on while locked: a tap in the left hand, and why.
++				BunkerVR_GunBuzz(0, 0.02f, 0.45f);
++				if (mlVRLockNotes < 6)
++				{
++					mlVRLockNotes++;
++					VRNote(mVRPump.mbChamberLive ? "the pump is locked: a live shell in the chamber (fire it first)" : "the pump is locked: nothing in the gun (load a shell first)");
++				}
++			}
++			if ((lEvents & glBunkerVR_PumpOpened) != 0)
++			{
++				Sound_PlayGui("weapons/shotgun/breech_open", 1.f, eSoundEntryType_GuiWorld);
++				BunkerVR_GunBuzz(0, 0.04f, 0.6f);
++				BunkerVR_GunBuzz(1, 0.02f, 0.25f);
++				VRNote("the action opened" + ((lEvents & glBunkerVR_PumpEjectedLive) != 0 ? ", a live shell thrown out (back into the pockets)" :
++						((lEvents & glBunkerVR_PumpEjectedSpent) != 0 ? ", the spent shell thrown out" : ", the chamber empty")) + " (" + mlMagazineCount + " in the tube)");
++			}
++			if ((lEvents & (glBunkerVR_PumpEjectedLive | glBunkerVR_PumpEjectedSpent)) != 0)
++			{
++				bool bLive = (lEvents & glBunkerVR_PumpEjectedLive) != 0;
++				VRThrowShell(apMesh, bLive, vRight, vUp, vFwd);
++				if (bLive) Item_AddToInventory("ShotgunAmmunition");
++			}
++			if ((lEvents & glBunkerVR_PumpShut) != 0)
++			{
++				Sound_PlayGui("weapons/shotgun/breech_close", 1.f, eSoundEntryType_GuiWorld);
++				BunkerVR_GunBuzz(0, 0.05f, 0.75f);
++				BunkerVR_GunBuzz(1, 0.03f, 0.35f);
++				VRNote("the action shut" + ((lEvents & glBunkerVR_PumpChambered) != 0 ? ", a shell in the chamber (" + mlMagazineCount + " left in the tube)" : ", nothing in the chamber (the tube is empty)"));
++			}
++			if ((lEvents & glBunkerVR_PumpChambered) != 0) cScript_SetGlobalVarBool("Shotgun_ChamberShell", false); // (as the game's own pump does)
++			if ((lEvents & glBunkerVR_PumpShut) != 0 && (lEvents & glBunkerVR_PumpChambered) != 0) cVR_HintUsed("pump_work"); // (the hints)
++			
++			// The hints for the left hand (VRUpdateHints in
++			// PlayerBodyHandler.hps): a shell in it, where it goes in; at the
++			// fore-end, how to take it; on it with something to rack, how.
++			if (bCarried && bLeftKnown && mbVRShellDone == false && ItemType_GetCountInInventory("ShotgunAmmunition") > 0)
++				BunkerVR_HintOffer(0, "shell_load", BunkerVR_ShotgunPoint(mtxRoot, fUnit, gvShotgun_VRPort));
++			else if (bLeftOnGun && mVRPump.mbHeld && mVRPump.mbChamberLive == false && (mVRPump.mbChamberSpent || mVRPump.mlMagazine > 0))
++				BunkerVR_HintOffer(0, "pump_work", vForeEnd);
++			else if (bLeftOnGun == false && bLeftKnown && cMath_Abs(fOffAlong) < gfShotgun_VRPumpAlong && fOffAcross < gfShotgun_VRPumpReach)
++				BunkerVR_HintOffer(0, "pump_hold", vForeEnd);
++			
++			VRHoldHammer(apMesh);
++		}
++		
++		/////////////////////////////
++		// The parts the hand moves: the fore-end and the bolt back by the
++		// slide (the model's X is towards the stock), and the shell in the
++		// chamber back with the bolt (or flying, once thrown out).
++		cVector3f vBack = cVector3f(gfBunkerVR_PumpTravel * mVRPump.mfSlide / fUnit, 0.0f, 0.0f);
++		VRSetBoneLocal(apMesh, "j_pump", gvBunkerVR_ShotgunForeEnd * (1.0f / fUnit) + vBack);
++		VRSetBoneLocal(apMesh, "j_pump_chamber", gvShotgun_VRBoltRest * (1.0f / fUnit) + vBack);
++		if (mfVRFlight >= 0.0f)
++			VRPlaceFlyingShell(apMesh, bLogic, fStep);
++		else
++			VRSetBoneLocal(apMesh, "j_shell_eject", gvShotgun_VREjectRest * (1.0f / fUnit) + ((mVRPump.mbChamberLive || mVRPump.mbChamberSpent) ? vBack : cVector3f(0.0f)));
++		
++		/////////////////////////////
++		// The shell in the left hand.
++		// No shells left in the pockets: the hand comes up empty.
++		if (bCarried && ItemType_GetCountInInventory("ShotgunAmmunition") <= 0 && cLux_GetGodModeActivated() == false) bCarried = false;
++		// One shell a trip: once it has gone in, the hand is empty until the mod
++		// stops saying "carrying" (it stops when it hears the news).
++		if (bCarried == false) mbVRShellDone = false;
++		bool bShellShown = bCarried && mbVRShellDone == false && bLeftKnown;
++		cBoneState@ pShell = apMesh.GetBoneStateFromName("j_shell_reload");
++		if (bShellShown && pShell !is null)
++		{
++			// Which way the hand points (the palm matrix's -Z), and where its
++			// thumb and index finger meet.
++			cVector3f vHandFwd = cMath_MatrixMul3x3(mtxLeft, cVector3f(0.0f, 0.0f, -1.0f));
++			if (vHandFwd.Length() > 0.0001f) vHandFwd.Normalize();
++			cVector3f vPinch = VRLeftPinch(mtxLeft);
++			
++			// The shell is modeled lying along its bone's X, its base at the
++			// bone and its nose towards -X: a quarter turn about the upright axis
++			// puts its nose the way the hand points (as the revolver's bullet;
++			// whichever direction the math library turns, the one that does).
++			cMatrixf mtxQuarter = cMath_MatrixRotateY(cMath_PiDiv2);
++			if (cMath_MatrixMul3x3(mtxQuarter, cVector3f(1.0f, 0.0f, 0.0f)).z < 0.0f) mtxQuarter = cMath_MatrixRotateY(-cMath_PiDiv2);
++			cMatrixf mtxShell = cMath_MatrixMul(mtxLeft.GetRotation(), mtxQuarter);
++			mtxShell = cMath_MatrixMul(mtxShell, cMath_MatrixScale(cVector3f(fScale, fScale, fScale)));
++			cVector3f vBase = vPinch - vHandFwd * (gfShotgun_VRShellBack * fSize);
++			mtxShell.SetTranslation(vBase);
++			pShell.SetWorldMatrix(mtxShell);
++			
++			// Its nose at the loading port: it goes in.
++			if (bLogic)
++			{
++				cVector3f vNose = vBase + vHandFwd * (gfShotgun_VRShellLength * fSize);
++				float fDist = (vNose - BunkerVR_ShotgunPoint(mtxRoot, fUnit, gvShotgun_VRPort)).Length();
++				if (fDist < gfShotgun_VRLoadReach)						VRLoadShell();
++				else if (fDist > gfShotgun_VRLoadReach + 0.06f)			mbVRShellRefused = false;
++			}
++		}
++		else
++		{
++			VRSetBoneLocal(apMesh, "j_shell_reload", gvShotgun_VRReloadRest * (1.0f / fUnit));
++		}
++		
++		/////////////////////////////
++		// What shows: the shell in the chamber (live or spent) or the one
++		// thrown out, the carried one, and the tube's front one.
++		bool bFlying = mfVRFlight >= 0.0f;
++		SetSubmeshVisible(gsShotgun_ChamberShellMesh_Unspent, bFlying ? mbVRFlightLive : mVRPump.mbChamberLive);
++		SetSubmeshVisible(gsShotgun_ChamberShellMesh_Spent, bFlying ? mbVRFlightLive == false : mVRPump.mbChamberSpent);
++		SetSubmeshVisible(gsShotgun_ReloadShell, bShellShown);
++		SetSubmeshVisible(gsShotgun_MagazineShell, mlMagazineCount > 0);
++		
++		/////////////////////////////
++		// News for the mod (roll 7028, as the revolver's): what just happened
++		// (1 = a shell went in, 3 = one was refused; plus 10 while the
++		// press-check shows the shells), the spare shells (times ten, for the
++		// pouch's counter), and how many are loaded.
++		if (bLogic)
++		{
++			int lSpare = ItemType_GetCountInInventory("ShotgunAmmunition");
++			if (lSpare < 0) lSpare = 0;
++			cVector3f vRealPos = pCam.GetPosition();
++			fRealRoll = pCam.GetRoll();
++			pCam.SetPosition(cVector3f(float(mlVREvent + (mVRPump.CheckShows() ? 10 : 0)), float(lSpare * 10), float(mVRPump.Loaded())));
++			pCam.SetRoll(7028.0f);
++			pCam.GetMatrix();
++			pCam.SetRoll(fRealRoll);
++			pCam.SetPosition(vRealPos);
++			mlVREvent = 0;
++		}
++	}
++	
++	//------------------------------------------------------------
++	
++	// BunkerVR: where the left hand's thumb and index finger meet, from the
++	// body's own finger bones (as the revolver's carried bullet); failing that, a
++	// little above the palm.
++	cVector3f VRLeftPinch(const cMatrixf &in a_mtxPalm)
++	{
++		cVector3f vPinch = a_mtxPalm.GetTranslation() + cMath_MatrixMul3x3(a_mtxPalm, cVector3f(0.0f, 0.03f, -0.01f));
++		iLuxEntity@ pBody = cLux_ID_Entity(PlayerBody_GetEntityID());
++		cMeshEntity@ pBodyMesh = pBody !is null ? pBody.GetMeshEntity() : null;
++		if (pBodyMesh is null) return vPinch;
++		cBoneState@ pIndexA = pBodyMesh.GetBoneStateFromName("j_L_Index_3");
++		cBoneState@ pIndexB = pBodyMesh.GetBoneStateFromName("j_L_Index_4");
++		cBoneState@ pThumb = pBodyMesh.GetBoneStateFromName("j_L_Thumb_3");
++		if (pIndexA is null || pIndexB is null || pThumb is null) return vPinch;
++		cVector3f vIndexPad = pIndexA.GetWorldPosition() + (pIndexB.GetWorldPosition() - pIndexA.GetWorldPosition()) * 0.6f;
++		return (vIndexPad + pThumb.GetWorldPosition()) * 0.5f;
++	}
++	
++	//------------------------------------------------------------
++	
++	// BunkerVR: the carried shell has reached the loading port: into the tube,
++	// if there is room (once per approach the mod is told it was refused, and
++	// it taps the hand).
++	void VRLoadShell()
++	{
++		mVRPump.mlMagazine = mlMagazineCount;
++		if (mVRPump.CanLoad() == false)
++		{
++			if (mbVRShellRefused == false)
++			{
++				mbVRShellRefused = true;
++				mlVREvent = 3;
++				VRNote("a shell refused at the loading port (" + mlMagazineCount + " in the tube: full)");
++			}
++			return;
++		}
++		mlMagazineCount = cMath_Min(mlMagazineCount + 1, glShotgun_MagazineCapacity);
++		mVRPump.mlMagazine = mlMagazineCount;
++		tString sItem = ItemType_GetFirstInInventory("ShotgunAmmunition");
++		if (sItem != "") Item_RemoveFromInventory(sItem);
++		mbVRShellDone = true;
++		mlVREvent = 1;
++		cVR_HintUsed("shell_load"); // (the hints)
++		Sound_PlayGui("weapons/shotgun/load_bullet", 1.f, eSoundEntryType_GuiWorld);
++		VRNote("a shell loaded into the tube (" + mlMagazineCount + " in it now)");
++	}
++	
++	//------------------------------------------------------------
++	
++	// BunkerVR: a shell thrown out of the chamber: it leaves from where it is
++	// now (back with the bolt), to the gun's right and up, turning over, and is
++	// gone once it has fallen away (VRPlaceFlyingShell).
++	void VRThrowShell(cMeshEntity@ apMesh, bool abLive, const cVector3f &in avRight, const cVector3f &in avUp, const cVector3f &in avFwd)
++	{
++		cBoneState@ pShell = apMesh.GetBoneStateFromName("j_shell_eject");
++		if (pShell is null) return;
++		m_mtxVRFlightStart = pShell.GetWorldMatrix();
++		mvVRFlightRight = avRight;
++		mvVRFlightUp = avUp;
++		mvVRFlightFwd = avFwd;
++		mbVRFlightLive = abLive;
++		mfVRFlight = 0.0f;
++	}
++	
++	void VRPlaceFlyingShell(cMeshEntity@ apMesh, bool abLogic, float afTimeStep)
++	{
++		if (abLogic) mfVRFlight += afTimeStep;
++		if (mfVRFlight > gfBunkerVR_ShellFlight)
++		{
++			// Fallen away: the sound of it landing, and its bone back in the chamber.
++			mfVRFlight = -1.0f;
++			Sound_PlayGui("weapons/shotgun/empty_shells", 1.f, eSoundEntryType_GuiWorld);
++			return;
++		}
++		cBoneState@ pShell = apMesh.GetBoneStateFromName("j_shell_eject");
++		if (pShell is null) return;
++		cVector3f vFlown = BunkerVR_ShellFlightAt(mfVRFlight);
++		cMatrixf mtxNow = cMath_MatrixMul(m_mtxVRFlightStart, cMath_MatrixRotateZ(gfBunkerVR_ShellSpin * mfVRFlight));
++		mtxNow.SetTranslation(m_mtxVRFlightStart.GetTranslation() + mvVRFlightRight * vFlown.x + mvVRFlightUp * vFlown.y + mvVRFlightFwd * vFlown.z);
++		pShell.SetWorldMatrix(mtxNow);
++	}
++	
++	//------------------------------------------------------------
++	
++	// BunkerVR: the hammer. The trigger plays the gun's own
++	// gsShotgun_VRFireAnim (PlayerState_UsingShotgun_Aim.hps): its hammer falls
++	// in its first tenth of a second, and from 0.3 s it works the pump by itself
++	// and cocks the hammer again (from its .fbx). So it is held where the hammer
++	// is down until the hand's pump cocks it, then at its start (the hammer
++	// back, as in the aim's idle). Played again while held there, it is let run
++	// to the fall.
++	void VRHoldHammer(cMeshEntity@ apMesh)
++	{
++		cAnimationState@ pFire = apMesh.GetAnimationStateFromName(gsShotgun_VRFireAnim);
++		if (pFire is null || pFire.IsActive() == false) return;
++		if (mVRPump.mbCocked)
++		{
++			if (pFire.IsPaused() == false || pFire.GetRelativeTimePosition() > 0.0001f)
++			{
++				pFire.SetRelativeTimePosition(0.0f);
++				pFire.SetPaused(true);
++			}
++		}
++		else if (pFire.GetRelativeTimePosition() >= gfShotgun_VRHammerDown)
++		{
++			if (pFire.IsPaused() == false || pFire.GetRelativeTimePosition() > gfShotgun_VRHammerDown + 0.0001f)
++			{
++				pFire.SetRelativeTimePosition(gfShotgun_VRHammerDown);
++				pFire.SetPaused(true);
++			}
++		}
++		else if (pFire.IsPaused()) pFire.SetPaused(false);
++	}
++	
++	//------------------------------------------------------------
++	
++	// BunkerVR: a bone's place within its parent (all of these are children of
++	// the root bone, in its own units).
++	void VRSetBoneLocal(cMeshEntity@ apMesh, const tString &in asBone, const cVector3f &in avLocal)
++	{
++		cBoneState@ pBone = apMesh.GetBoneStateFromName(asBone);
++		if (pBone !is null) pBone.SetPosition(avLocal);
++	}
++	
++	// BunkerVR: the shotgun has left the hand (put away, dropped, the mod
++	// stopped): its parts back in their places, the game's own shells shown.
++	void VRLeaveHand(cMeshEntity@ apMesh)
++	{
++		mbVRWasHeld = false;
++		mfVRFlight = -1.0f;
++		mVRPump.LetGo();
++		cVR_LeftAtPump(false);
++		cScript_SetGlobalVarFloat("BunkerVR_PumpSlide", 0.0f);
++		cScript_SetGlobalVarFloat("BunkerVR_GunKickPushed", 0.0f);
++		cAnimationState@ pFire = apMesh.GetAnimationStateFromName(gsShotgun_VRFireAnim);
++		if (pFire !is null && pFire.IsPaused()) pFire.SetPaused(false); // (let the game's own animation run again: VRHoldHammer)
++		cBoneState@ pRoot = apMesh.GetBoneStateFromName("j_trench_shotgun");
++		float fScale = pRoot !is null ? cMath_MatrixMul3x3(pRoot.GetWorldMatrix(), cVector3f(1.0f, 0.0f, 0.0f)).Length() : 0.0f;
++		float fSize = cMath_MatrixMul3x3(mBaseObj.GetMatrix(), cVector3f(1.0f, 0.0f, 0.0f)).Length();
++		if (fScale > 0.000001f && fSize > 0.000001f)
++		{
++			float fUnit = fScale / fSize;
++			VRSetBoneLocal(apMesh, "j_pump", gvBunkerVR_ShotgunForeEnd * (1.0f / fUnit));
++			VRSetBoneLocal(apMesh, "j_pump_chamber", gvShotgun_VRBoltRest * (1.0f / fUnit));
++			VRSetBoneLocal(apMesh, "j_shell_eject", gvShotgun_VREjectRest * (1.0f / fUnit));
++			VRSetBoneLocal(apMesh, "j_shell_reload", gvShotgun_VRReloadRest * (1.0f / fUnit));
++		}
++		UpdateBulletVisibility();
++	}
++	
++	// BunkerVR: called by the body script once it has placed the arms, so that
++	// the carried shell sits in the fingers as they are now, and a thrown one
++	// flies on from where it is (no work done: see VRUpdateShotgun).
++	void _Global_VRPlaceShell()
++	{
++		VRUpdateShotgun(mBaseObj.GetMeshEntity(), false, 0.0f);
++	}
++	
++	// BunkerVR: the trigger pulled in the headset (PlayerState_UsingShotgun_Aim.hps):
++	// what it does, glBunkerVR_PumpTrigger... (the hammer falls if it can).
++	void _Global_VRTrigger()
++	{
++		mVRPump.mlMagazine = mlMagazineCount;
++		mVRPump.mbChamberLive = mbChamberedShell;
++		int lHow = mVRPump.Trigger();
++		VRNote(lHow == glBunkerVR_PumpTriggerFire ? "the trigger: it fires" : (lHow == glBunkerVR_PumpTriggerClick ? "the trigger: the hammer falls on an empty chamber (click)" :
++			   (mVRPump.Shut() ? "the trigger: nothing (the hammer is down: work the pump)" : "the trigger: nothing (the action is not shut: the fore-end " + int(mVRPump.mfSlide * 100.0f) + "% back)")));
++		if (lHow == glBunkerVR_PumpTriggerClick) VRDryClick();
++		cScript_SetGlobalReturnInt(lHow);
++	}
++	
++	// BunkerVR: the hammer falling on an empty chamber, heard: the game's own dry
++	// fire (weapons/shotgun/dry_fire, 1.4 s), made for its empty-fire animation,
++	// which racks the pump after the hammer falls (the hammer down by 0.1 s, the
++	// pump from 0.3 s), so it is cut short after its click (faded from
++	// gfShotgun_VRDryClickCut over gfShotgun_VRDryClickFade, then stopped:
++	// VRDryClickCut). The pump is the hand's to work. (The aiming state leaves
++	// its own dry fire out in the headset: PlayerState_UsingWeapon_Aim_Base.hps.)
++	void VRDryClick()
++	{
++		VRDryClickStop();
++		mlVRDryClicks++;
++		cSoundEntity@ pClick = mBaseObj.PlaySound("BunkerVR_DryClick_" + mlVRDryClicks, gsShotgun_VRDryFireSound, true, true);
++		m_idVRDryClick = pClick !is null ? pClick.GetID() : tID_Invalid;
++		mfVRDryClickAt = cEngine_GetGameTime();
++	}
++	
++	// BunkerVR: the click (VRDryClick) faded, then stopped, as its time comes.
++	void VRDryClickCut()
++	{
++		if (m_idVRDryClick == tID_Invalid) return;
++		cSoundEntity@ pClick = cLux_ID_SoundEntity(m_idVRDryClick);
++		double fSince = cEngine_GetGameTime() - mfVRDryClickAt;
++		if (pClick is null || fSince < 0.0)
++		{
++			m_idVRDryClick = tID_Invalid;
++			return;
++		}
++		if (fSince >= gfShotgun_VRDryClickCut + gfShotgun_VRDryClickFade) VRDryClickStop();
++		else if (fSince >= gfShotgun_VRDryClickCut) pClick.FadeVolumeMul(0.0f, 1.0f / gfShotgun_VRDryClickFade);
++	}
++	
++	void VRDryClickStop()
++	{
++		cSoundEntity@ pClick = cLux_ID_SoundEntity(m_idVRDryClick);
++		if (pClick !is null) pClick.Stop(false);
++		m_idVRDryClick = tID_Invalid;
++	}
++	
++	// BunkerVR: a "BunkerVR shotgun:" line in hpl.log (the first 400; a shot and
++	// its pumping write a dozen or more), with the game's time (seconds).
++	void VRNote(const tString &in asText)
++	{
++		if (mlVRNotes >= 400) return;
++		mlVRNotes++;
++		Log("BunkerVR shotgun: " + asText + " [" + int(cEngine_GetGameTime() * 100.0) / 100.0f + " s]\n");
++	}
++	
++	//------------------------------------------------------------
++	
+=46
++	
++	[nosave] cBunkerVRPump mVRPump;					// BunkerVR: the action worked by hand (VRUpdateShotgun)
++	[nosave] bool mbVRWasHeld = false;				// BunkerVR: in the right hand, worked by hand, at the last update
++	[nosave] float mfVRFlight = -1.0f;				// BunkerVR: how long a thrown-out shell has flown (seconds; -1 none)...
++	[nosave] bool mbVRFlightLive = false;			// ...a live one or a spent one...
++	[nosave] cMatrixf m_mtxVRFlightStart = cMatrixf_Identity;	// ...where it left from...
++	[nosave] cVector3f mvVRFlightRight = cVector3f(1.0f, 0.0f, 0.0f);	// ...and the gun's right, up and forward then
++	[nosave] cVector3f mvVRFlightUp = cVector3f(0.0f, 1.0f, 0.0f);
++	[nosave] cVector3f mvVRFlightFwd = cVector3f(0.0f, 0.0f, 1.0f);
++	[nosave] bool mbVRShellDone = false;			// BunkerVR: the carried shell has gone in; the hand is empty until it lets go
++	[nosave] bool mbVRShellRefused = false;			// BunkerVR: the mod has been told this approach was refused
++	[nosave] int mlVREvent = 0;						// BunkerVR: news for the mod (1 a shell in, 3 refused)
++	[nosave] int mlVRNotes = 0;						// BunkerVR: "BunkerVR shotgun:" lines written
++	[nosave] int mlVRLockNotes = 0;					// BunkerVR: of them, "the pump is locked" ones (at most 6)...
++	[nosave] int mlVRJumpNotes = 0;					// ...and "jumped" ones (at most 10)
++	[nosave] double mfVRLogicAt = -1.0;				// BunkerVR: the game time of the last frame whose work was done
++	[nosave] tID m_idVRDryClick = tID_Invalid;		// BunkerVR: the empty click sounding (VRDryClick)...
++	[nosave] double mfVRDryClickAt = 0.0;			// ...since this game time...
++	[nosave] int mlVRDryClicks = 0;					// ...and how many, for their names
+end

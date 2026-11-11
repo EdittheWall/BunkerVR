@@ -1,0 +1,44 @@
+BunkerVR patch 1
+file script/custom/props/Prop_PocketWatch.hps
+from 05a3ca2b1ebaf5440be90a181999987baf67012702b50f517a96e5c529dc7fe7 12100
+to 18b15ec6c4f2095e55334400e6c8a2a6070d84873573852fe9e0dd2c511f02a8 13519
+=195
++	// BunkerVR: winding by hand in the headset (VRUpdateWatch in
++	// PlayerBodyHandler.hps). Argument 0 is how far: 0 not yet to 1 for all
++	// three winds; the watch hand climbs from where it stopped to the
++	// generator's current time, as the game's own winding draws it. -1 means
++	// not wound by hand.
++	void _Global_VRWind()
++	{
++		mfVRWound = cScript_GetGlobalArgFloat(0);
++	}
++	
++	//------------------------------------------------------------
++	
++	// BunkerVR: the button pressed after winding by hand: the watch runs, as
++	// at the end of the game's own winding.
++	void _Global_VRStart()
++	{
++		mfVRWound = -1.f;
++		mState = Generator_GetRunForever() ? ePocketWatchState_Stopped : ePocketWatchState_Running;
++		mlFramesUntilNextHandUpdate = 0;
++	}
++	
++	//------------------------------------------------------------
++	
+=16
++		/////////////////////
++		// BunkerVR: while wound by hand (see _Global_VRWind) the watch stays
++		// stopped, its hand where the winding has brought it.
++		if (mfVRWound >= 0.f && mState != ePocketWatchState_Running)
++		{
++			StopTickingSound();
++			float fWound = cMath_Clamp(mfVRWound, 0.f, 1.f);
++			mfHandSecondAngle = (mfTimeLeftBeforeStopped + (fCountDownTime - mfTimeLeftBeforeStopped) * fWound) * cMath_ToRad(360.f) * -1.f;
++			SetHandAngle(mfHandSecondAngle);
++			return;
++		}
++		
+=227
++	[nosave] float mfVRWound = -1.f;	// BunkerVR: how far wound by hand (_Global_VRWind; -1 not)
+end

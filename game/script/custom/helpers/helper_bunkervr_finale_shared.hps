@@ -1,0 +1,50 @@
+// BunkerVR: the finale by hand: what the levels' side (helper_bunkervr_finale.hps) and the hands' side
+// (PlayerBodyHandler.hps VRUpdateFinale) both use.
+
+// What is done, as bits of the state.
+const int glBunkerVR_FinaleHandle = 1;  // the handle in the detonator, its wing nuts loose
+const int glBunkerVR_FinaleTight = 2;   // ...its wing nuts done up
+const int glBunkerVR_FinaleBundle = 4;  // the bundle at its place
+const int glBunkerVR_FinaleCable = 8;   // ...the cable on it
+const int glBunkerVR_FinaleFired = 16;  // the T-bar pushed down hard with all done: the exit blown up
+
+// Times in the game's animations (the item test map's VRItemFinaleSurvey logs them): detonator_cable_use, the
+// cable's free end lying still until 4.61 s, then lifted, and on the bundle from 10.03 s; detonator_ignite, the
+// T-bar still until 1.49 s, then 17 cm down by 1.75 s; player_detonator_ignite (11.8 s), the push and the blast by
+// 2 s, thrown back, lying from 3.8 s, stirring from 7.4 s, getting up from 9.1 s, standing at 11.8 s: joined at
+// 6.5 s, still down.
+const float gfBunkerVR_FinaleCableFrom = 4.61f;
+const float gfBunkerVR_FinaleCableTo = 10.10f;
+const float gfBunkerVR_FinalePushFrom = 1.49f;
+const float gfBunkerVR_FinalePushTo = 1.75f;
+const float gfBunkerVR_FinaleGetUp = 6.5f / 11.8f;
+
+// After the push: a very fast fade to black, like a real explosion, a few seconds of darkness as if the player were
+// unconscious, then the player getting up. Black this soon after the push (with the blast: Seq_DynamiteExplosion goes
+// off 0.1 s after it), in this long; dark for this long, the player still; then the scene from where Henri is down
+// (6.5 s of its 11.8, just before he stirs), the view coming back over this long.
+const float gfBunkerVR_FinaleBlackAt = 0.1f;
+const float gfBunkerVR_FinaleBlackIn = 0.06f;
+const float gfBunkerVR_FinaleOut = 4.0f;
+const float gfBunkerVR_FinaleWake = 1.8f;
+
+// Both done: the push fires it.
+bool BunkerVR_FinaleArmed(int alState)
+{
+	return (alState & glBunkerVR_FinaleTight) != 0 && (alState & glBunkerVR_FinaleCable) != 0 && (alState & glBunkerVR_FinaleFired) == 0;
+}
+
+// One of a thing's animations held still at a time (as Prop_MovingButton.hps holds its own: active and paused, then
+// the time set). Don't hold it with a speed of 0: the engine then keeps the first frame's pose.
+void BunkerVR_FinaleHold(const tString &in asEntity, const tString &in asAnim, float afTime)
+{
+	cLuxMap@ pMap = cLux_GetCurrentMap();
+	iLuxEntity@ pEntity = pMap !is null ? pMap.GetEntityByName(asEntity) : null;
+	if (pEntity is null || pEntity.GetMeshEntity() is null) return;
+	cAnimationState@ pState = pEntity.GetMeshEntity().GetAnimationStateFromName(asAnim);
+	if (pState is null) return;
+	if (pState.IsActive() == false) pEntity.PlayAnimation(asAnim, 0.0f, false);
+	pState.SetActive(true);
+	pState.SetPaused(true);
+	pState.SetTimePosition(afTime);
+}

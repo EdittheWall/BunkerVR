@@ -1,0 +1,20 @@
+BunkerVR patch 1
+file script/custom/props/Prop_CombinationLock.hps
+from 6156e0126ab45cddf7a8e0e331477636b63365b16290540fbaa3d1a39d0111c5 12405
+to 70cf58f81e73ab93150977bf8f68761d7fa6bd08cc4d51466d07386c803be803 12881
+=61
+-1
++				// BunkerVR: 0 for a roller with no start face given. A lock created by
++				// a script (as on the BunkerVR test map) has none.
++				float fFace = cMath_Wrap(i < int(vStartFaces.size()) ? vStartFaces[i] : 0, -fHalfTotalSteps, fHalfTotalSteps);
+=295
++
++	//------------------------------------------------------------
++
++	// BunkerVR: sets the door it locks (argument 0), for a lock created by a
++	// script, which has no instance values (as on the BunkerVR test map).
++	void _Global_VRSetDoorEntity()
++	{
++		msDoorEntity = cScript_GetGlobalArgString(0);
++	}
+end

@@ -1,0 +1,10 @@
+BunkerVR patch 1
+file script/base/GuiHandler.hps
+from 98742978c216adcd3f52d32e66127f5748a5c5f002aff626d099e7ecddd8682f 5922
+to 9d0194a75d9c71f5c5690a25e044326cfc30775a5d42b6a615752679d23baacc 6156
+=24
++
++		// BunkerVR: in the headset the game draws no cursor of its own, so the end of the VR pointer is the
++		// only cursor visible.
++		if(cVR_Active() && apImGui.GetShowMouseAutomatically()) apImGui.SetShowMouseAutomatically(false);
+end

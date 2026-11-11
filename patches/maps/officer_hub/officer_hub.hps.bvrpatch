@@ -1,0 +1,209 @@
+BunkerVR patch 1
+file maps/officer_hub/officer_hub.hps
+from 5e7be52b7543ea7bebbd2ca7147790a05d0d2734ddc42b2bfd33e2daf479e521 136905
+to cb498d307189d7fd08ab45dddae2a25b7ed5c1abab8c26f36e8e086661284264 144736
+=19
++#include "custom/helpers/helper_bunkervr_finale.hps" // BunkerVR: the finale by hand
+=173
++		// BunkerVR: one of the mod's debug jumps comes straight in: no words on
++		// black and no waking up in the sickroom, as with script debug.
++		if (cVR_JumpSkipsOpening())
++			mbIntroTextDone = true;
++		
+=168
++		
++		///////////////////////
++		// BunkerVR: the finale by hand in the headset, as far as it is done
++		if (cVR_Active()) VRFinaleSetup();
++		else VRFinaleToFlat();
+=548
+-1
++		if (Entity_Exists(sLockEnt))
+=261
++		// (BunkerVR: not in the headset, where the can is poured into the
++		// hatch by tipping it over it, PlayerBodyHandler.hps VRUpdatePour, or
++		// used with the use button: no animation of the body, which would play
++		// as a scene and move the player, nor of the can, held in the hand; the
++		// can is used up as the pour ends, OnTimer_VRRefillEnd.)
++		if (cVR_Active())
++		{
++			Map_AddTimer("Timer_VRRefillEnd", 1.5f, "OnTimer_VRRefillEnd");
++		}
++		else
++		{
+=14
++		}
+=49
++		RefillGeneratorItemDone();
++	}
++
++	//-------------------------------------------------------
++
++	// BunkerVR: the can used up in the headset, where no animation plays (see
++	// OnUse_Fuel): what the animation's end does with the item.
++	void OnTimer_VRRefillEnd(const tString &in asTimer)
++	{
++		RefillGeneratorItemDone();
++	}
++
++	//-------------------------------------------------------
++
++	// (The item's part of OnAnimEnd_RefillGenerator, as the game has it.
++	// BunkerVR: split out so OnTimer_VRRefillEnd can call it too.)
++	void RefillGeneratorItemDone()
++	{
+=5
+-1
++		// (BunkerVR: in the headset the poured can goes and the hand is left empty: the next can is taken by hand,
++		// as the first was, instead of being put in the hand automatically, which confuses the player. The game's own
++		// way below, off the headset.)
++		if (cVR_Active())
++		{
++		}
++		else if (ItemType_GetCountInInventory(msUsedFuelItemType) > 0)
+=1838
+-1
++				Prop_RemoveAttachedProp("Note_AutopsyOfReynard", asEntity);
+=669
++		// BunkerVR: the finale by hand in the headset (helper_bunkervr_finale.hps; the hands' side is
++		// PlayerBodyHandler.hps VRUpdateFinale): what is done of it (glBunkerVR_Finale... bits), saved with the level.
++		int mlVRFinale = 0;
++		
++		// As the level is entered in the headset: its state shown, with what the flat game did before.
++		void VRFinaleSetup()
++		{
++			mlVRFinale = BunkerVR_FinaleFromGame(mlVRFinale, mbDetonatorHandleIsInPlace, mbDynamiteIsInPlace, mbExitBlownUp);
++			BunkerVR_FinaleShow(mlVRFinale);
++		}
++		
++		// A level saved part way through the finale by hand, played on in the flat game: what the hands did counts as
++		// done (a handle in with its nuts loose is in; a bundle set down without its cable is in place), and the detonator
++		// is as the flat game's scenes leave it (the plain one with the handle in, or the push's area armed).
++		void VRFinaleToFlat()
++		{
++			if (mbExitBlownUp || mlVRFinale == 0) return;
++			if ((mlVRFinale & glBunkerVR_FinaleHandle) != 0) mbDetonatorHandleIsInPlace = true;
++			if ((mlVRFinale & glBunkerVR_FinaleBundle) != 0)
++			{
++				mbDynamiteIsInPlace = true;
++				Entity_SetActive("Detonator_DynamiteBundle", true);
++				Entity_SetActive("Trigger_DynamiteBundleSlot", false);
++			}
++			if (mbDetonatorHandleIsInPlace && mbDynamiteIsInPlace)
++				ActivateDetonatorTrigger();
++			else if (mbDetonatorHandleIsInPlace)
++			{
++				Entity_SetActive("Detonator", true);
++				Entity_SetActive("Detonator_Animated", false);
++			}
++		}
++		
++		// From the hands: the wing nuts done up (the handle fixed in, as at the end of the flat game's scene).
++		void BunkerVR_FinaleTight()
++		{
++			mlVRFinale |= glBunkerVR_FinaleTight;
++			mbDetonatorHandleIsInPlace = true;
++			BunkerVR_FinaleShow(mlVRFinale);
++		}
++		
++		// From the hands: the cable laid on the bundle (the dynamite in place, as at the end of its scene).
++		void BunkerVR_FinaleCabled()
++		{
++			mlVRFinale |= glBunkerVR_FinaleCable;
++			mbDynamiteIsInPlace = true;
++			BunkerVR_FinaleShow(mlVRFinale);
++		}
++		
++		// From the hands: the T-bar pushed to the bottom of its stroke, alFast 1 hard enough to fire. All done, it fires:
++		// the push's animation goes on, the game's explosion at once (Seq_DynamiteExplosion), the Beast sent away as the
++		// flat game's push does, then the view darkens and Henri gets up (Seq_VRFinaleDark). Otherwise a dud.
++		void BunkerVR_FinalePushed(int alFast)
++		{
++			if (BunkerVR_FinaleArmed(mlVRFinale) == false)
++			{
++				BunkerVR_FinaleDud(mlVRFinale);
++				return;
++			}
++			if (alFast == 0) return;
++			mlVRFinale |= glBunkerVR_FinaleFired;
++			BunkerVR_FinaleShow(mlVRFinale);
++			BunkerVR_FinaleFireDetonator("OnAnimEnd_DetonatorIgnite");
++			Seq_DynamiteExplosion("");
++			DetonatorSendStalkerAway();
++			Seq_VRFinaleDark("");
++		}
++		
++		// After the push by hand: the explosion, the view black at once with the blast as if the player were knocked
++		// unconscious, four seconds out (the player held still), then the game's own scene after the push
++		// (player_detonator_ignite) joined where Henri is down, getting up, as the view comes back (the timings:
++		// helper_bunkervr_finale_shared.hps).
++		cSequenceStatesData mSeqDataVRFinaleDark;
++		void Seq_VRFinaleDark(const tString &in asTimer)
++		{
++			Sequence_Begin("Seq_VRFinaleDark", mSeqDataVRFinaleDark);
++			Sequence_Wait(gfBunkerVR_FinaleBlackAt);
++			if (Sequence_DoStepAndWait(gfBunkerVR_FinaleOut))
++			{
++				Effect_Fade_Out(gfBunkerVR_FinaleBlackIn); // (knocked out by the blast: black at once...)
++				Player_SetActive(false); // (...and still while dark)
++			}
++			else if (Sequence_DoStepAndWait(0.1f))
++			{
++				Player_SetActive(true);
++				PlayerBody_PlayCutsceneAtEntity("player_detonator_ignite", "Detonator_Animated", false, 0.0f, "OnAnimEnd_DetonatorUsed", 1.0f, gfBunkerVR_FinaleGetUp);
++				PlayerBody_SetCutsceneMaxPitch(0.f);
++				PlayerBody_SetCutsceneMaxYaw(0.f);
++				Effect_Fade_In(gfBunkerVR_FinaleWake);
++			}
++			Sequence_End();
++		}
++		
++		// In the headset the handle and the bundle are used once the hand has brought them (no scene): taken from the
++		// pockets a moment later, outside the game's use (as maintenance.hps does with the bottle), and shown in place.
++		void OnTimer_VRFinaleHandleIn(const tString &in asTimer)
++		{
++			Item_RemoveFromInventory(ItemType_GetFirstInInventory("DetonatorHandle"), eInventoryInstance_Player, false, true);
++			mlVRFinale |= glBunkerVR_FinaleHandle;
++			BunkerVR_FinaleShow(mlVRFinale);
++			Sound_CreateAtEntity("Sound_VRDetonatorHandleIn", "level_entity_shared/doors/button_lock/unlock", "Detonator_Animated");
++		}
++		
++		void OnTimer_VRFinaleBundleIn(const tString &in asTimer)
++		{
++			Item_RemoveFromInventory(ItemType_GetFirstInInventory("DynamiteBundle"), eInventoryInstance_Player, false, true);
++			mlVRFinale |= glBunkerVR_FinaleBundle;
++			BunkerVR_FinaleShow(mlVRFinale);
++			Entity_SetActive("Trigger_DynamiteBundleSlot", false);
++			Sound_CreateAtEntity("Sound_VRDynamitePlaced", "player/foley/action/pickup/dynamite", "Trigger_DynamiteBundleSlot");
++		}
++		
+=9
++			// BunkerVR: in the headset no scene: the hand has brought the handle to the top of the detonator
++			// (PlayerBodyHandler.hps VRUpdateFinale), and it goes in; its wing nuts are done up by hand next.
++			if (cVR_Active())
++			{
++				Map_AddTimer("Timer_VRFinaleHandleIn", 0.05f, "OnTimer_VRFinaleHandleIn");
++				return false;
++			}
++			
+=64
+-1
++			DetonatorSendStalkerAway(); // (BunkerVR: a function of its own, so the push by hand can call it too)
++		}
++		
++		void DetonatorSendStalkerAway()
++		{
+=16
+-1
++			// (BunkerVR: pushed by hand, it goes off at once; the flat game's 1.8 s are its scene's push.)
++			Sequence_Wait((mlVRFinale & glBunkerVR_FinaleFired) != 0 ? 0.1f : 1.8f);
+=107
++			// BunkerVR: in the headset no scene: the hand has set the bundle down at its place
++			// (PlayerBodyHandler.hps VRUpdateFinale); its cable is laid on it by hand next.
++			if (cVR_Active())
++			{
++				Map_AddTimer("Timer_VRFinaleBundleIn", 0.05f, "OnTimer_VRFinaleBundleIn");
++				return false;
++			}
++			
+end

@@ -1,0 +1,24 @@
+BunkerVR patch 1
+file script/custom/props/Prop_MolotovCocktail.hps
+from 696607de82376feddc2b0680812068da81b98b6af91750ce7c357e52baff17d5 1990
+to 887300a5cb43d99d5bdb0258b776d3aa686cc7a28954d9d71988d282ce27599a 2635
+=26
++			// BunkerVR: thrown unlit by hand, it tells no creature of fire
++			// (see VRThrownUnlit).
++			if (VRThrownUnlit()) return;
++			
+=39
++		// BunkerVR: thrown unlit by hand, the spill is left unlit, to be lit
++		// later (see VRThrownUnlit).
++		if (VRThrownUnlit()) return;
+=2
++
++	// BunkerVR: was this molotov thrown by hand without its cloth set burning?
++	// The hand throw sets a flag under the name of the molotov that the thrown
++	// one breaks into (VRThrow in PlayerState_UsingThrowable.hps); a flag never
++	// set reads false.
++	bool VRThrownUnlit()
++	{
++		return cScript_GetGlobalVarBool("BunkerVR_UnlitMolotov_" + mBaseObj.GetName());
++	}
+end

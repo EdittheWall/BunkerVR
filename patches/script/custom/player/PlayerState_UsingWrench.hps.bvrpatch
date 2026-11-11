@@ -1,0 +1,11 @@
+BunkerVR patch 1
+file script/custom/player/PlayerState_UsingWrench.hps
+from b083502490aa8264f1a58b504aaf4283cb83f60c61a82a5d7683e455ace2f32b 8502
+to 1854a3c46d6150d1fc45e6120c7f1285b2b54f37df172ed45c4adf511668c6d0 8730
+=134
++		// BunkerVR: in the headset the wrench is put on a bolt and swung around
++		// it by hand (VRUpdateWrench in PlayerBodyHandler.hps): no scene, and
++		// the squeeze does nothing else with it.
++		if (cVR_Active()) return;
++		
+end

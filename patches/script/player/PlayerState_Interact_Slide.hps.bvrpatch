@@ -1,0 +1,178 @@
+BunkerVR patch 1
+file script/player/PlayerState_Interact_Slide.hps
+from b3fd20520dda83a39cd377b078c4eefc05466a0dc36214f9af9d8abb848d13e0 13653
+to 8f3f2064622225068f9e3f25211e0c6808b56a6f95246da3ede1aaba2fc97450 21684
+=3
++// BunkerVR: a drawer's handle, found by rays cast back at its front (meters;
++// see VRHoldOnHandle).
++const float gfVRHandleStep = 0.01f;			// the rays this far apart, up and along the front
++const float gfVRHandleRayStart = 0.02f;		// each from this far in front of the drawer's box...
++const float gfVRHandleRayLength = 0.15f;	// ...this far back
++const float gfVRHandleStandsOut = 0.008f;	// a handle stands out of the front by this much at least
++const float gfVRHandleIn = 0.01f;			// the hand closes around it this far behind its face
++
+=242
++		// BunkerVR: is a VR hand holding it (see below)? Then the camera's
++		// distance doesn't end the hold (the camera is the head, and leaning
++		// back to pull a drawer can take it past the limit): the hand lets go
++		// when pulled off the spot it holds instead.
++		int lVRHand = 1;
++		cVector3f vVRPalm = cVector3f(0.0f);
++		bool bVRHand = VRGrabbingHand(lVRHand, vVRPalm);
++
+=5
+-1
++		if(fFocusPosDistance > mfMaxFocusPosDistance && bVRHand == false)
+=6
+-1
++		if(fStartPosDistance > mfMaxStartPosDistance && bVRHand == false)
+=6
++		//////////////////////////////
++		// BunkerVR: held by a VR hand (see VRHoldSpot in
++		// PlayerState_Interact.hps): the drawer moves so that the spot held
++		// follows the hand along its rail, a quarter of the gap each update,
++		// no faster than its own top speed. The game's own push below moves
++		// it (its force is limited, so a heavy or jammed drawer lags and
++		// resists). The mouse (the right stick's turning) is not used.
++		float fVRWanted = 0.0f;
++		if(bVRHand)
++		{
++			cVector3f vVRSpot = VRHoldSpot(pBody, lVRHand, vVRPalm, "the drawer");
++			if(VRHoldPulledOff(lVRHand, vVRPalm - mvVRHoldPalmOff, vVRSpot, afTimeStep))
++			{
++				cLux_GetPlayer().ChangeState(mlPreviousState);
++				return;
++			}
++			cVector3f vVRPin = cMath_Vector3Normalize(pCurrentJoint.GetPinDir());
++			// The hand holds the handle like a door's bar: the bar runs level
++			// along the drawer's front (square to its rail), with the hand
++			// facing into the front. A vertical rail has no such bar.
++			cVector3f vVRBar = cMath_Vector3Cross(cVector3f(0.0f, 1.0f, 0.0f), vVRPin);
++			if(vVRBar.Length() > 0.5f)
++			{
++				cVector3f vVROut = vVRPin;
++				if(cMath_Vector3Dot(vVROut, pCam.GetPosition() - vVRSpot) < 0.0f) vVROut = vVROut * -1.0f;
++				VRHoldSetBar(lVRHand, cMath_Vector3Normalize(vVRBar), vVROut);
++			}
++			float fVRGap = cMath_Vector3Dot(vVRPalm - mvVRHoldPalmOff - vVRSpot, vVRPin); // (from where the hand took hold)
++			fVRWanted = cMath_Clamp(fVRGap * (gfVRHoldCatchUp / cMath_Max(afTimeStep, 0.004f)), -mfSlideMaxSpeed, mfSlideMaxSpeed);
++			VRHoldFeelStop(lVRHand, mfVRHoldLastWanted, cMath_Vector3Dot(pBody.GetLinearVelocity(), vVRPin), cMath_Abs(fVRGap), afTimeStep);
++			mfVRHoldLastWanted = fVRWanted;
++		}
++
+=18
++		if(bVRHand) mfSlideSpeed = fVRWanted; // BunkerVR (see above)
+=40
+-1
++		// (BunkerVR: not with a VR hand, since it turns the view.)
++		if(bVRHand == false) CheckOutsideAtScreenEdgeAndMove(afTimeStep);
+=123
++	// BunkerVR: a drawer's handle, for a VR hand's hold (PlayerState_Interact.hps
++	// VRHoldSpot), so the hand lands on the handle and not off it or inside
++	// the drawer. The handle is the part of the front standing furthest out
++	// (along the rail, towards the player: a filing cabinet drawer's bar, a
++	// desk drawer's knob), found by rays cast back at the front, if it stands
++	// out by gfVRHandleStandsOut or more. Returns the point on it
++	// (gfVRHandleIn behind its face, at its height) nearest avNear along the
++	// front; false for a drawer without one.
++	// Don't read the shapes the body is made of (GetSubShapeNum): the
++	// engine's base shape doesn't have them and the game crashes as the hand
++	// takes hold. Rays are cast instead, as the hands' pressing does.
++	// Rays: two columns up the front (at avNear's place along it and at its
++	// center), each gfVRHandleStep apart; then a row along the front at the
++	// handle's height to find how far it reaches.
++	bool VRHoldOnHandle(iPhysicsBody@ apBody, const cVector3f &in avNear, cVector3f &out avOnHandle) override
++	{
++		avOnHandle = avNear;
++		if(apBody is null || apBody.GetJointNum() == 0) return false;
++		iPhysicsJoint@ pJoint = apBody.GetJoint(0);
++		cBoundingVolume@ pBox = apBody.GetBoundingVolume();
++		if(pJoint is null || pBox is null) return false;
++		cVector3f vLow = pBox.GetMin();
++		cVector3f vHigh = pBox.GetMax();
++		cVector3f vMid = (vLow + vHigh) * 0.5f;
++		cVector3f vHalf = (vHigh - vLow) * 0.5f;
++		cVector3f vOut = cMath_Vector3Normalize(pJoint.GetPinDir());
++		if(cMath_Vector3Dot(vOut, cLux_GetPlayer().GetCamera().GetPosition() - vMid) < 0.0f) vOut = vOut * -1.0f;
++		cVector3f vAlong = cMath_Vector3Cross(cVector3f(0.0f, 1.0f, 0.0f), vOut);
++		if(vAlong.Length() < 0.5f) return false;
++		vAlong.Normalize();
++		cVector3f vUp = cMath_Vector3Cross(vOut, vAlong);
++
++		// The box's front (how far out from its center), and how far it
++		// reaches along the front and up it.
++		float fFront = VRHandleReach(vHalf, vOut);
++		float fHalfAlong = VRHandleReach(vHalf, vAlong);
++		float fHalfUp = VRHandleReach(vHalf, vUp);
++		cVector3f vFrontMid = vMid + vOut * (fFront + gfVRHandleRayStart);
++		float fNearAlong = cMath_Clamp(cMath_Vector3Dot(avNear - vMid, vAlong), -fHalfAlong, fHalfAlong);
++
++		// Up the two columns: the nearest face (the part standing out) and
++		// the farthest one (the drawer's front itself, the most distant hit).
++		float fBest = 1000.0f;
++		float fBestAlong = 0.0f;
++		float fBestUp = 0.0f;
++		float fFarthest = -1.0f;
++		int lRows = cMath_Min(int(fHalfUp * 2.0f / gfVRHandleStep) + 1, 60);
++		for(int lColumn = 0; lColumn < 2; ++lColumn)
++		{
++			float fAlongHere = lColumn == 0 ? fNearAlong : 0.0f;
++			for(int lRow = 0; lRow < lRows; ++lRow)
++			{
++				float fUpHere = -fHalfUp + gfVRHandleStep * float(lRow);
++				float fHit = VRHandleRay(apBody, vFrontMid + vAlong * fAlongHere + vUp * fUpHere, vOut * -1.0f);
++				if(fHit < 0.0f) continue;
++				if(fHit > fFarthest) fFarthest = fHit;
++				// (As near as the best, within 2 mm: the one nearer the hand.)
++				bool bNearer = fHit < fBest - 0.002f;
++				bool bAsNear = cMath_Abs(fHit - fBest) <= 0.002f &&
++							   (vAlong * fAlongHere + vUp * fUpHere - (avNear - vMid)).Length() < (vAlong * fBestAlong + vUp * fBestUp - (avNear - vMid)).Length();
++				if(bNearer == false && bAsNear == false) continue;
++				fBest = fHit;
++				fBestAlong = fAlongHere;
++				fBestUp = fUpHere;
++			}
++		}
++		if(fBest >= 1000.0f || fFarthest - fBest < gfVRHandleStandsOut) return false;
++
++		// Along the front at the handle's height: how far the handle reaches
++		// (rays that hit within 5 mm of its face).
++		float fFrom = fBestAlong;
++		float fTo = fBestAlong;
++		for(int lWay = -1; lWay <= 1; lWay += 2)
++		{
++			for(int lStep = 1; lStep <= 20; ++lStep)
++			{
++				float fAlongHere = fBestAlong + float(lWay * lStep) * gfVRHandleStep;
++				float fHit = VRHandleRay(apBody, vFrontMid + vAlong * fAlongHere + vUp * fBestUp, vOut * -1.0f);
++				if(fHit < 0.0f || fHit > fBest + 0.005f) break;
++				if(lWay < 0)	fFrom = fAlongHere;
++				else			fTo = fAlongHere;
++			}
++		}
++		float fAlong = cMath_Clamp(cMath_Vector3Dot(avNear - vMid, vAlong), fFrom, fTo);
++		avOnHandle = vFrontMid + vAlong * fAlong + vUp * fBestUp - vOut * (fBest + gfVRHandleIn);
++		return true;
++	}
++
++	// How far a box of half sizes avHalf (world axes) reaches along avDir.
++	float VRHandleReach(const cVector3f &in avHalf, const cVector3f &in avDir)
++	{
++		return cMath_Abs(avDir.x) * avHalf.x + cMath_Abs(avDir.y) * avHalf.y + cMath_Abs(avDir.z) * avHalf.z;
++	}
++
++	// A ray from avStart along avDir (gfVRHandleRayLength long): how far it
++	// goes before it meets apBody (-1 if it meets something else first, or
++	// nothing).
++	float VRHandleRay(iPhysicsBody@ apBody, const cVector3f &in avStart, const cVector3f &in avDir)
++	{
++		float fHit = 0.0f;
++		cVector3f vNormal = cVector3f(0.0f);
++		iPhysicsBody@ pHit = cLux_GetClosestBody(avStart, avDir, gfVRHandleRayLength, fHit, vNormal);
++		if(pHit is null || pHit.GetID() != apBody.GetID()) return -1.0f;
++		return fHit;
++	}
++
++	//------------------------------------------------------------
++
+end

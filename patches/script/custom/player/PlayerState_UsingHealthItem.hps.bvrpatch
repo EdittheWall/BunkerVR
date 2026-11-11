@@ -1,0 +1,65 @@
+BunkerVR patch 1
+file script/custom/player/PlayerState_UsingHealthItem.hps
+from 5c286e1ebaaa7a009ea8b2e687cd73a0a951fcbdac45b8ef815992c0670c77bc 8568
+to 042fe19955c95baeaa212491f8b3d1498973f9704f1a0ee4487864cad14040d5 10763
+=137
++	// BunkerVR: use the bandage or medkit in the right hand at once, with no
++	// animation. The game's own way plays a long animation that takes over the
++	// view, which is no good in a headset. The VR mod requests this when the
++	// bandage has been wound around the left forearm (through the body script,
++	// command 4), which is the only way to heal in the headset.
++	void VRUseNow()
++	{
++		iScrItemHandler_Interface@ pHandler = cast<iScrItemHandler_Interface>( cLux_GetUserModuleFromID(eModuleType_Custom_ItemHandler) );
++		if (pHandler is null) return;
++		if (!pHandler.CanUseHeldItemOnSelf(eItemHandlerHand_Right)) return;
++		
++		tString sType = Item_GetHeldType(eItemHandlerHand_Right);
++		if (sType != "Bandage" && sType != "Medkit") return;
++		tString sItem = Item_GetHeld(eItemHandlerHand_Right);
++		if (sItem == "") return;
++		
++		bool bHardcoreHealthSystemActive = GameDifficulty_GetSettingValueByID_Bool(eGameDifficultySetting_HardcoreHealthSystem);
++		if (sType == "Medkit")
++		{
++			// The game heals twice over the length of the medkit's animation.
++			Player_ApplyHeal(false);
++			Player_ApplyHeal(false);
++		}
++		else
++		{
++			Player_ApplyHeal(false, bHardcoreHealthSystemActive);
++		}
++		if (bHardcoreHealthSystemActive)
++		{
++			Player_StopBleeding();
++		}
++		GameStats_IncreaseEntryAmount(eHeroStats_HealthItemsUsed);
++		
++		// The sound of it being put on (the animation that normally plays it is left out).
++		Sound_PlayGui(sType == "Medkit" ? "player/tools/medkit/health_pack" : "player/tools/bandage/bandage", 1.f, eSoundEntryType_GuiWorld);
++		
++		Item_SetPlayUnequipAnim(sItem, false);
++		Item_Unequip(sItem, true);
++		Item_RemoveFromInventory(sItem);
++	}
++	
++	void _Global_VRUseNow()
++	{
++		VRUseNow();
++	}
++	
++	//------------------------------------------------------------
++	
+=2
++		/////////////////
++		// BunkerVR: in the headset the trigger does not use it. It is used by
++		// winding it around the left forearm (the mod then requests VRUseNow above).
++		// Otherwise any press of the trigger would use it up on the spot, even
++		// one that only answered a hint, so it would seem to vanish from the hand.
++		if (VRUsingItemModActive())
++		{
++			return;
++		}
++		
+end

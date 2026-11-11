@@ -1,0 +1,7 @@
+BunkerVR patch 1
+file script/custom/helpers/helper_imgui_options.hps
+from 073fdfbaba62b52dd071416b0f89216550fff0b6e85569519f01db25d3a911d7 104316
+to 14fc0e59faecb20a8d4e97f2cf5e3149ce4c312dfd3022039d1ec01778ae3ef3 104383
+=474
++		cVR_MenuFocus(); // BunkerVR: a light buzz in the pointing hand
+end

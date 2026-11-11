@@ -1,0 +1,9 @@
+BunkerVR patch 1
+file script/effects/Effect_RadialBlur.hps
+from 958bbfc2fd5c3a28d0139e8ee66a41685b03e5ba3fbedfe29c21b3fa08019801 8010
+to d5e5946a31ec2543466aec677391e59bb1f628e40bebb6a98c8fa6b1d27ecb48 8261
+=349
++			// BunkerVR: off while each eye gets its own picture: the blur's center is the game picture's center,
++			// which falls in a different place in each eye. Kept for a flat picture (the cutscene screen, loading).
++			if(cVR_Active()) fAlpha = 0.0f;
+end

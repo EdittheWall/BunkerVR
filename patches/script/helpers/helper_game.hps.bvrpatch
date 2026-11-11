@@ -1,0 +1,10 @@
+BunkerVR patch 1
+file script/helpers/helper_game.hps
+from 2d3aceb32fc7118be5018be5ace0fa9bcf2a112885bbb4ef4947e7d7443b87a9 18994
+to c4a63b79dabdc2e5580c265e0af1fadb27cf06186bf92254fe993dbdbd75cce7 19133
+=318
++	// BunkerVR: no achievements in a run that used test jumps, as nothing is
++	// saved in one either.
++	if (cVR_JumpedThisRun()) return;
++
+end

@@ -1,0 +1,604 @@
+BunkerVR patch 1
+file script/player/PlayerState_Interact_SwingDoor.hps
+from b3791db7562bc089427e3f593fa9853b453271aa2489333fdc2c4854e357c97c 8472
+to 757cee501bebab1a49d33df054586beee93eb20ba87e7266957979ed38748643 38378
+=10
++//------------------------------------------------------------
++
++// BunkerVR: the fastest a hand may swing a door (radians a second).
++const float gfVRDoorMaxSpeed = 4.0f; // (low enough to give the door a little weight)
++// BunkerVR: the real hand this far from where it holds the door...
++const float gfVRDoorLetGoDistance = 0.30f;
++// ...for this long (seconds) lets go.
++const float gfVRDoorLetGoTime = 0.15f;
++// BunkerVR: how far the wrist must turn the handle to unlatch the door (radians: about 25 degrees).
++const float gfVRDoorUnlatchTurn = 0.44f;
++// BunkerVR: how far a locked handle can be turned before it rattles (radians: about 11 degrees).
++const float gfVRDoorRattleTurn = 0.20f;
++// BunkerVR: the player's body, as the held door sees it: a circle this wide each side of the body's center (meters)...
++const float gfVRDoorBodyRadius = 0.18f;
++// ...and the door this thick each side of its center (the metal door is 11.5 cm thick, the wooden one 4 cm).
++const float gfVRDoorHalfThick = 0.04f;
++
+=122
++			
++		mbVRHandStarted = false; // BunkerVR
++		mfVRDoorLastPush = 0.0f; // BunkerVR
++		mbVRGripSet = false; // BunkerVR: the grip is taken at the first update
++		mfVRStopBuzzWait = 0.0f;
++		mlVRHelpHand = -1; // BunkerVR: no other hand on the door yet...
++		mbVRHelpStarted = false;
++		mbVRHelpSqueezeWas = true; // ...and a squeeze already going on doesn't count as one starting
+=6
++		VRClearDoorGrip(); // BunkerVR: the hand is free again
++		mbVRGripSet = false;
+=11
++	/////////////////////////////////////////////
++	// BunkerVR: a door held by a hand swings with that hand.
++	// Normally a held door is swung by moving the mouse. With the VR mod, the
++	// door instead turns on its hinge by the same angle the holding hand has
++	// moved around that hinge since it took hold. The VR mod answers through the
++	// camera: after setting a special roll value, reading the camera's matrix
++	// returns the hand's data instead. Without the mod (or with no hand holding)
++	// the answer doesn't match and the normal mouse code runs.
++	void Update(float afTimeStep)
++	{
++		bool bVRHand = false;
++		cVector3f vVRHandPos;
++		cVector3f vVRPalmPos;
++		cVector3f vVRBodyPos;	// the player's real body (see below)
++		bool bVRBodyKnown = false;
++		cMatrixf mtxVRHand = cMatrixf_Identity;
++		int lVRHand = 1; // which hand holds: 0 left, 1 right
++		cCamera@ pVRCam = cLux_GetPlayer().GetCamera();
++		if(pVRCam !is null && mbUseNewWay == false)
++		{
++			float fVRRealRoll = pVRCam.GetRoll();
++			pVRCam.SetRoll(7002.0f);
++			cVector3f vVRStatus = pVRCam.GetMatrix().GetTranslation();
++			if(vVRStatus.x > 12344.0f && vVRStatus.x < 12346.0f && vVRStatus.y > 0.5f)
++			{
++				pVRCam.SetRoll(7001.0f);
++				mtxVRHand = pVRCam.GetMatrix();
++				vVRHandPos = mtxVRHand.GetTranslation();
++				lVRHand = vVRStatus.z > 0.5f ? 1 : 0;
++				bVRHand = true;
++
++				// And the center of that hand's palm (7011 left, 7012 right):
++				// the drawn hand is placed by it, so the grip is measured from
++				// it too. (The pointing position above is some 10 cm further on.)
++				pVRCam.SetRoll(lVRHand == 0 ? 7011.0f : 7012.0f);
++				cVector3f vVRPalm = pVRCam.GetMatrix().GetTranslation();
++				vVRPalmPos = (vVRPalm - vVRHandPos).Length() < 0.5f ? vVRPalm : vVRHandPos;
++
++				// And where the player's real body is: under the real head
++				// (7006: is it tracked; 7005: where it is), 10 cm behind the
++				// eyes. This, not the game's own body, is what the door must not
++				// pass through: the real head (and the body drawn under it) can
++				// be well away from the game's body when the player leans or
++				// steps, and a door stopped at the game's body still goes
++				// through the player.
++				pVRCam.SetRoll(7006.0f);
++				cVector3f vVRHeadStatus = pVRCam.GetMatrix().GetTranslation();
++				if(vVRHeadStatus.x > 12344.0f && vVRHeadStatus.x < 12346.0f && vVRHeadStatus.y > 0.5f)
++				{
++					pVRCam.SetRoll(7005.0f);
++					cMatrixf mtxVRHead = pVRCam.GetMatrix();
++					cVector3f vVRLook = cMath_MatrixMul3x3(mtxVRHead, cVector3f(0.0f, 0.0f, -1.0f));
++					vVRLook.y = 0.0f;
++					if(vVRLook.Length() > 0.1f) vVRLook.Normalize();
++					else vVRLook = cVector3f(0.0f);
++					vVRBodyPos = mtxVRHead.GetTranslation() - vVRLook * 0.10f;
++					bVRBodyKnown = true;
++				}
++			}
++			pVRCam.SetRoll(fVRRealRoll);
++		}
++
++		if(bVRHand == false)
++		{
++			mbVRHandStarted = false;
++			VRClearDoorGrip();
++			iScrPlayerState_Interact_RotateBase::Update(afTimeStep);
++			return;
++		}
++		
++		////////////////////////////
++		// The same checks the normal code makes
++		if(CheckShouldUpdate()==false) return;
++		
++		UpdateHints(afTimeStep);
++		
++		if(mbToggleModeActive == false && cInput_IsTriggered(eAction_Interact)==false)
++		{
++			cLux_GetPlayer().ChangeState(mlPreviousState);
++			return;
++		}
++		
++		Player_SetCrossHairState(eCrossHairState_None);
++		
++		iCharacterBody @pCharBody = cLux_GetPlayer().GetCharacterBody();
++		iPhysicsJoint @pJoint = cLux_ID_Joint(mJointID);
++		iPhysicsBody@ pBody = cLux_ID_Body(mBodyID);
++		// BunkerVR: the door may be gone (the mod's Spawn page takes away the
++		// last thing it made when it makes the next one).
++		if(pJoint is null || pBody is null)
++		{
++			cLux_GetPlayer().ChangeState(mlPreviousState);
++			return;
++		}
++		
++		float fDistance = cMath_Vector3Dist(pCharBody.GetFeetPosition(), pJoint.GetPivotPoint());
++		if(fDistance > mfMaxDistance)
++		{
++			cLux_GetPlayer().ChangeState(mlPreviousState);
++			return;
++		}
++
++		////////////////////////////
++		// BunkerVR: where on the door the hand holds. Taken when it takes hold:
++		// the door's handle, when the hand is within reach of it, or else the
++		// spot the hand is at. Kept as a point on the door, so that it moves
++		// with the door; the drawn hand is put there (see the door grip in
++		// UpdateVRArms, Prop_PlayerBody.hps), wherever the real hand wanders.
++		cMatrixf mtxVRDoor = pBody.GetLocalMatrix();
++		if(mbVRGripSet == false)
++		{
++			mbVRGripSet = true;
++			mbVROnHandle = false;
++			mfVRApartTime = 0.0f;
++			mfVRTurnBuzzWait = 0.0f;
++			cVector3f vVRGrip = vVRPalmPos;
++			// The nearest handle within reach of the palm: a pull bar of The
++			// Bunker's doors (see _Global_VRFindGrip in Prop_SwingDoor.hps).
++			cScript_SetGlobalArgVector3f(0, vVRPalmPos);
++			cScript_RunGlobalFunc(msSwingDoorName, "cScrPropSwingDoor", "_Global_VRFindGrip");
++			cVector3f vVRHandle = cScript_GetGlobalReturnVector3f();
++			cScript_RunGlobalFunc(msSwingDoorName, "cScrPropSwingDoor", "_Global_VRGripFound");
++			if(cScript_GetGlobalReturnBool())
++			{
++				vVRGrip = vVRHandle;
++				mbVROnHandle = true;
++			}
++			cMatrixf mtxVRIntoDoor = cMath_MatrixInverse(mtxVRDoor);
++			mvVRGripOnDoor = cMath_MatrixMul(mtxVRIntoDoor, vVRGrip);
++			cScript_RunGlobalFunc(msSwingDoorName, "cScrPropSwingDoor", "_Global_VRGripAxis");
++			mvVRGripAxisOnDoor = cMath_MatrixMul3x3(mtxVRIntoDoor, cScript_GetGlobalReturnVector3f());
++			cScript_RunGlobalFunc(msSwingDoorName, "cScrPropSwingDoor", "_Global_VRGripOut");
++			mvVRGripOutOnDoor = cMath_MatrixMul3x3(mtxVRIntoDoor, cScript_GetGlobalReturnVector3f());
++			// (The held door must not pass through the player's body: see "the
++			// door stops at the player's body" further down.)
++
++			// The handle turns about this axis (kept as a direction on the door).
++			cScript_RunGlobalFunc(msSwingDoorName, "cScrPropSwingDoor", "_Global_VRGetHandleAxis");
++			mvVRTurnAxisOnDoor = cMath_MatrixMul3x3(mtxVRIntoDoor, cScript_GetGlobalReturnVector3f());
++			// The hand's "up" (towards the thumb) when it took hold: the turn is measured from it.
++			mvVRHandUpStart = cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxVRHand, cVector3f(0.0f, 1.0f, 0.0f)));
++
++			// For the log, to diagnose a delay in gripping: when it was taken
++			// (in the game's time, as the squeezes are logged in
++			// PlayerState_Normal.hps VRNoteSqueeze), where, and (below) how
++			// soon after that the door first moves.
++			mfVRDoorTakenAt = float(cEngine_GetGameTime());
++			mbVRDoorMoveNoted = false;
++			if(mlVRDoorLogs < 40)
++			{
++				mlVRDoorLogs++;
++				Log("BunkerVR: the door " + msSwingDoorName + " taken at " + int(cEngine_GetGameTime() * 1000.0) + " ms by the " + (lVRHand == 0 ? "left" : "right") + " hand, " +
++					(mbVROnHandle ? "on its handle" : "where the hand is") + ", the palm " + int((vVRGrip - vVRPalmPos).Length() * 100.0f + 0.5f) + " cm from the grip\n");
++			}
++		}
++		if(mbVRDoorMoveNoted == false && pBody.GetAngularVelocity().Length() > 0.05f && mlVRDoorLogs <= 40)
++		{
++			mbVRDoorMoveNoted = true;
++			Log("BunkerVR: the door " + msSwingDoorName + " first moves " + int((float(cEngine_GetGameTime()) - mfVRDoorTakenAt) * 1000.0f + 0.5f) + " ms after it was taken\n");
++		}
++		cVector3f vVRGripNow = cMath_MatrixMul(mtxVRDoor, mvVRGripOnDoor);
++
++		// The arm's script puts that hand on the grip (a new stamp each update,
++		// so it can tell that this is still going on).
++		mlVRGripStamp++;
++		cScript_SetGlobalVarInt("BunkerVR_DoorHand", lVRHand + 1);
++		cScript_SetGlobalVarVector3f("BunkerVR_DoorGrip", vVRGripNow);
++		cScript_SetGlobalVarInt("BunkerVR_DoorStamp", mlVRGripStamp);
++		// And the direction along the bar it holds (0 0 0: not a bar), so that the
++		// hand closes around the bar and only turns about it.
++		cScript_SetGlobalVarVector3f("BunkerVR_DoorGripAxis", cMath_MatrixMul3x3(mtxVRDoor, mvVRGripAxisOnDoor));
++		// And which way the door's face there looks (the hand's turn about the
++		// bar is kept within reach of facing the door).
++		cScript_SetGlobalVarVector3f("BunkerVR_DoorGripOut", cMath_MatrixMul3x3(mtxVRDoor, mvVRGripOutOnDoor));
++		// And which door it is, and when this was set (for the body script: a
++		// hand touching the door held, see VRTouchKind in PlayerBodyHandler.hps).
++		cScript_SetGlobalVarID("BunkerVR_DoorBody", mBodyID);
++		cScript_SetGlobalVarFloat("BunkerVR_DoorTime", float(cEngine_GetGameTime()));
++
++		// BunkerVR: the other hand may hold this door too.
++		VRUpdateHelpHand(pVRCam, lVRHand, mtxVRDoor, afTimeStep);
++
++		// The real hand pulled well away from the grip (the door is at its
++		// stop, or held by its latch or lock, or something is in the way):
++		// the hand lets go, with a light buzz.
++		if((vVRPalmPos - vVRGripNow).Length() > gfVRDoorLetGoDistance)	mfVRApartTime += afTimeStep;
++		else															mfVRApartTime = 0.0f;
++		if(mfVRApartTime > gfVRDoorLetGoTime)
++		{
++			VRDoorBuzz(0.04f, 0.4f);
++			cLux_GetPlayer().ChangeState(mlPreviousState);
++			return;
++		}
++
++		////////////////////////////
++		// BunkerVR: a shut door held by its handle stays latched until the
++		// wrist turns the handle, as a real handle is pressed down or turned
++		// (when the mod's "door handles need turning" is on; see
++		// _Global_VRUnlatch in Prop_SwingDoor.hps). Turned against a lock, the
++		// handle rattles.
++		cScript_RunGlobalFunc(msSwingDoorName, "cScrPropSwingDoor", "_Global_VRWaitingForTurn");
++		bool bVRLatched = cScript_GetGlobalReturnBool();
++		cScript_RunGlobalFunc(msSwingDoorName, "cScrPropSwingDoor", "_Global_GetLocked");
++		bool bVRLocked = cScript_GetGlobalReturnBool();
++		if(mfVRTurnBuzzWait > 0.0f) mfVRTurnBuzzWait -= afTimeStep;
++		if(mbVROnHandle && (bVRLatched || bVRLocked))
++		{
++			cVector3f vVRAxis = cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxVRDoor, mvVRTurnAxisOnDoor));
++			cVector3f vVRUpNow = cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxVRHand, cVector3f(0.0f, 1.0f, 0.0f)));
++			cVector3f vVRWas = mvVRHandUpStart - vVRAxis * cMath_Vector3Dot(mvVRHandUpStart, vVRAxis);
++			cVector3f vVRNow = vVRUpNow - vVRAxis * cMath_Vector3Dot(vVRUpNow, vVRAxis);
++			float fVRTurned = 0.0f;
++			if(vVRWas.Length() > 0.2f && vVRNow.Length() > 0.2f)
++			{
++				vVRWas.Normalize();
++				vVRNow.Normalize();
++				fVRTurned = cMath_Abs(cMath_ATan2(cMath_Vector3Dot(vVRAxis, cMath_Vector3Cross(vVRWas, vVRNow)), cMath_Vector3Dot(vVRWas, vVRNow)));
++			}
++
++			if(bVRLocked)
++			{
++				if(fVRTurned > gfVRDoorRattleTurn || (vVRPalmPos - vVRGripNow).Length() > 0.05f) // turned, or pulled on (a pull bar doesn't turn)
++					cScript_RunGlobalFunc(msSwingDoorName, "cScrPropSwingDoor", "_Global_VRRattle");
++			}
++			else if(fVRTurned > gfVRDoorUnlatchTurn)
++			{
++				cScript_RunGlobalFunc(msSwingDoorName, "cScrPropSwingDoor", "_Global_VRUnlatch");
++				VRDoorBuzz(0.06f, 0.8f);	// the click of the latch
++				bVRLatched = false;
++				mbVRHandStarted = false;	// the swing is measured from here
++			}
++			else if(fVRTurned > gfVRDoorUnlatchTurn * 0.4f && mfVRTurnBuzzWait <= 0.0f)
++			{
++				VRDoorBuzz(0.02f, 0.25f);	// the handle giving under the hand
++				mfVRTurnBuzzWait = 0.12f;
++			}
++		}
++
++		////////////////////////////
++		// Where the door and the hand are, seen along the hinge
++		cVector3f vPinDir = cMath_Vector3Normalize(pJoint.GetPinDir());
++		cVector3f vPivot = pJoint.GetPivotPoint();
++		cVector3f vBodyCenter = cMath_MatrixMul(pBody.GetLocalMatrix(), pBody.GetMassCenter());
++		
++		cVector3f vDoorDir = vBodyCenter - vPivot;
++		vDoorDir = vDoorDir - vPinDir * cMath_Vector3Dot(vPinDir, vDoorDir);
++		cVector3f vHandDir = vVRHandPos - vPivot;
++		vHandDir = vHandDir - vPinDir * cMath_Vector3Dot(vPinDir, vHandDir);
++		
++		////////////////////////////
++		// How fast the door should turn to catch up with the hand
++		float fWantedSpeed = 0;
++		if(vDoorDir.Length() > 0.02f && vHandDir.Length() > 0.12f) // too near the hinge, the angle means nothing
++		{
++			float fAngle = cMath_ATan2(	cMath_Vector3Dot(vPinDir, cMath_Vector3Cross(vDoorDir, vHandDir)),
++										cMath_Vector3Dot(vDoorDir, vHandDir));
++			if(mbVRHandStarted == false)
++			{
++				mbVRHandStarted = true;
++				mfVRHandStartAngle = fAngle;
++				mbVRHelpStarted = false; // (the other hand's turn is measured from here too)
++			}
++			
++			float fError = fAngle - mfVRHandStartAngle;
++			if(fError > cMath_Pi)	fError -= cMath_Pi * 2.0f;
++			if(fError < -cMath_Pi)	fError += cMath_Pi * 2.0f;
++			
++			// BunkerVR: with the other hand on the door too, the door goes
++			// halfway between where each hand would turn it. That hand's turn
++			// is measured from where it took hold, as if it had turned the
++			// door as far as this hand had by then, so that the door doesn't
++			// jump when it takes hold.
++			if(mlVRHelpHand >= 0)
++			{
++				cVector3f vVRHelpDir = mvVRHelpPalm - vPivot;
++				vVRHelpDir = vVRHelpDir - vPinDir * cMath_Vector3Dot(vPinDir, vVRHelpDir);
++				if(vVRHelpDir.Length() > 0.12f)
++				{
++					float fVRHelpAngle = cMath_ATan2(cMath_Vector3Dot(vPinDir, cMath_Vector3Cross(vDoorDir, vVRHelpDir)),
++													 cMath_Vector3Dot(vDoorDir, vVRHelpDir));
++					if(mbVRHelpStarted == false)
++					{
++						mbVRHelpStarted = true;
++						mfVRHelpStartAngle = fVRHelpAngle - fError;
++					}
++					float fVRHelpError = fVRHelpAngle - mfVRHelpStartAngle;
++					if(fVRHelpError > cMath_Pi)		fVRHelpError -= cMath_Pi * 2.0f;
++					if(fVRHelpError < -cMath_Pi)	fVRHelpError += cMath_Pi * 2.0f;
++					fError = (fError + fVRHelpError) * 0.5f;
++				}
++			}
++
++			// Closes a quarter of the gap to the hand each update, no faster
++			// than gfVRDoorMaxSpeed, which gives the door a little weight. A
++			// slower catch-up pushed with a limited force makes the door creep
++			// after the hand as if on a string; full strength (up to 14
++			// radians a second) can fling it so fast it leaves its hinges for
++			// a moment.
++			fWantedSpeed = fError * (0.25f / cMath_Max(afTimeStep, 0.004f));
++			if(fWantedSpeed > gfVRDoorMaxSpeed)		fWantedSpeed = gfVRDoorMaxSpeed;
++			if(fWantedSpeed < -gfVRDoorMaxSpeed)	fWantedSpeed = -gfVRDoorMaxSpeed;
++		}
++		
++		////////////////////////////
++		// BunkerVR: the door stops at the player's body. The game's doors
++		// don't bump into the player at all (even with the door free to hit
++		// the body, a door pulled towards the player goes through it), so
++		// where the door would meet the body is worked out here. Seen along
++		// the hinge, the body is a circle (`gfVRDoorBodyRadius`) around the
++		// real body (vVRBodyPos); the door is a line from the hinge to its far
++		// edge, `gfVRDoorHalfThick` thick each side. The door may turn towards
++		// the body only until its face touches that circle; any further, it
++		// is held there (with a buzz) and the hand lets go if pulled on.
++		float fVRBodyRoom = 999.0f;	// how far (radians) the door may still turn towards the body
++		int lVRBodySide = 0;		// which way about the pin that is: +1, -1, or 0 (the body isn't in its way)
++		if(bVRBodyKnown && vDoorDir.Length() > 0.02f && cMath_Abs(vPinDir.y) > 0.9f) // (an upright hinge: a hatch or lid is left alone)
++		{
++			cVector3f vVRBodyRel = vVRBodyPos - vPivot;
++			vVRBodyRel = vVRBodyRel - vPinDir * cMath_Vector3Dot(vVRBodyRel, vPinDir);
++			float fVRBodyDist = vVRBodyRel.Length();
++			float fVRDoorLength = vDoorDir.Length() * 2.0f; // the hinge to the far edge (its center is halfway)
++			float fVRTouch = gfVRDoorBodyRadius + gfVRDoorHalfThick;
++			if(fVRBodyDist > fVRTouch && fVRBodyDist < fVRDoorLength + fVRTouch)
++			{
++				cVector3f vVRAlong = cMath_Vector3Normalize(vDoorDir);
++				// The turn about the pin that would bring the door onto the body's center.
++				float fVRToBody = cMath_ATan2(cMath_Vector3Dot(vPinDir, cMath_Vector3Cross(vVRAlong, vVRBodyRel)), cMath_Vector3Dot(vVRAlong, vVRBodyRel));
++				// The face touches the circle this far short of that (where the
++				// door's side meets it; or, for a body just past the far edge, where
++				// that edge does).
++				float fVRShort = cMath_ASin(cMath_Min(1.0f, fVRTouch / fVRBodyDist));
++				if(fVRBodyDist * fVRBodyDist - fVRTouch * fVRTouch > fVRDoorLength * fVRDoorLength)
++					fVRShort = cMath_ACos(cMath_Min(1.0f, (fVRDoorLength * fVRDoorLength + fVRBodyDist * fVRBodyDist - fVRTouch * fVRTouch) / (2.0f * fVRDoorLength * fVRBodyDist)));
++				fVRBodyRoom = cMath_Max(cMath_Abs(fVRToBody) - fVRShort, 0.0f);
++				lVRBodySide = fVRToBody > 0.0f ? 1 : -1;
++			}
++		}
++		float fVRBodyLimit = fVRBodyRoom / cMath_Max(afTimeStep, 0.004f); // the fastest it may turn that way this update
++		bool bVRAtBody = false;		// the door is against the body (for the buzz)
++		if(lVRBodySide != 0 && fWantedSpeed * float(lVRBodySide) > fVRBodyLimit)
++		{
++			fWantedSpeed = fVRBodyLimit * float(lVRBodySide);
++			bVRAtBody = fVRBodyRoom < 0.02f;
++		}
++
++		// Lets the door play its handle effects (and its rattle when locked).
++		cScript_SetGlobalArgFloat(0, fWantedSpeed * 0.01f);
++		cScript_RunGlobalFunc(msSwingDoorName, "cScrPropSwingDoor", "_Global_OnAddSpeed");
++		
++		mfRotSpeed = fWantedSpeed;
++
++		////////////////////////////
++		// Turn the door (as the normal code does)
++		cVector3f vBodyVel = pBody.GetAngularVelocity();
++		cVector3f vHingeVel = vPinDir * cMath_Vector3Dot(vPinDir, vBodyVel);
++		cVector3f vWantedVel = vPinDir * mfRotSpeed;
++		
++		// The door is given that turning speed outright (its hinge, its stops
++		// and anything in its way still hold it), instead of being pushed
++		// towards it with a limited force.
++		// (Only part of the change each update, so that it gathers speed and
++		// doesn't jerk; and only about the hinge, whatever else the door is
++		// doing.)
++		//
++		// A door turns about its hinge, which is at its edge, so its center
++		// has to travel in an arc as it turns. Giving it only a turning speed
++		// (which is a turn about its own center) and leaving the hinge to
++		// drag the center along tears it off the hinge and makes it wobble.
++		// So it is given both: the turn about the hinge's pin, and the speed
++		// its center must have to go around the hinge with it.
++		//
++		// And if the door didn't follow the last push (it is against its
++		// stop, a lock or something in the way), it is only pushed gently.
++		float fVRHingeSpeedNow = cMath_Vector3Dot(vPinDir, vBodyVel);
++		float fVRPush = mfRotSpeed;
++		if(cMath_Abs(mfVRDoorLastPush) > 1.0f && cMath_Abs(fVRHingeSpeedNow) < cMath_Abs(mfVRDoorLastPush) * 0.2f)
++		{
++			if(fVRPush > 1.0f)	fVRPush = 1.0f;
++			if(fVRPush < -1.0f)	fVRPush = -1.0f;
++
++			// BunkerVR: the hand feels the door stop (its stop, a chain, something in the way).
++			if(mfVRStopBuzzWait <= 0.0f)
++			{
++				VRDoorBuzz(0.05f, 0.6f);
++				mfVRStopBuzzWait = 0.35f;
++			}
++		}
++		if(mfVRStopBuzzWait > 0.0f) mfVRStopBuzzWait -= afTimeStep;
++		// (A third of the change each update, for a little weight.)
++		float fVRNewSpeed = fVRHingeSpeedNow + (fVRPush - fVRHingeSpeedNow) * 0.33f;
++
++		// BunkerVR: and never into the player's body, even while still
++		// slowing down from an earlier, faster turn (see "the door stops at
++		// the player's body" above).
++		if(lVRBodySide != 0 && fVRNewSpeed * float(lVRBodySide) > fVRBodyLimit) fVRNewSpeed = fVRBodyLimit * float(lVRBodySide);
++		if(bVRAtBody && mfVRStopBuzzWait <= 0.0f)
++		{
++			VRDoorBuzz(0.05f, 0.6f);
++			mfVRStopBuzzWait = 0.35f;
++		}
++
++		// BunkerVR: not pushed at all while still latched or locked (it can't
++		// move, and pushing it against its own latch only makes it shake).
++		if(bVRLatched || bVRLocked) fVRNewSpeed = 0.0f;
++		mfVRDoorLastPush = fVRNewSpeed;
++
++		if(bVRLatched == false && bVRLocked == false)
++		{
++			cVector3f vVRTurn = vPinDir * fVRNewSpeed;
++			pBody.SetAngularVelocity(vVRTurn);
++			pBody.SetLinearVelocity(cMath_Vector3Cross(vVRTurn, vBodyCenter - vPivot));
++		}
++
++		mvLastMouseAdd = mvMoveAdd;
++		mvMoveAdd = cVector2f(0);
++		
++		if (cMath_Abs(mfRotSpeed) > (mfMoveMaxSpeed * 0.1f))
++			mfInteractCount += afTimeStep;
++	}
++	
++	//------------------------------------------------------------
++	
++	// BunkerVR: no hand on a door any more (see the grip in Update).
++	void VRClearDoorGrip()
++	{
++		cScript_SetGlobalVarInt("BunkerVR_DoorHand", 0);
++		cScript_SetGlobalVarID("BunkerVR_DoorBody", tID_Invalid);
++		VRClearHelpHand();
++	}
++
++	// BunkerVR: the other hand on the same door, so each hand can hold a
++	// handle without the first letting go. The game has one interact
++	// button, and the hand holding the door (alHand) has it.
++	// The other hand, squeezing on this door, is left squeezing for its own
++	// hold: the body script tells the mod that what it touches is the door
++	// held (roll 7083, kind 3; see VRTouchKind in PlayerBodyHandler.hps). As
++	// that squeeze starts while the hand touches this door, it takes hold
++	// too: on the handle nearest it (the same search as for the first hand),
++	// or where it touches. The door then turns by both hands (see the turn in
++	// Update), and that hand is drawn on its grip ("BunkerVR_DoorHand2"...;
++	// see Prop_PlayerBody.hps). It lets go when its squeeze ends, or when it
++	// is pulled off its grip as the first hand would be. If the first hand
++	// lets go first, the mod gives the game's button to this one, and the
++	// game takes the door up again in it (see UpdateGrabInput in vr.cpp).
++	void VRUpdateHelpHand(cCamera@ apCam, int alHand, const cMatrixf &in a_mtxDoor, float afTimeStep)
++	{
++		int lHelp = 1 - alHand;
++		tString sHelp = lHelp == 0 ? "0" : "1";
++
++		// Is that hand squeezing for its own hold (roll 7014: 12345, then 1
++		// left + 2 right)? And where is its palm (7011 left, 7012 right)?
++		float fRealRoll = apCam.GetRoll();
++		apCam.SetRoll(7014.0f);
++		cVector3f vUse = apCam.GetMatrix().GetTranslation();
++		apCam.SetRoll(lHelp == 0 ? 7011.0f : 7012.0f);
++		cVector3f vPalm = apCam.GetMatrix().GetTranslation();
++		apCam.SetRoll(fRealRoll);
++		bool bSqueeze = vUse.x > 12344.0f && vUse.x < 12346.0f && (int(vUse.y + 0.5f) & (lHelp == 0 ? 1 : 2)) != 0;
++		bool bJustSqueezed = bSqueeze && mbVRHelpSqueezeWas == false;
++		mbVRHelpSqueezeWas = bSqueeze;
++
++		if(mlVRHelpHand < 0 && bJustSqueezed)
++		{
++			// Only while it touches this door (reported just now).
++			float fAge = float(cEngine_GetGameTime()) - cScript_GetGlobalVarFloat("BunkerVR_TouchTime" + sHelp);
++			if(fAge > -0.001f && fAge < 0.25f && cScript_GetGlobalVarID("BunkerVR_TouchBody" + sHelp) == mBodyID)
++			{
++				cVector3f vGrip = cScript_GetGlobalVarVector3f("BunkerVR_TouchSpot" + sHelp);
++				cScript_SetGlobalArgVector3f(0, vPalm);
++				cScript_RunGlobalFunc(msSwingDoorName, "cScrPropSwingDoor", "_Global_VRFindGrip");
++				cVector3f vHandle = cScript_GetGlobalReturnVector3f();
++				cScript_RunGlobalFunc(msSwingDoorName, "cScrPropSwingDoor", "_Global_VRGripFound");
++				bool bOnHandle = cScript_GetGlobalReturnBool();
++				if(bOnHandle) vGrip = vHandle;
++				cMatrixf mtxIntoDoor = cMath_MatrixInverse(a_mtxDoor);
++				mvVRHelpGripOnDoor = cMath_MatrixMul(mtxIntoDoor, vGrip);
++				cScript_RunGlobalFunc(msSwingDoorName, "cScrPropSwingDoor", "_Global_VRGripAxis");
++				mvVRHelpAxisOnDoor = cMath_MatrixMul3x3(mtxIntoDoor, cScript_GetGlobalReturnVector3f());
++				cScript_RunGlobalFunc(msSwingDoorName, "cScrPropSwingDoor", "_Global_VRGripOut");
++				mvVRHelpOutOnDoor = cMath_MatrixMul3x3(mtxIntoDoor, cScript_GetGlobalReturnVector3f());
++				mlVRHelpHand = lHelp;
++				mbVRHelpStarted = false;
++				mfVRHelpApartTime = 0.0f;
++				VRDoorBuzzHand(lHelp, 0.04f, 0.4f);
++				tString sWhere = bOnHandle ? "on a handle" : "where it touches";
++				Log("BunkerVR: the other hand takes hold of the door too (" + sWhere + ")\n");
++			}
++		}
++		if(mlVRHelpHand < 0) return;
++
++		// Let go: the squeeze has ended, or the hand is pulled off its grip.
++		cVector3f vGripNow = cMath_MatrixMul(a_mtxDoor, mvVRHelpGripOnDoor);
++		if((vPalm - vGripNow).Length() > gfVRDoorLetGoDistance)	mfVRHelpApartTime += afTimeStep;
++		else													mfVRHelpApartTime = 0.0f;
++		if(bSqueeze == false || mfVRHelpApartTime > gfVRDoorLetGoTime)
++		{
++			if(bSqueeze) VRDoorBuzzHand(lHelp, 0.04f, 0.4f);
++			Log("BunkerVR: the other hand lets go of the door\n");
++			VRClearHelpHand();
++			return;
++		}
++		mvVRHelpPalm = vPalm;
++
++		// Drawn on its grip (with the first hand's stamp, set this update).
++		cScript_SetGlobalVarInt("BunkerVR_DoorHand2", lHelp + 1);
++		cScript_SetGlobalVarVector3f("BunkerVR_DoorGrip2", vGripNow);
++		cScript_SetGlobalVarVector3f("BunkerVR_DoorGripAxis2", cMath_MatrixMul3x3(a_mtxDoor, mvVRHelpAxisOnDoor));
++		cScript_SetGlobalVarVector3f("BunkerVR_DoorGripOut2", cMath_MatrixMul3x3(a_mtxDoor, mvVRHelpOutOnDoor));
++	}
++
++	// BunkerVR: no other hand on the door.
++	void VRClearHelpHand()
++	{
++		mlVRHelpHand = -1;
++		mbVRHelpStarted = false;
++		cScript_SetGlobalVarInt("BunkerVR_DoorHand2", 0);
++	}
++
++	// BunkerVR: buzzes the hand holding the door (the mod's special roll 7064).
++	void VRDoorBuzz(float afSeconds, float afStrength)
++	{
++		VRDoorBuzzHand(2, afSeconds, afStrength);
++	}
++
++	// BunkerVR: buzzes a hand (0 left, 1 right, 2 the one holding the door).
++	void VRDoorBuzzHand(int alHand, float afSeconds, float afStrength)
++	{
++		cCamera@ pCam = cLux_GetPlayer().GetCamera();
++		if(pCam is null) return;
++		float fRealRoll = pCam.GetRoll();
++		cVector3f vRealPos = pCam.GetPosition();
++		pCam.SetPosition(cVector3f(float(alHand), afSeconds, afStrength));
++		pCam.SetRoll(7064.0f);
++		pCam.GetMatrix();
++		pCam.SetPosition(vRealPos);
++		pCam.SetRoll(fRealRoll);
++	}
++
++	//------------------------------------------------------------
++
+=148
++	[nosave] bool mbVRHandStarted = false;	// BunkerVR: has the holding hand's starting angle been noted?
++	[nosave] float mfVRDoorLastPush = 0.0f;	// BunkerVR: the turning speed the door was given at the last update
++	[nosave] float mfVRHandStartAngle = 0;	// BunkerVR: angle between door and hand when it took hold
++	[nosave] bool mbVRGripSet = false;	// BunkerVR: has the spot the hand holds been taken?
++	[nosave] float mfVRDoorTakenAt = 0.0f;	// BunkerVR: when it was taken (the game's time, for the log)...
++	[nosave] bool mbVRDoorMoveNoted = false;	// BunkerVR: ...and the door's first move since then logged
++	[nosave] int mlVRDoorLogs = 0;	// BunkerVR: doors taken, logged
++	[nosave] bool mbVROnHandle = false;	// BunkerVR: is it the door's handle?
++	[nosave] cVector3f mvVRGripOnDoor = cVector3f(0.0f);	// BunkerVR: that spot, as a point on the door
++	[nosave] cVector3f mvVRTurnAxisOnDoor = cVector3f(0.0f, 0.0f, 1.0f);	// BunkerVR: the axis the handle turns about, as a direction on the door
++	[nosave] cVector3f mvVRHandUpStart = cVector3f(0.0f, 1.0f, 0.0f);	// BunkerVR: the hand's "up" when it took hold (in the world)
++	[nosave] float mfVRApartTime = 0.0f;	// BunkerVR: how long the real hand has been too far from the grip
++	[nosave] float mfVRTurnBuzzWait = 0.0f;	// BunkerVR: seconds until the turning handle may buzz again
++	[nosave] float mfVRStopBuzzWait = 0.0f;	// BunkerVR: seconds until the door's stop may buzz again
++	[nosave] int mlVRGripStamp = 0;	// BunkerVR: counts the updates, so the arm's script can tell the grip is current
++	[nosave] cVector3f mvVRGripAxisOnDoor = cVector3f(0.0f);	// BunkerVR: the bar held, as a direction on the door (0 0 0: not a bar)
++	[nosave] cVector3f mvVRGripOutOnDoor = cVector3f(0.0f);	// BunkerVR: which way the door's face at the bar looks, as a direction on the door (0 0 0: not a bar)
++	[nosave] int mlVRHelpHand = -1;	// BunkerVR: the other hand, holding the door too (0 left, 1 right; -1 none; see VRUpdateHelpHand)
++	[nosave] bool mbVRHelpSqueezeWas = true;	// BunkerVR: was that hand squeezing for its own hold at the last update?
++	[nosave] bool mbVRHelpStarted = false;	// BunkerVR: has its starting angle been noted?
++	[nosave] float mfVRHelpStartAngle = 0.0f;	// BunkerVR: that angle (as if it had turned the door as far as the first hand had)
++	[nosave] float mfVRHelpApartTime = 0.0f;	// BunkerVR: how long it has been too far from its grip
++	[nosave] cVector3f mvVRHelpPalm = cVector3f(0.0f);	// BunkerVR: where its palm is (this update)
++	[nosave] cVector3f mvVRHelpGripOnDoor = cVector3f(0.0f);	// BunkerVR: where it holds, as a point on the door
++	[nosave] cVector3f mvVRHelpAxisOnDoor = cVector3f(0.0f);	// BunkerVR: the bar it holds, as a direction on the door (0 0 0: not a bar)
++	[nosave] cVector3f mvVRHelpOutOnDoor = cVector3f(0.0f);	// BunkerVR: which way the door's face there looks (0 0 0: not a bar)
++	
+end

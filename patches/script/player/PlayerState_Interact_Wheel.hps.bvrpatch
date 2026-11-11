@@ -1,0 +1,16 @@
+BunkerVR patch 1
+file script/player/PlayerState_Interact_Wheel.hps
+from 555a3ddf7a903e6af0a0ffc0a8395cbaabda07ef895eef9c0cd53094cbaa4263 9930
+to 1ae86f89e9df5d292778a85f85138d839ad75c1158ee69610569b1aebeeb688a 10392
+=189
++	// BunkerVR: a wheel held by a VR hand (see VRTurnByHand in
++	// PlayerState_Interact_RotateBase.hps): a tick in the hand every 30
++	// degrees it turns, like a valve's notches.
++	tString VRHoldWhat() override { return "the wheel"; }
++	float VRTickAngle() override { return 0.52f; }
++	// The hand closes around the rim and only twists about it.
++	bool VRHoldsRim() override { return true; }
++
++	//------------------------------------------------------------
++
+end

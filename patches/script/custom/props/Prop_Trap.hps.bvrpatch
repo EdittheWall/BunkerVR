@@ -1,0 +1,24 @@
+BunkerVR patch 1
+file script/custom/props/Prop_Trap.hps
+from db73245904d6ea862dcc34972db0d000ca05d4317e84a2717de81d96877c2adb 28485
+to 4c6ea17c0c1376b5fd0baf0319b229316682961cdd4151f4d943e21c835c1dde 29088
+=162
+-1
++			if (pWire !is null) pWire.SetMatrix(mtxWire); // BunkerVR: the wire can be missing (see SetupTrap)
+=285
++	// BunkerVR: returns the index of the body that is the wire, for the bolt cutters
++	// closed on it by hand (VRUpdateCutters in PlayerBodyHandler.hps).
++	void _Global_VRWireBody()
++	{
++		cScript_SetGlobalReturnInt(mlTriggerBodyIndex);
++	}
++	
++	//------------------------------------------------------------
++	
+=99
+-1
++				// BunkerVR: the wire entity can be missing (for example when the map is
++				// entered by a debug jump); without this check and the one in OnUpdate,
++				// every update logs a script error.
++				if (pWire !is null) pWire.SetMatrix(mtxWire);
+end

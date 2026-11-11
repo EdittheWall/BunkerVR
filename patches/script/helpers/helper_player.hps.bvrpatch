@@ -1,0 +1,49 @@
+BunkerVR patch 1
+file script/helpers/helper_player.hps
+from b459aef4d0a602bfeaa31c598a97d85cab3f15452545464e12014d88c16ceb93 60024
+to 8bb3b59542d468eb7041c25c3bda280eddfc4b4dbe67e9ba5ce59ddd4460b436 61588
+=860
++	// BunkerVR: no forced look in the headset: it turns the player's view,
++	// which there turns the whole world around them. The scenes that use it
++	// carry on without it.
++	if (cVR_Active())
++	{
++		Log("BunkerVR: a forced look at " + asEntityName + " left out in VR\n");
++		return;
++	}
+=270
++/**
++ * BunkerVR: where the player's eyes really are. In VR the game's camera
++ * stays where the room puts it, while the player's own body (the capsule
++ * that bullets hit and that bumps into things) follows the real neck
++ * (PlayerBodyHandler.hps VRFollowHead). Away from the middle of the play
++ * space the camera is outside that body, so a shot aimed at the camera
++ * misses it (the trenches' Germans aim at the camera and keep firing until
++ * a shot hits). Returns the real head's center (roll 7006: whether it is
++ * followed; roll 7005: where it is), or Player_GetCameraPosition without it.
++ **/
++cVector3f Player_GetEyesPosition()
++{
++	cLuxPlayer@ pPlayer = cLux_GetPlayer();
++	cCamera@ pCam = pPlayer !is null ? pPlayer.GetCamera() : null;
++	if(pCam !is null)
++	{
++		float fRealRoll = pCam.GetRoll();
++		pCam.SetRoll(7006.0f);
++		cVector3f vStatus = pCam.GetMatrix().GetTranslation();
++		bool bHead = vStatus.x > 12344.0f && vStatus.x < 12346.0f && vStatus.y > 0.5f;
++		cVector3f vHead = cVector3f(0.0f);
++		if(bHead)
++		{
++			pCam.SetRoll(7005.0f);
++			vHead = pCam.GetMatrix().GetTranslation();
++		}
++		pCam.SetRoll(fRealRoll);
++		if(bHead) return vHead;
++	}
++	return Player_GetCameraPosition();
++}
++
++//-------------------------------------------------
++
+end

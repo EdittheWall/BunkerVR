@@ -1,0 +1,774 @@
+BunkerVR patch 1
+file script/player/PlayerState_Ladder.hps
+from 0637b6d8892e2400dabcb05337b6ff4dc25308c8a2d7b53ef93cf14f16985ffb 41419
+to 895562c0d6db99fcc9ad439e469ecac887e3e10789ef90b607b10a5985274466 78103
+=10
++#include "custom/helpers/helper_bunkervr.hps" // BunkerVR: the palms (the ladder climbed hand over hand)
++#include "custom/helpers/helper_bunkervr_hints.hps" // BunkerVR: the hint on the hand
+=16
++// BunkerVR: the ladder climbed hand over hand, as VR games climb ladders (the
++// Half-Life 2 VR mod, Half-Life: Alyx): on the ladder, a grip squeezed with
++// the hand at the rungs takes hold there, and while it holds, the body moves
++// up or down as far as that hand is pulled the other way, so the hand stays
++// where it took hold. The last hand to take hold climbs. Letting go leaves
++// the player where they are (nothing moves by itself). Pulled up past the top
++// or down to the foot, the player gets off as the game's own climbing does.
++// (VRUpdateHandClimb.) The stick climbs only while the palms aren't tracked
++// (the arms switched off), and climbing on and off is a blink
++// (VRClimbOnByBlink).
++const float gfVRLadderGripPress = 0.6f;		// a grip this far in takes hold...
++const float gfVRLadderGripLetGo = 0.35f;	// ...and lets go this far out (as the items' grips: PlayerBodyHandler.hps gfVRFitGripPress)
++// A hand takes hold only at a rung, not in the air between them. The rungs as
++// the game's ladder is built (static_objects\bunker\ladder: a piece every
++// 0.5 m, gfLadderRungDistance, with one round bar 3 cm thick across its
++// center, 0.43 m either side; the pillbox ladder, the game's only one, from
++// 6.0 m, its area's foot at 6.215 m: bars at 6.25, 6.75 ... 13.75, in the
++// area's own plane): the first gfVRLadderRungFirst above the area's foot.
++const float gfVRLadderRungFirst = 0.035f;	// the lowest bar this far above the ladder area's foot (meters)
++const float gfVRLadderRungHalf = 0.43f;		// a bar reaches this far either side of the center
++const float gfVRLadderRungSide = 0.06f;		// a hand at a bar: within this of its ends...
++const float gfVRLadderRungUpDown = 0.10f;	// ...this far above or below it...
++const float gfVRLadderRungOut = 0.15f;		// ...and this far in front of it or behind
++const float gfVRLadderGripAcross = 0.38f;	// a hand holding a rung is drawn on it at most this far from its center
++// Climbing on by a squeeze: a hand squeezed as climbing on begins, within this of the rungs' plane (meters;
++// VRClimbOnHolds), and still squeezed once on, holds on (VRUpdateHandClimb). Climbing on moves the body and so the
++// real hand (some 30 cm up and 15 cm nearer at the foot; turned around from the top), often between the rungs and
++// into the wall behind them, where the arm would be drawn clipping through the wall, holding nothing. It holds the
++// rung nearest where the real hand is now, if that is within gfVRLadderClimbOnHold of it (beyond that, the arm would
++// be drawn stretched, so it holds nothing).
++const float gfVRLadderClimbOnReach = 0.3f;
++const float gfVRLadderClimbOnHold = 0.45f;
++// Stepping off at the foot: climbed on at the foot, the body is 2.5 cm above
++// it, so a hand drifting 5 cm would take the player off at once, and the same
++// squeeze would climb straight back on, in a loop. So the hand must push this
++// far past the foot, and not in the first gfVRLadderSettle after climbing on...
++const float gfVRLadderFootPush = 0.15f;
++const float gfVRLadderSettle = 0.6f;
++// ...and a ladder isn't climbed onto again until this long after getting
++// off one (Area_Ladder.hps OnInteract; seconds).
++const float gfVRLadderAgainWait = 1.0f;
++// Climbing on in VR, the body script is asked to put the view over the body
++// (the global "BunkerVR_LadderCentre", PlayerBodyHandler.hps VRFollowHead);
++// the hands take no hold until it has, or this long at most (seconds).
++const float gfVRLadderCentreWait = 0.25f;
++// (Putting the view over the body takes a few updates; the blink stays dark
++// until it is done, or this long at most, seconds.)
++const float gfVRLadderCentreWaitMost = 0.45f;
++const float gfVRLadderMaxSpeed = 1.5f;		// the body moves at most this fast, however fast the hand (m/s), so the player can't climb too quickly
++const float gfVRLadderMoving = 0.1f;		// the climbing animation plays while the hands move the body faster than this (m/s)...
++const float gfVRLadderMovingKeep = 0.25f;	// ...and this long after (seconds), so that a slow pull doesn't flicker it
++const float gfVRLadderExitPull = 0.05f;		// off at the top or the foot only once the hold has climbed this far that way, or the hand asks this far past the end (meters)
++const float gfVRLadderHintClimbed = 0.2f;	// a hold that climbed this far counts as its hint used (meters)
++// Climbing on and off in VR: a blink (VRClimbOnByBlink): the view
++// dark over gfVRLadderBlinkOut (seconds), the player placed when it is dark
++// (or gfVRLadderBlinkWait later at most), clear again over gfVRLadderBlinkIn.
++const float gfVRLadderBlinkOut = 0.1f;
++const float gfVRLadderBlinkWait = 0.1f;
++const float gfVRLadderBlinkIn = 0.15f;
++
+=155
++		// BunkerVR: no hand holds the rungs yet; a grip squeezed now takes no
++		// hold until squeezed again, unless climbing on's blink lets it hold
++		// on (VRClimbOnByBlink).
++		mvVRClimbHeld[0] = false;
++		mvVRClimbHeld[1] = false;
++		mvVRClimbSqueezed[0] = true;
++		mvVRClimbSqueezed[1] = true;
++		mvVRClimbOnKeep[0] = false;
++		mvVRClimbOnKeep[1] = false;
++		mlVRClimbHand = -1;
++		mfVRClimbMovingFor = 0;
++		mfVRClimbDir = 0;
++		mfVRClimbBeyond = 0;
++		mbVRClimbByHand = false;
++		mlVRClimbNotes = 0;
++		mbVRPalmsFollowed = cVR_Active(); // (the stick left out until the palms are known not to be tracked)
++		mbVRBlinkDark = false;
++		mfVRBlinkFor = 0;
++		mfVRSinceOn = 0;
++		mbVRPlaced = false;
++		mfVRCentringFor = 0;
++
+=97
++		VRLetGoOfRungs(); // BunkerVR
++		VRHandsOffRungs(); // (no hand drawn on a rung any more)
++		// BunkerVR: when a ladder was last got off (Area_Ladder.hps
++		// OnInteract waits gfVRLadderAgainWait), and no centering left requested.
++		cScript_SetGlobalVarFloat("BunkerVR_LadderLeftAt", float(cEngine_GetGameTime()));
++		cScript_SetGlobalVarBool("BunkerVR_LadderCentre", false);
++		// BunkerVR: off the ladder some other way while a blink had the view
++		// dark (a kill, a death): it clears.
++		if(mbVRBlinkDark)
++		{
++			mbVRBlinkDark = false;
++			cLux_GetEffectHandler().FadeIn(gfVRLadderBlinkIn);
++		}
++
+=108
++		//////////////////////////////////
++		// BunkerVR: climbing on in VR, in a blink.
++		if(mlState == 0 && cVR_Active())
++		{
++			VRClimbOnByBlink(afTimeStep, mtxAreaStartDiff);
++		}
+=2
+-1
++		else if(mlState ==0)
+=143
+-1
++
++			/////////////////////////////////
++			// BunkerVR: climbed by the hands: mvCharPosition has already been
++			// moved, and the game's own move is left out.
++			bool bVRHands = VRUpdateHandClimb(afTimeStep, pBody, fMaxHeight);
++			if(bVRHands) fUsedMoveMul = 0;
++			if(cVR_Active()) VRShowHandsOnRungs(pBody); // (the holding hands drawn on their rungs)
++			bool bVRHandsMoving = bVRHands && mfVRClimbMovingFor > 0.0f;
++
+=69
+-1
++
+=1
+-1
++							if (cVR_Active())
++							{
++								// BunkerVR: no climbing-off animation in VR: it disorients, and the body stays as the player has it.
++							}
++							else if (PlayerBody_IsActive())
+=30
+-1
++							if (cVR_Active())
++							{
++								// BunkerVR: as above (the animation would also break the drawn body).
++							}
++							else if (PlayerBody_IsActive())
+=11
+-1
++
+=1
+-1
++							if (cVR_Active())
++							{
++								// BunkerVR: as above.
++							}
++							else if (PlayerBody_IsActive())
+=11
+-1
++							if (PlayerBody_IsActive() && m_idExitArea == m_idExitTopArea && mbPlayTopDetachAnim && cVR_Active() == false) // (BunkerVR: in VR straight to the blink, state 3)
+=37
+-2
++			// (BunkerVR: none in VR: the view's tilt is the real head's.)
++			cLux_GetPlayer().SetCameraRoll(ePlayerRoll_Climb,  cVR_Active() ? 0.0f : cMath_ToRad(fMoveRollAngle*1.3f));
++
+=2
+-1
++			// (BunkerVR: in VR the camera isn't smoothed after the body:
++			// smoothed, it trails the body as the hands climb, and a held hand
++			// slides on its rung, then catches up.)
++			pCharBody.SetPosition(mvCharPosition, cVR_Active() == false);
+=7
+-1
++			if(fUsedMoveMul!=0 || bReachedRung || bVRHandsMoving)
+=28
+-2
++					// Sound (BunkerVR: not while the hands climb, whose own
++					// taking hold sounds instead)
++					if(mbVRClimbByHand == false && (mlCurrentClimbAnim==0 || mfInputMoveMul!=0))
+=8
+-1
++					if(mbVRClimbByHand == false && mlCurrentClimbAnim!=0)
+=54
+-1
++					if(mlCurrentClimbAnim!=2 && mfPlayPlaceSoundCount==0 && mbVRClimbByHand == false) // (BunkerVR: as above)
+=71
++
++				///////////////////////////
++				// BunkerVR: the hands climbed past the top or down to the
++				// foot (the game's checks above need its own move).
++				if(bVRHands && mbExiting==false)
++					VRHandClimbExit(fHeight, fMaxHeight);
+=21
++		// BunkerVR: climbing off in VR, in a blink.
++		else if(mlState == 3 && cVR_Active())
++		{
++			VRClimbOffByBlink(afTimeStep, mtxAreaStartDiff);
++		}
++		//////////////////////////////////
+=122
+-1
++
++	//------------------------------------------------------------
++
++	// BunkerVR: the ladder climbed hand over hand (the settings are at the
++	// top). Each update on the ladder (mlState 1), before the game's own
++	// move: takes and lets go of the hands' holds on the rungs, and moves
++	// mvCharPosition up or down as far as the climbing hand has been pulled
++	// the other way since it took hold. True while a hand holds (the game's
++	// own move is then left out: its goal is kept where the body is). Not
++	// while getting off, nor while the stick climbs (which lets go of the
++	// holds). afMaxHeight: the game's top (fMaxHeight in Update).
++	//
++	// A hand's height is measured from the game's camera, read together with
++	// the palm (the mod places the palms from where the camera is when
++	// asked), so it is the hand's own height as tracked, whatever moved the
++	// body: the body is put where the climbing hand stays where it took hold.
++	bool VRUpdateHandClimb(float afTimeStep, iPhysicsBody@ apLadder, float afMaxHeight)
++	{
++		mfVRClimbMovingFor = cMath_Max(mfVRClimbMovingFor - afTimeStep, 0.0f);
++		mfVRSinceOn += afTimeStep;
++		// (Just after climbing on in VR the body script puts the view over the
++		// body: no hold until it has, so the hands' positions are known; at
++		// most gfVRLadderCentreWait.)
++		if(cScript_GetGlobalVarBool("BunkerVR_LadderCentre") && mfVRSinceOn < gfVRLadderCentreWait) return false;
++		if(mfInputMoveMul != 0) mbVRClimbByHand = false;
++		bool bOn = cVR_Active() && mbExiting == false && mfInputMoveMul == 0 && afTimeStep > 0.0f && apLadder !is null;
++		cCamera@ pCam = cLux_GetPlayer().GetCamera();
++		if(pCam is null) bOn = false;
++
++		// The ladder's own frame (x across, y up, z out), and its half size.
++		cMatrixf mtxToLadder = cMatrixf_Identity;
++		cVector3f vHalf = cVector3f(0.0f);
++		float fCamY = 0.0f;
++		if(bOn)
++		{
++			mtxToLadder = cMath_MatrixInverse(apLadder.GetWorldMatrix());
++			vHalf = apLadder.GetShape().GetSize() * 0.5f;
++			fCamY = pCam.GetPosition().y;
++		}
++
++		array<float> vRel = {0.0f, 0.0f};
++		bool bAnyPalm = false;
++		for(int h = 0; h < 2; ++h)
++		{
++			bool bSqueezed = cVR_Active() && cVR_HandSqueeze(h) > (mvVRClimbSqueezed[h] ? gfVRLadderGripLetGo : gfVRLadderGripPress);
++			bool bFresh = bSqueezed && mvVRClimbSqueezed[h] == false;
++			mvVRClimbSqueezed[h] = bSqueezed;
++
++			cMatrixf mtxPalm;
++			float fArmScale;
++			if(bOn == false || BunkerVR_ReadFollowedPalm(h, mtxPalm, fArmScale) == false)
++			{
++				if(mvVRClimbHeld[h]) VRLetGoOfRung(h);
++				continue;
++			}
++			bAnyPalm = true;
++			// (Its height as tracked, not as drawn, which is held back off a wall.)
++			cVector3f vDrawn = mtxPalm.GetTranslation();
++			cVector3f vTracked = vDrawn;
++			cVector3f vBack = cScript_GetGlobalVarVector3f(h == 0 ? "BunkerVR_HandBack0" : "BunkerVR_HandBack1");
++			if(vBack.Length() < 0.6f) vTracked = vTracked - vBack;
++			vRel[h] = vTracked.y - fCamY;
++
++			if(bSqueezed == false)
++			{
++				if(mvVRClimbHeld[h]) VRLetGoOfRung(h);
++				mvVRClimbOnKeep[h] = false;
++				// The hint, on the right hand while it holds nothing (shown until learned).
++				if(h == 1) BunkerVR_HintOffer(1, "ladder_climb", vDrawn);
++				continue;
++			}
++			// (A hand that climbed on by its squeeze (VRClimbOnHolds), still squeezed, holds on to the rung nearest
++			// where it is now, if within gfVRLadderClimbOnHold. It isn't looked for afresh at the rungs: climbing on
++			// has moved the body and the real hand with it, often between the rungs and into the wall behind them,
++			// where the hand would be drawn holding nothing.)
++			if(mvVRClimbOnKeep[h])
++			{
++				mvVRClimbOnKeep[h] = false;
++				cVector3f vOn = cMath_MatrixMul(mtxToLadder, vDrawn);
++				cVector3f vRung = cMath_MatrixMul(apLadder.GetWorldMatrix(), cVector3f(cMath_Clamp(vOn.x, -gfVRLadderGripAcross, gfVRLadderGripAcross), VRNearestRungY(vOn.y, vHalf), 0.0f));
++				int lOff = int((vDrawn - vRung).Length() * 100.0f + 0.5f);
++				if(lOff > int(gfVRLadderClimbOnHold * 100.0f + 0.5f))
++				{
++					VRClimbNote("the " + (h == 0 ? "left" : "right") + " hand that climbed on is " + lOff + " cm from the nearest rung: it holds nothing");
++					continue;
++				}
++				mvVRClimbHeld[h] = true;
++				mlVRClimbHand = h;
++				mfVRClimbGrabRel = vRel[h];
++				mfVRClimbGrabBodyY = mvCharPosition.y;
++				mfVRClimbHoldStartY = mvCharPosition.y;
++				mvVRClimbGrip[h] = vRung;
++				VRClimbNote("the " + (h == 0 ? "left" : "right") + " hand that climbed on holds on, to the rung nearest it, " + lOff +
++							" cm from it (in the ladder's terms " + vOn.x + " " + vOn.y + " " + vOn.z + ")");
++				continue;
++			}
++			if(bFresh == false) continue;
++
++			// A fresh squeeze at the rungs (the hand as drawn, in the ladder's
++			// area or near it) takes hold: this hand climbs from here.
++			cVector3f vAt = cMath_MatrixMul(mtxToLadder, vDrawn);
++			tString sAt = " (in the ladder's terms " + vAt.x + " " + vAt.y + " " + vAt.z + "; the body at height " + GetCurrentHeight(mvCharPosition) + ")";
++			if(VRAtRung(vAt, vHalf) == false)
++			{
++				VRClimbNote("the " + (h == 0 ? "left" : "right") + " grip squeezed away from the rungs" + sAt);
++				continue;
++			}
++			mvVRClimbHeld[h] = true;
++			mlVRClimbHand = h;
++			mfVRClimbGrabRel = vRel[h];
++			mfVRClimbGrabBodyY = mvCharPosition.y;
++			mfVRClimbHoldStartY = mvCharPosition.y;
++			// (Where on the rung it holds, for drawing the hand closed around it.)
++			mvVRClimbGrip[h] = cMath_MatrixMul(apLadder.GetWorldMatrix(), cVector3f(cMath_Clamp(vAt.x, -gfVRLadderGripAcross, gfVRLadderGripAcross), VRNearestRungY(vAt.y, vHalf), 0.0f));
++			VRClimbNote("the " + (h == 0 ? "left" : "right") + " hand takes hold" + sAt);
++			VRBuzzHand(h, 0.03f, 0.45f);
++			if(mfPlayPlaceSoundCount == 0)
++			{
++				PlaySound("hand_place");
++				mfPlayPlaceSoundCount = 0.3f;
++			}
++		}
++
++		// (Are the palms tracked? Then the stick doesn't climb: OnAnalogInput.)
++		if(bOn) mbVRPalmsFollowed = bAnyPalm;
++
++		// The climbing hand let go and the other still holds: that one climbs
++		// on from where the body is now.
++		if(mlVRClimbHand < 0 || mvVRClimbHeld[mlVRClimbHand] == false)
++		{
++			mlVRClimbHand = -1;
++			for(int h = 0; h < 2; ++h)
++			{
++				if(mvVRClimbHeld[h] == false) continue;
++				mlVRClimbHand = h;
++				mfVRClimbGrabRel = vRel[h];
++				mfVRClimbGrabBodyY = mvCharPosition.y;
++				mfVRClimbHoldStartY = mvCharPosition.y;
++			}
++		}
++		if(mlVRClimbHand < 0) return false;
++
++		// The body where the climbing hand stays where it took hold, between
++		// the ladder's foot and a little past its top (the game's own
++		// heights: GetCurrentHeight), never faster than gfVRLadderMaxSpeed.
++		// (Climbing on at the top puts the body above the game's top: a hold
++		// there isn't pulled down to it, and can still climb off at the top.)
++		float fWant = mfVRClimbGrabBodyY + mfVRClimbGrabRel - vRel[mlVRClimbHand];
++		float fLowest = cMath_Min(VRBodyYAtHeight(-0.01f), mfVRClimbHoldStartY);
++		float fHighest = cMath_Max(VRBodyYAtHeight(afMaxHeight + 0.1f), mfVRClimbHoldStartY + 0.1f);
++		float fKept = cMath_Clamp(fWant, fLowest, fHighest);
++		mfVRClimbBeyond = fWant - fKept; // (how far the hand asks past an end: VRHandClimbExit)
++		fWant = fKept;
++		float fMost = gfVRLadderMaxSpeed * afTimeStep;
++		float fStep = cMath_Clamp(fWant - mvCharPosition.y, -fMost, fMost);
++		mvCharPosition.y += fStep;
++		if(cMath_Abs(fStep) > gfVRLadderMoving * afTimeStep)
++		{
++			mfVRClimbMovingFor = gfVRLadderMovingKeep;
++			mfVRClimbDir = fStep > 0 ? 1.0f : -1.0f;
++		}
++		mbVRClimbByHand = true;
++
++		// The game's goal (the rung it would move on to) where the body is:
++		// nothing moves by itself once the hands stop.
++		mfGoalYPosition = mvCharPosition.y;
++		if(mfVRClimbDir != 0) mfLastMovementMul = mfVRClimbDir;
++		return true;
++	}
++
++	// BunkerVR: the hands climbed up past the top or down to the foot: off
++	// the ladder, as the game's own climbing gets off there (Update's exit
++	// checks). Only once this hold has climbed gfVRLadderExitPull that way, or
++	// the hand asks that far past the end. Climbing on at the top puts the
++	// body above the game's top already, so a hand barely moving there
++	// mustn't take the player off at once. Climbing on at the foot puts it a
++	// few centimeters above the foot (height 0.025), where a hold can only
++	// climb down some 3.5 cm: there the hand asking past the end takes the
++	// player off, or they would be kept on the ladder.
++	void VRHandClimbExit(float afHeight, float afMaxHeight)
++	{
++		float fClimbed = mvCharPosition.y - mfVRClimbHoldStartY;
++		bool bTop = afHeight > afMaxHeight && ((mfVRClimbDir > 0 && fClimbed > gfVRLadderExitPull) || mfVRClimbBeyond > gfVRLadderExitPull);
++		// (At the foot: a hold that came down to it, or a hand pushed
++		// gfVRLadderFootPush past it; never just after climbing on.)
++		bool bBottom = afHeight <= 0 && mfVRSinceOn > gfVRLadderSettle &&
++					   ((mfVRClimbDir < 0 && fClimbed < -gfVRLadderExitPull && mfVRClimbHoldStartY > VRBodyYAtHeight(gfVRLadderExitPull)) || mfVRClimbBeyond < -gfVRLadderFootPush);
++		if(bTop == false && bBottom == false) return;
++
++		// (ExitLadder lets the game move on to its goal and get off there: the
++		// goal just past the body that way, so that it gets off at once.)
++		mfLastMovementMul = bTop ? 1.0f : -1.0f;
++		mfGoalYPosition = mvCharPosition.y + (bTop ? 0.01f : -0.01f);
++		VRClimbNote("climbed by the hands off at the " + (bTop ? "top" : "foot") + " (height " + afHeight + ", the game's top " + afMaxHeight + ")");
++		VRLetGoOfRungs();
++		if(bTop) ExitLadder(eLadderExitPos_Top, mbExitTopCrouch);
++		else ExitLadder(eLadderExitPos_Bottom, mbExitBottomCrouch);
++	}
++
++	// BunkerVR: a hand lets go of the rungs. The climbing hand's
++	// hold, if it climbed far enough, counts as the hint used.
++	void VRLetGoOfRung(int alHand)
++	{
++		if(alHand < 0 || alHand > 1 || mvVRClimbHeld[alHand] == false) return;
++		mvVRClimbHeld[alHand] = false;
++		if(mlVRClimbHand != alHand) return;
++		mlVRClimbHand = -1;
++		float fClimbed = mvCharPosition.y - mfVRClimbHoldStartY;
++		VRClimbNote("the " + (alHand == 0 ? "left" : "right") + " hand lets go, having climbed " + fClimbed + " m (the body at height " + GetCurrentHeight(mvCharPosition) + ")");
++		if(cVR_Active() && cMath_Abs(fClimbed) >= gfVRLadderHintClimbed) cVR_HintUsed("ladder_climb");
++	}
++
++	// BunkerVR: a "BunkerVR ladder:" line in hpl.log (the first 40 of each
++	// time on the ladder).
++	void VRClimbNote(const tString &in asText)
++	{
++		if(mlVRClimbNotes >= 40) return;
++		mlVRClimbNotes++;
++		Log("BunkerVR ladder: " + asText + "\n");
++	}
++
++	void VRLetGoOfRungs()
++	{
++		VRLetGoOfRung(0);
++		VRLetGoOfRung(1);
++	}
++
++	// BunkerVR: is a hand at avAt (in the ladder area's own frame: x across,
++	// y up from its center, z out of its plane) at one of its rungs (the
++	// settings are at the top)? avHalf: the area's half size.
++	bool VRAtRung(const cVector3f &in avAt, const cVector3f &in avHalf)
++	{
++		if(cMath_Abs(avAt.x) > gfVRLadderRungHalf + gfVRLadderRungSide) return false;
++		if(cMath_Abs(avAt.z) > gfVRLadderRungOut) return false;
++		return cMath_Abs(avAt.y - VRNearestRungY(avAt.y, avHalf)) <= gfVRLadderRungUpDown;
++	}
++
++	// BunkerVR: the height of the rung nearest afY (both in the ladder area's
++	// own frame, from its center): the first gfVRLadderRungFirst
++	// above the foot, then one every gfLadderRungDistance, the last at most a
++	// little above the top.
++	float VRNearestRungY(float afY, const cVector3f &in avHalf)
++	{
++		float fUp = afY + avHalf.y - gfVRLadderRungFirst;
++		int lLast = int((avHalf.y * 2.0f - gfVRLadderRungFirst + gfVRLadderRungUpDown) / gfLadderRungDistance);
++		int lRung = fUp > 0.0f ? int(fUp / gfLadderRungDistance + 0.5f) : 0;
++		if(lRung > lLast) lRung = lLast;
++		return float(lRung) * gfLadderRungDistance + gfVRLadderRungFirst - avHalf.y;
++	}
++
++	// BunkerVR: as climbing on begins (the first update of its blink, the body not yet moved), which hands climb on by
++	// their squeeze: squeezed, and drawn within gfVRLadderClimbOnReach of the rungs' plane and within the rungs' reach
++	// across. Once on the ladder, each one still squeezed holds on (VRUpdateHandClimb).
++	void VRClimbOnHolds(iPhysicsBody@ apLadder)
++	{
++		for(int h = 0; h < 2; ++h)
++		{
++			mvVRClimbOnKeep[h] = false;
++			if(apLadder is null || cVR_Active() == false || cVR_HandSqueeze(h) <= gfVRLadderGripPress) continue;
++			cMatrixf mtxPalm;
++			float fArmScale;
++			if(BunkerVR_ReadFollowedPalm(h, mtxPalm, fArmScale) == false) continue;
++			cVector3f vHalf = apLadder.GetShape().GetSize() * 0.5f;
++			cVector3f vAt = cMath_MatrixMul(cMath_MatrixInverse(apLadder.GetWorldMatrix()), mtxPalm.GetTranslation());
++			tString sAt = " (in the ladder's terms " + vAt.x + " " + vAt.y + " " + vAt.z + ")";
++			if(cMath_Abs(vAt.x) > gfVRLadderRungHalf + gfVRLadderRungSide || cMath_Abs(vAt.z) > gfVRLadderClimbOnReach)
++			{
++				VRClimbNote("climbing on: the " + (h == 0 ? "left" : "right") + " hand squeezed away from the rungs" + sAt + ": it will not hold on");
++				continue;
++			}
++			mvVRClimbOnKeep[h] = true;
++			VRClimbNote("climbing on: the " + (h == 0 ? "left" : "right") + " hand squeezed at the rungs" + sAt + ": it holds on once on");
++		}
++	}
++
++	// BunkerVR: the hands that hold rungs, drawn closed around them like a
++	// hand on a door's handle (Prop_PlayerBody.hps VRHoldBar, from the values
++	// the door's grip sets each update: "BunkerVR_DoorHand", "BunkerVR_DoorGrip"
++	// and the rest, with a new "BunkerVR_DoorStamp"): the climbing hand as the
++	// first, the other, if it holds too, as the second; each where it took
++	// hold (mvVRClimbGrip), the bar running across the ladder (held either way
++	// around, which a bar axis of length 2 signals), facing out to the
++	// climber. Released when no hand holds.
++	void VRShowHandsOnRungs(iPhysicsBody@ apLadder)
++	{
++		int lFirst = (mlVRClimbHand >= 0 && mvVRClimbHeld[mlVRClimbHand]) ? mlVRClimbHand : (mvVRClimbHeld[0] ? 0 : (mvVRClimbHeld[1] ? 1 : -1));
++		if(lFirst < 0 || apLadder is null || cVR_Active() == false)
++		{
++			VRHandsOffRungs();
++			return;
++		}
++		int lOther = (mvVRClimbHeld[1 - lFirst]) ? 1 - lFirst : -1;
++		cVector3f vAcross = cMath_Vector3Normalize(cMath_MatrixMul3x3(apLadder.GetWorldMatrix(), cVector3f(1.0f, 0.0f, 0.0f))) * 2.0f;
++		cVector3f vOut = cLux_GetPlayer().GetCharacterBody().GetPosition() - apLadder.GetWorldPosition();
++		vOut.y = 0.0f;
++		if(vOut.Length() > 0.01f) vOut.Normalize();
++		cScript_SetGlobalVarInt("BunkerVR_DoorHand", lFirst + 1);
++		cScript_SetGlobalVarVector3f("BunkerVR_DoorGrip", mvVRClimbGrip[lFirst]);
++		cScript_SetGlobalVarVector3f("BunkerVR_DoorGripAxis", vAcross);
++		cScript_SetGlobalVarVector3f("BunkerVR_DoorGripOut", vOut);
++		cScript_SetGlobalVarInt("BunkerVR_DoorHand2", lOther + 1);
++		if(lOther >= 0)
++		{
++			cScript_SetGlobalVarVector3f("BunkerVR_DoorGrip2", mvVRClimbGrip[lOther]);
++			cScript_SetGlobalVarVector3f("BunkerVR_DoorGripAxis2", vAcross);
++			cScript_SetGlobalVarVector3f("BunkerVR_DoorGripOut2", vOut);
++		}
++		cScript_SetGlobalVarInt("BunkerVR_DoorStamp", cScript_GetGlobalVarInt("BunkerVR_DoorStamp") + 1);
++		mbVRHandsOnRungs = true;
++	}
++
++	void VRHandsOffRungs()
++	{
++		if(mbVRHandsOnRungs == false) return;
++		mbVRHandsOnRungs = false;
++		cScript_SetGlobalVarInt("BunkerVR_DoorHand", 0);
++		cScript_SetGlobalVarInt("BunkerVR_DoorHand2", 0);
++	}
++
++	// BunkerVR: the body's height (its center, as the character body's
++	// position) at which GetCurrentHeight gives afHeight.
++	float VRBodyYAtHeight(float afHeight)
++	{
++		iPhysicsBody@ pBody = cLux_ID_Area(m_idArea).GetAreaBody();
++		iCharacterBody@ pCharBody = cLux_GetPlayer().GetCharacterBody();
++		float fMinY = pBody.GetWorldPosition().y - pBody.GetShape().GetSize().y/2.0f;
++		return afHeight + fMinY + pCharBody.GetSize().y/2 + 0.05f;
++	}
++
++	// BunkerVR: buzzes a hand (0 left, 1 right; the mod's roll 7064, as
++	// PlayerState_Interact.hps VRBuzzHand).
++	void VRBuzzHand(int alHand, float afSeconds, float afStrength)
++	{
++		cLuxPlayer@ pPlayer = cLux_GetPlayer();
++		cCamera@ pCam = pPlayer !is null ? pPlayer.GetCamera() : null;
++		if(pCam is null) return;
++		float fRealRoll = pCam.GetRoll();
++		cVector3f vRealPos = pCam.GetPosition();
++		pCam.SetPosition(cVector3f(float(alHand), afSeconds, afStrength));
++		pCam.SetRoll(7064.0f);
++		pCam.GetMatrix();
++		pCam.SetPosition(vRealPos);
++		pCam.SetRoll(fRealRoll);
++	}
++
++	// BunkerVR: climbing on in VR. The game's slide onto the ladder (1.25 s;
++	// 1.6 s from the top, where it also turns the player half around), its
++	// rolling of the view and its climbing-on animation are slow and
++	// disorienting in a headset, so they are replaced by a blink, as VR games
++	// hide a move or turn they must make (and the mod's own big moves,
++	// VRUpdateKillView).
++	// The view goes dark, the player is put where the game puts them,
++	// facing the ladder from where the real head faces (VRFaceLadder), and
++	// it clears with the player on the ladder (mlState 1, the game's own
++	// last steps of climbing on). About a quarter of a second in all.
++	void VRClimbOnByBlink(float afTimeStep, const cMatrixf &in a_mtxAreaStartDiff)
++	{
++		cLuxPlayer@ pPlayer = cLux_GetPlayer();
++		iCharacterBody@ pCharBody = pPlayer.GetCharacterBody();
++		cCamera@ pCam = pPlayer.GetCamera();
++		iPhysicsBody@ pBody = cLux_ID_Area(m_idArea).GetAreaBody();
++		pPlayer.SetCameraRoll(ePlayerRoll_Climb, 0.0f);
++
++		// (The game's own first steps of climbing on.)
++		if(mbPlayedAttachAnim == false)
++		{
++			mbPlayedAttachAnim = true;
++			VRClimbOnHolds(pBody); // (before the body is moved: the rung each squeezed hand reached for)
++			Player_SetCrouching(false, true, true); // (at once, and the drawn body too)
++			Item_PutAway(eItemHandlerHand_Left);
++			Item_PutAway(eItemHandlerHand_Right);
++			Player_SetCanUseLightSource(false);
++			cLux_GetEffectHandler().FadeOut(gfVRLadderBlinkOut);
++			mbVRBlinkDark = true;
++			mfVRBlinkFor = 0.0f;
++		}
++		mfVRBlinkFor += afTimeStep;
++		cVector3f vPos = cMath_MatrixMul(a_mtxAreaStartDiff, mvFadePosEnd);
++		cVector3f vRot = cMath_MatrixMul(a_mtxAreaStartDiff, mvFadeRotEnd);
++		if(mbVRPlaced == false)
++		{
++			if(cLux_GetEffectHandler().GetFadeAlpha() < 0.99f && mfVRBlinkFor < gfVRLadderBlinkOut + gfVRLadderBlinkWait) return;
++
++			// Dark: on the ladder, facing it; then the view put over the body by the body
++			// script, still dark (it takes a few updates, see VRLadderHead in
++			// PlayerBodyHandler.hps).
++			pCharBody.SetPosition(vPos, false);
++			// (Crouched by the stick under something, the game can't stand the player up where
++			// they were, and they come onto the ladder crouched, with the head put far from the
++			// ladder and the drawn body hidden. On the ladder there is room: stood up here, at once.)
++			if(Player_GetCrouching())
++			{
++				Player_SetCrouching(false, true, true);
++				VRClimbNote("climbing on crouched: stood up on the ladder" + (Player_GetCrouching() ? " FAILED" : ""));
++			}
++			pCam.SetPitch(vRot.x);
++			mfVRFacedLeft = VRFaceLadder(pCam, pCharBody, vRot.y);
++			SetupHeadTurnLimits();
++			cScript_SetGlobalVarBool("BunkerVR_LadderCentre", true);
++			mbVRPlaced = true;
++			mfVRCentringFor = 0.0f;
++			return;
++		}
++		mfVRCentringFor += afTimeStep;
++		if(cScript_GetGlobalVarBool("BunkerVR_LadderCentre") && mfVRCentringFor < gfVRLadderCentreWaitMost) return;
++		bool bCentred = cScript_GetGlobalVarBool("BunkerVR_LadderCentre") == false;
++		cScript_SetGlobalVarBool("BunkerVR_LadderCentre", false);
++		float fLeft = mfVRFacedLeft;
++		cLux_GetEffectHandler().FadeIn(gfVRLadderBlinkIn);
++		mbVRBlinkDark = false;
++
++		// (The game's own last steps of climbing on.)
++		Player_SetCrouching(false);
++		mvPreviousPos = pBody.GetLocalPosition();
++		mvPreviousForward = cMath_MatrixInverse(pBody.GetLocalMatrix()).GetForward();
++		mfPrevHeight = GetCurrentHeight(pCharBody.GetPosition());
++		mlState = 1;
++		mfVRSinceOn = 0.0f;
++		// The grip that climbed on holds on: at the rungs as the view clears,
++		// it takes hold at once (taken as fresh at the next update).
++		mvVRClimbSqueezed[0] = false;
++		mvVRClimbSqueezed[1] = false;
++		float fCamOff = cMath_Abs(cMath_ToDeg(cMath_GetAngleDistance(pCam.GetYaw(), vRot.y, cMath_PiMul2)));
++		VRClimbNote("on the ladder in a blink (" + int(mfVRBlinkFor * 1000.0f + 0.5f) + " ms dark; the body at height " + GetCurrentHeight(vPos) + "; " +
++					(fLeft < 0.0f ? "the head not followed: the camera faces the ladder" : "the real head faces the ladder within " + int(fLeft + 0.5f) + " degrees") +
++					", the camera within " + int(fCamOff + 0.5f) + (bCentred ? "" : "; the view NOT put over the body in time") + ")");
++	}
++
++	// BunkerVR: climbing off in VR: instead of the game's slide to where the
++	// player gets off (1.5 s at the top, rolling the view), which disorients
++	// in a headset, a blink as for climbing on (VRClimbOnByBlink). The game's
++	// state 3: mvFadePosEnd where the feet go, mfTimeCount 0 as it begins.
++	void VRClimbOffByBlink(float afTimeStep, const cMatrixf &in a_mtxAreaStartDiff)
++	{
++		cLux_GetPlayer().SetCameraRoll(ePlayerRoll_Climb, 0.0f);
++		if(mfTimeCount <= 0.0f && mbVRBlinkDark == false)
++		{
++			cLux_GetEffectHandler().FadeOut(gfVRLadderBlinkOut);
++			mbVRBlinkDark = true;
++		}
++		mfTimeCount += afTimeStep;
++		if(cLux_GetEffectHandler().GetFadeAlpha() < 0.99f && mfTimeCount < gfVRLadderBlinkOut + gfVRLadderBlinkWait) return;
++
++		// Dark: where the player gets off.
++		cVector3f vFeet = cMath_MatrixMul(a_mtxAreaStartDiff, mvFadePosEnd);
++		cLux_GetPlayer().GetCharacterBody().SetFeetPosition(vFeet, false);
++		if(mbExitCrouch && Player_GetCrouching() == false) Player_SetCrouching(true);
++		cLux_GetEffectHandler().FadeIn(gfVRLadderBlinkIn);
++		mbVRBlinkDark = false;
++		VRClimbNote("off the ladder in a blink (" + int(mfTimeCount * 1000.0f + 0.5f) + " ms dark; the feet at " + vFeet.x + " " + vFeet.y + " " + vFeet.z + ")");
++		cLux_GetPlayer().ChangeState(ePlayerState_Normal);
++	}
++
++	// BunkerVR: the game's camera, and the character with it, turned so that
++	// the real head faces afLadderYaw (the game's yaw for facing the ladder),
++	// as the player climbs on in a blink. (From the top the game turns the
++	// player half around, which can leave both hands taking hold behind the
++	// player, away from the ladder.) First the camera is turned to where the
++	// head faces with the view kept as it is (VRTurnKeepingView), then the
++	// view with it to the ladder, so the camera and the body drawn after it
++	// face the ladder too. Keeping the head's own turn instead would leave a
++	// player who grabbed while looking aside with the body turned off the
++	// ladder. A direction's yaw is worked out as the game does to face the
++	// ladder (GetRotation). Checked from the head as it then faces: if turned
++	// the wrong way around, it turns the other way. Returns how many degrees
++	// are left between the head's facing and the ladder, or -1 when the head
++	// isn't tracked (the camera then faces the ladder, as the game turns it).
++	float VRFaceLadder(cCamera@ apCam, iCharacterBody@ apCharBody, float afLadderYaw)
++	{
++		cMatrixf mtxHead;
++		cVector3f vHead = cVector3f(0.0f);
++		if(BunkerVR_ReadRealHead(apCam, mtxHead)) vHead = BunkerVR_HeadFacing(mtxHead);
++		if(vHead.Length() < 0.5f)
++		{
++			apCharBody.SetYaw(afLadderYaw);
++			apCam.SetYaw(afLadderYaw);
++			return -1.0f;
++		}
++		float fHeadYaw = cMath_GetAngleFromPoints3D(cVector3f(0.0f), vHead).y;
++		VRTurnKeepingView(apCam, apCharBody, cMath_GetAngleDistance(apCam.GetYaw(), fHeadYaw, cMath_PiMul2));
++		float fTurn = cMath_GetAngleDistance(fHeadYaw, afLadderYaw, cMath_PiMul2);
++		apCharBody.SetYaw(apCharBody.GetYaw() + fTurn);
++		apCam.SetYaw(apCam.GetYaw() + fTurn);
++		float fLeft = VRHeadOffLadder(apCam, afLadderYaw);
++		if(fLeft > 30.0f)
++		{
++			apCharBody.SetYaw(apCharBody.GetYaw() - 2.0f * fTurn);
++			apCam.SetYaw(apCam.GetYaw() - 2.0f * fTurn);
++			float fOther = VRHeadOffLadder(apCam, afLadderYaw);
++			VRClimbNote("facing the ladder: turned " + int(cMath_ToDeg(fTurn)) + " degrees, " + int(fLeft) + " off; the other way round, " + int(fOther) + " off");
++			if(fOther > fLeft)
++			{
++				apCharBody.SetYaw(apCharBody.GetYaw() + 2.0f * fTurn);
++				apCam.SetYaw(apCam.GetYaw() + 2.0f * fTurn);
++				return fLeft;
++			}
++			return fOther;
++		}
++		return fLeft;
++	}
++
++	// BunkerVR: the game's camera and the character turned by afTurn (the
++	// game's yaw, radians) with the view kept as it is: the mod is told each
++	// step first (special roll 7095, VrAbsorbTurn in vr.cpp), as the turn
++	// while walking does (PlayerBodyHandler.hps VRWalkTurnBy). The mod takes
++	// at most half a radian at a time (camera.cpp), so the turn is made in
++	// steps. Nothing that rebuilds the view may come between telling the mod
++	// a step and making it.
++	void VRTurnKeepingView(cCamera@ apCam, iCharacterBody@ apCharBody, float afTurn)
++	{
++		int lSteps = int(cMath_Abs(afTurn) / 0.45f) + 1;
++		float fStep = afTurn / float(lSteps);
++		for(int i = 0; i < lSteps; ++i)
++		{
++			apCharBody.SetYaw(apCharBody.GetYaw() + fStep);
++			float fRealRoll = apCam.GetRoll();
++			cVector3f vRealPos = apCam.GetPosition();
++			apCam.SetPosition(cVector3f(fStep, 0.0f, 0.0f));
++			apCam.SetRoll(7095.0f);
++			apCam.GetMatrix();
++			apCam.SetRoll(fRealRoll);
++			apCam.SetPosition(vRealPos);
++			apCam.SetYaw(apCam.GetYaw() + fStep);
++		}
++	}
++
++	// BunkerVR: degrees between the real head's facing now and afLadderYaw
++	// (180 when it can't be read).
++	float VRHeadOffLadder(cCamera@ apCam, float afLadderYaw)
++	{
++		cMatrixf mtxHead;
++		if(BunkerVR_ReadRealHead(apCam, mtxHead) == false) return 180.0f;
++		cVector3f vHead = BunkerVR_HeadFacing(mtxHead);
++		if(vHead.Length() < 0.5f) return 180.0f;
++		return cMath_Abs(cMath_ToDeg(cMath_GetAngleDistance(cMath_GetAngleFromPoints3D(cVector3f(0.0f), vHead).y, afLadderYaw, cMath_PiMul2)));
++	}
++
+=54
+-1
++
++			// BunkerVR: in VR the hands climb, not the stick; the stick only
++			// while the palms aren't tracked (the arms switched off).
++			if(mbVRPalmsFollowed) return false;
++
+=17
+-1
++
++			if(mbVRPalmsFollowed) return false; // (BunkerVR: as above)
++
+=316
+-1
++
++	// BunkerVR: the ladder climbed hand over hand (VRUpdateHandClimb).
++	[nosave] array<bool> mvVRClimbHeld = {false, false};		// each hand's hold on the rungs (0 left, 1 right)
++	[nosave] array<bool> mvVRClimbSqueezed = {true, true};	// each grip squeezed at the last update
++	[nosave] int mlVRClimbHand = -1;						// the hand that climbs (the last to take hold), -1 none...
++	[nosave] float mfVRClimbGrabRel = 0;					// ...its height over the game's camera as it took hold...
++	[nosave] float mfVRClimbGrabBodyY = 0;					// ...and the body's height then
++	[nosave] float mfVRClimbHoldStartY = 0;					// the body's height as this hold began (the exits, the hint)
++	[nosave] float mfVRClimbMovingFor = 0;					// seconds the climbing animation still plays
++	[nosave] float mfVRClimbDir = 0;						// which way the hands last moved the body: 1 up, -1 down
++	[nosave] float mfVRClimbBeyond = 0;						// how far the climbing hand asks the body past the top (+) or the foot (-)
++	[nosave] bool mbVRClimbByHand = false;					// the hands climbed last, not the stick (the game's rung sounds left out)
++	[nosave] int mlVRClimbNotes = 0;						// "BunkerVR ladder:" lines this time on the ladder (VRClimbNote)
++	[nosave] bool mbVRPalmsFollowed = false;				// are the palms tracked (VR: the stick then doesn't climb)?
++	[nosave] bool mbVRBlinkDark = false;					// has a blink (climbing on or off) the view dark? (VRClimbOnByBlink)
++	[nosave] float mfVRBlinkFor = 0;						// seconds since climbing on's blink began
++	[nosave] float mfVRSinceOn = 0;							// seconds on the ladder (mlState 1) since climbing on
++	[nosave] bool mbVRPlaced = false;						// climbing on's blink: the player placed on the ladder yet?...
++	[nosave] float mfVRCentringFor = 0;						// ...seconds since, the view being put over the body...
++	[nosave] float mfVRFacedLeft = 0;						// ...and how far the head faced from the ladder then (degrees; -1 not tracked)
++	[nosave] array<cVector3f> mvVRClimbGrip = {cVector3f(0.0f), cVector3f(0.0f)};	// where on its rung each hand holds, in the world (VRShowHandsOnRungs)
++	[nosave] array<bool> mvVRClimbOnKeep = {false, false};	// each hand that climbs on by its squeeze holds on once on (VRClimbOnHolds)
++	[nosave] bool mbVRHandsOnRungs = false;					// are hands being drawn on rungs (the door grip's values set)?
++
+end

@@ -1,0 +1,149 @@
+BunkerVR patch 1
+file config/lang_main/english.lang
+from 47ecb80fa1d8f70fa4db45ae789893456ef97ce907b4f2f56bf08ab1eb6f095a 94528
+to f8c8fa367f9b7f91a33f130ba86de7dae3d26638755a3930c102d7675b9de258 94029
+=13
+-29
++    <Entry Name="HintLookAround">Turn your head to look around, and use the right stick to turn.[br]Hold Y on the left controller (B on Valve Index) to re-center your view.</Entry>
++    <Entry Name="HintMoveAround">Use the left stick to move. Click it while moving to run.</Entry>
++    <Entry Name="HintDoors">To open doors and containers, grab the handle with the trigger or grip, then push or pull.</Entry>
++    <Entry Name="HintGrabRotate">Turn your wrist to rotate the object you are holding.</Entry>
++    <Entry Name="HintGrabMove">Move your hand to bring the object you are holding closer or further away.</Entry>
++    <Entry Name="HintGrabThrow">Swing your arm and let go to throw the object you are holding.</Entry>
++    <Entry Name="HintGrabHowTo">Reach out and squeeze the trigger or grip to grab an object.</Entry>
++    <Entry Name="HintGrabHowTo_Toggle">Reach out and squeeze the trigger or grip to grab an object. Let go to drop it.</Entry>
++    <Entry Name="HintWheel">Grab the wheel and turn it with your hand.</Entry>
++    <Entry Name="HintSlider">Grab it, then push or pull with your hand.</Entry>
++    <Entry Name="HintInteract">Reach out and squeeze the trigger or grip to interact with objects.</Entry>
++    <Entry Name="HintPickUpItem">Reach out and squeeze the trigger or grip to pick up items.</Entry>
++    <Entry Name="HintRun">Click the left stick while moving to run.</Entry>
++    <Entry Name="HintRunAlt">Click the left stick while moving to run.</Entry>
++    <Entry Name="HintRunAlt_Toggle">Click the left stick while moving to run. Click it again, or stop moving, to walk.</Entry>
++    <Entry Name="HintJump">Push the right stick up to jump.</Entry>
++    <Entry Name="HintInventory">Press B to open your inventory.</Entry>
++    <Entry Name="HintCrouch">Pull the right stick down, or duck, to crouch.</Entry>
++    <Entry Name="HintSneak">Moving while crouched makes less noise and reduces the chance of being noticed.</Entry>
++    <Entry Name="HintFlashlight">Reach to the left side of your chest with your left hand and squeeze to take out or put away the flashlight. Clicking the right stick also works.</Entry>
++    <Entry Name="HintLean">Lean your body to peek around corners.</Entry>
++    <Entry Name="HintLean_Toggle">Lean your body to peek around corners.</Entry>
++    <Entry Name="InteractiveAnimation">Push the left stick forward to continue.</Entry>
++    <Entry Name="HintNotes">Notes you pick up are kept in the Notes tab of your inventory.[br]Press B while the icon is flashing to go straight to the new note.</Entry>
++    <Entry Name="HintCloseSketchbook">Press B or the menu button to close the inventory.</Entry>
++    <Entry Name="HintDynamoLantern">Pull the flashlight's cord with your right hand to charge it, but be careful not to make too much noise!</Entry>
++    <Entry Name="HintDynamoLantern_Toggle">Pull the flashlight's cord with your right hand to charge it, but be careful not to make too much noise!</Entry>
++    <Entry Name="HintPocketWatch">Raise the pocket watch to read it. When it stops, pinch its crown with your left hand and twist to wind it, then press the crown to start it.</Entry>
++    <Entry Name="HintPocketWatch_Toggle">Raise the pocket watch to read it. When it stops, pinch its crown with your left hand and twist to wind it, then press the crown to start it.</Entry>
+=6
+-5
++    <Entry Name="HintEquipGun">Tap A to draw or put away the gun.[br]If you use the holster, squeeze the grip at your right hip instead.</Entry>
++    <Entry Name="HintAimGun">Point the gun and pull the trigger to fire.</Entry>
++    <Entry Name="HintAimGun_Toggle">Point the gun and pull the trigger to fire.</Entry>
++    <Entry Name="HintCheckAmmo">Hold A and flick the revolver sideways to swing the cylinder open and check your bullets. Flick it back to close it.</Entry>
++    <Entry Name="HintCheckAmmo_Toggle">Hold A and flick the revolver sideways to swing the cylinder open and check your bullets. Flick it back to close it.</Entry>
+=3
+-2
++    <Entry Name="HintUseItem">Squeeze the trigger to use the item in your hand. To use it on something, hold it against that thing first.[br]For a bandage or medkit, grab it with your left hand, pull it open, then wrap it around your left forearm.</Entry>
++    <Entry Name="HintUseItem_Toggle">Squeeze the trigger to use the item in your hand. To use it on something, hold it against that thing first.[br]For a bandage or medkit, grab it with your left hand, pull it open, then wrap it around your left forearm.</Entry>
+=2
+-2
++    <Entry Name="HintLoadBullets">With the cylinder open, take a bullet from the pouch on your left hip and push it into an empty chamber.[br]Tip the gun upward to drop out spent shells.</Entry>
++    <Entry Name="HintLoadBullets_Toggle">With the cylinder open, take a bullet from the pouch on your left hip and push it into an empty chamber.[br]Tip the gun upward to drop out spent shells.</Entry>
+=1
+-3
++    <Entry Name="HintPickedUpCraftable">You picked up an item that can be used for crafting.[br]Find the other piece of cloth, then press B to open your inventory.[br]Point at one piece, hold Grip and drag it onto the other to make a bandage.</Entry>
++    <Entry Name="HintPickedUpCraftableAlt">You picked up an item that can be used for crafting.[br]Press B to open your inventory.</Entry>
++    <Entry Name="HintCheckHealth">The blood on your hands shows how badly you are hurt. You can also hold B to check your injuries.</Entry>
+=3
+-4
++    <Entry Name="HintInjured">You've been injured! Check your hands to see how badly.</Entry>
++    <Entry Name="HintInjured_Toggle">You're injured! Check your hands to see how badly.</Entry>
++    <Entry Name="HintInjuredAlt">You're injured and bleeding![br]Your health will continue to deteriorate until you've patched yourself up.[br]Check your hands to see how bad it is.</Entry>
++    <Entry Name="HintInjuredAlt_Toggle">You're injured and bleeding![br]Your health will continue to deteriorate until you've patched yourself up.[br]Check your hands to see how bad it is.</Entry>
+=6
+-1
++    <Entry Name="HintGasMask">Open your inventory with B to put on the gas mask.</Entry>
+=6
++    <Entry Name="HintVRFuelLid">Open it first: grab the can's lid or the bottle's cork with your left hand.</Entry>
++    <Entry Name="HintVRHeightChanged">Your height appears to have changed. To recalibrate, choose Recalibrate when the game next starts.</Entry>
+=2
+-9
++    <Entry Name="HintLookAround">Turn your head to look around, and use the right stick to turn.[br]Hold Y on the left controller (B on Valve Index) to re-center your view.</Entry>
++    <Entry Name="HintMoveAround">Use the left stick to move. Click it while moving to run.</Entry>
++    <Entry Name="HintDoors">To open doors and containers, grab the handle with the trigger or grip, then push or pull.</Entry>
++    <Entry Name="HintGrabRotate">Turn your wrist to rotate the object you are holding.</Entry>
++    <Entry Name="HintWheel">Grab the wheel and turn it with your hand.</Entry>
++    <Entry Name="HintSlider">Grab it, then push or pull with your hand.</Entry>
++    <Entry Name="HintLean">Lean your body to peek around corners.</Entry>
++    <Entry Name="HintLean_Toggle">Lean your body to peek around corners.</Entry>
++    <Entry Name="InteractiveAnimation">Push the left stick forward to continue.</Entry>
+=2
+-7
++    <Entry Name="PromptToggleText"></Entry>
++    <Entry Name="PromptZoomIn">Trigger - Zoom In</Entry>
++    <Entry Name="PromptZoomOut">Trigger - Zoom Out</Entry>
++    <Entry Name="PromptToggleTextSketchbook"></Entry>
++    <Entry Name="PromptNextPage">Trigger - Next page</Entry>
++    <Entry Name="PromptExit">Open your hand - Put down</Entry>
++    <Entry Name="PromptRotate">Turn your wrist - Rotate</Entry>
+=2
+-1
++    <Entry Name="PromptRotate">Turn your wrist - Rotate</Entry>
+=2
+-7
++    <Entry Name="FireWeapon">Trigger - Fire</Entry>
++    <Entry Name="ReloadGun">Left hip pouch - Load bullet</Entry>
++    <Entry Name="ReloadShotgun">Trigger - Load shell</Entry>
++    <Entry Name="ThrowItem">Swing and let go - Throw</Entry>
++    <Entry Name="UseItem">Trigger - Use</Entry>
++    <Entry Name="PourFuel">Tip it - Pour, swing it - Throw</Entry>
++    <Entry Name="WaveTorch">Trigger - Wave</Entry>
+=123
+-1
++    <Entry Name="Skip">Hold the trigger to skip</Entry>
+=2
+-1
++    <Entry Name="Skip">Hold the trigger to skip</Entry>
+=93
+-31
++    <Entry Name="HintInventoryUse">Take Out: Trigger</Entry>
++    <Entry Name="HintInventoryWorldUse">When equipped, squeeze the trigger to use it.</Entry>
++    <Entry Name="HintInventoryWorldUse_Toggle">When equipped, squeeze the trigger to use it.</Entry>
++    <Entry Name="HintInventoryWorldUse_Gun">When equipped, point it and pull the trigger to shoot. Hold A and flick it sideways to check your bullets.</Entry>
++    <Entry Name="HintInventoryWorldUse_Gun_Toggle_1">When equipped, point it and pull the trigger to shoot. Hold A and flick it sideways to check your bullets.</Entry>
++    <Entry Name="HintInventoryWorldUse_Gun_Toggle_2">When equipped, point it and pull the trigger to shoot. Hold A and flick it sideways to check your bullets.</Entry>
++    <Entry Name="HintInventoryWorldUse_Gun_Toggle_3">When equipped, point it and pull the trigger to shoot. Hold A and flick it sideways to check your bullets.</Entry>
++    <Entry Name="HintInventoryWorldUse_Lantern">When equipped, pull its cord with your right hand to charge it.</Entry>
++    <Entry Name="HintInventoryWorldUse_Lantern_Toggle">When equipped, pull its cord with your right hand to charge it.</Entry>
++    <Entry Name="HintInventoryWorldUse_PocketWatch">When equipped, raise it to read it. When it stops, wind its crown with your left hand.</Entry>
++    <Entry Name="HintInventoryWorldUse_PocketWatch_Toggle">When equipped, raise it to read it. When it stops, wind its crown with your left hand.</Entry>
++    <Entry Name="HintInventoryUseOnSelf">Use: Trigger</Entry>
++    <Entry Name="HintInventoryUseGasMask">Equip: Trigger</Entry>
++    <Entry Name="HintInventoryStoreInAuxBox">Drop in the storage box: Trigger</Entry>
++    <Entry Name="HintInventoryTakeToInventory">Take with you: Trigger</Entry>
++    <Entry Name="HintInventoryPutAway">Put Away: Trigger</Entry>
++    <Entry Name="HintInventoryPutAwayGasMask">Unequip: Trigger</Entry>
++    <Entry Name="HintInventoryStartCombine">Combine: A</Entry>
++    <Entry Name="HintInventoryEndCombine">Confirm: Trigger</Entry>
++    <Entry Name="HintInventoryCancelCombine">Cancel: Menu button</Entry>
++    <Entry Name="HintInventoryDrop">Drop: X</Entry>
++    <Entry Name="HintInventoryAssignHotkey"></Entry>
++    <Entry Name="HintInventoryAssignHotkeyGamePad"></Entry>
++    <Entry Name="HintInventoryAssignHotkeyGamePad_PS4"></Entry>
++    <Entry Name="HintInventoryAssignHotkeyGamePad_XBO"></Entry>
++    <Entry Name="HintInventorySketchbookGamepad"></Entry>
++    <Entry Name="HintInventorySketchbookKeyboard"></Entry>
++    <Entry Name="Hotkey1"></Entry>
++    <Entry Name="Hotkey2"></Entry>
++    <Entry Name="Hotkey3"></Entry>
++    <Entry Name="Hotkey4"></Entry>
+=3
+-2
++    <Entry Name="HintNextTab"></Entry>
++    <Entry Name="HintPrevTab"></Entry>
+=75
+-1
++    <Entry Name="Ammunition_Desc">8 mm cartridges for use in revolvers. To load one, hold A and flick the revolver open, then take a bullet from your left hip and push it into the cylinder.</Entry>
+=1
+-1
++    <Entry Name="ShotgunAmmunition_Desc">12 gauge buckshot shotgun shells. To load one, open the shotgun and push a shell in with your left hand.</Entry>
+end

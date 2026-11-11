@@ -1,0 +1,9 @@
+BunkerVR patch 1
+file script/effects/Effect_ChromaticAberration.hps
+from c69fd7a53ac7e42263dba798246d7c22c04f1712a80a9da5fa0276f410634f05 11209
+to 40d688256ddc2f23a87a4dc1f2aadf10b432f60a23c2264c1ae15b0b76f1967e 11459
+=399
++		// BunkerVR: off while each eye gets its own picture: the color fringes are set from the game picture's
++		// center, which falls in a different place in each eye. Kept for a flat picture (the cutscene screen).
++		if(cVR_Active()) fAmount = 0.0f;
+end

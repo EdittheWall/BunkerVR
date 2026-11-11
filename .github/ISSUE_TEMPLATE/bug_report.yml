@@ -1,0 +1,90 @@
+name: Bug report
+description: Something in BunkerVR doesn't work, looks wrong or feels wrong in the headset.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. The logs zip is what makes a bug fixable, so please attach it.
+
+        **Getting the logs zip:** close the game, then double-click **BunkerVR Logs** on your desktop. A file called `BunkerVR logs <date> <time>.zip` appears on your desktop. It holds the mod's and the game's logs, your marks, your BunkerVR settings and a description of your PC's VR setup. No personal files.
+
+        **Marking the moment:** when something goes wrong, hold the left thumbstick in and click the right thumbstick. The mod notes the exact time and saves what both eyes saw, so the problem can be found in the logs.
+  - type: input
+    id: version
+    attributes:
+      label: BunkerVR version
+      description: Shown in Windows' Installed apps, and at the top of system.txt in the logs zip.
+      placeholder: "2.08"
+    validations:
+      required: true
+  - type: dropdown
+    id: headset
+    attributes:
+      label: Headset
+      options:
+        - Oculus Rift / Rift S
+        - Meta Quest (2, 3, 3S or Pro) through Link or Air Link
+        - Meta Quest (2, 3, 3S or Pro) through Steam Link
+        - Meta Quest (2, 3, 3S or Pro) through Virtual Desktop
+        - Valve Index
+        - PlayStation VR2
+        - HTC Vive / Vive Pro
+        - Pico 4
+        - Pimax
+        - Other (say which below)
+    validations:
+      required: true
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: OpenXR runtime
+      description: Which program runs your headset for PC games. If you're not sure, the logs zip says.
+      options:
+        - Meta (Oculus)
+        - SteamVR
+        - Virtual Desktop (VDXR)
+        - Other or not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      description: A screenshot or a short video helps a lot with anything visual.
+    validations:
+      required: true
+  - type: textarea
+    id: where
+    attributes:
+      label: Where and how
+      description: The level or area, what you were doing, and whether it happens every time or only once.
+    validations:
+      required: true
+  - type: dropdown
+    id: marked
+    attributes:
+      label: Did you mark the moment?
+      options:
+        - "Yes"
+        - "No"
+        - It isn't tied to one moment
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs zip
+      description: Drag the zip from your desktop into this box.
+      placeholder: Drop BunkerVR logs <date> <time>.zip here
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before sending
+      options:
+        - label: I'm on the latest BunkerVR release, and the game is up to date on Steam.
+          required: true
+        - label: I ran BunkerVR Setup again after the game's last update or file verification.
+          required: false

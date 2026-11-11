@@ -1,0 +1,251 @@
+BunkerVR patch 1
+file script/custom/player/Player_Custom.hps
+from d5ceb3772faaf5e29d774ec94917e6b45dd4c031277a52aef60fa05364dc9509 163903
+to a5baf96d5a0f5006d78ee193c1665e399c22e18bff5ec9474a4e1746ec642eb4 174555
+=287
+-1
++
++		////////////////////////////////////
++		// BunkerVR: walk by the thumbstick's exact push.
++		// The VR mod presses the walking keys, which only gives eight directions
++		// at full speed. While a walking key is down, the mod is asked how the
++		// stick is really pushed (special roll value 7018; it answers through
++		// the camera's matrix with 12345, sideways, forwards) and that is walked
++		// by instead: any direction, slower for a small push. Without the mod,
++		// or with the setting off, the answer does not match and the keys count.
++		if(alAnalogId == eAnalogType_Move)
++		{
++			cCamera@ pVRMoveCam = mBaseObj.GetCamera();
++			if(pVRMoveCam !is null)
++			{
++				float fVRMoveRoll = pVRMoveCam.GetRoll();
++				pVRMoveCam.SetRoll(7018.0f);
++				cVector3f vVRMove = pVRMoveCam.GetMatrix().GetTranslation();
++				pVRMoveCam.SetRoll(fVRMoveRoll);
++				if(vVRMove.x > 12344.0f && vVRMove.x < 12346.0f &&
++					cMath_Abs(vVRMove.y) <= 1.01f && cMath_Abs(vVRMove.z) <= 1.01f &&
++					(cMath_Abs(vVRMove.y) > 0.001f || cMath_Abs(vVRMove.z) > 0.001f))
++				{
++					cScrPlayer::OnAnalogInput(alAnalogId, cVector3f(vVRMove.y, vVRMove.z, 0.0f));
++					return;
++				}
++			}
++		}
++
+=82
++		VRTimeMark(7078); // BunkerVR: timing (to the end of Update)
+=2
++
++		////////////////////////////////////
++		// BunkerVR: no force field around the feet.
++		// While the player walks, the game pushes loose objects within about a
++		// meter of the feet aside (the "foot force field"). In VR objects are
++		// picked up from the floor by hand, and a can that rolls away at every
++		// step toward it can't be. With the VR mod running (known once it has
++		// answered, see mbVRFaceGlow) the field is off.
++		if(mbVRFaceGlow)
++		{
++			cForceField@ pVRFootField = cLux_ID_ForceField(mFootForceField);
++			if(pVRFootField !is null && pVRFootField.IsActive()) pVRFootField.SetActive(false);
++
++			// And the body walks into light objects much more gently. The game
++			// kicks anything up to 10 kg out of the way with a sharp shove
++			// (push impulse 100, force up to 300), and small objects then roll
++			// off before a hand can reach them. Even a tenth of that kicks away
++			// what a crouching player reaches for, since the body is right on
++			// top of it. So there is no shove at all and only a slight push:
++			// loose objects are nudged slowly, or get in the way, but are not
++			// sent off. The field's own force is zeroed too, as the game fades
++			// it back in when the player starts walking.
++			if(pVRFootField !is null) pVRFootField.SetForce(0.0f);
++			iCharacterBody@ pVRCharBody = mBaseObj.GetCharacterBody();
++			// (And only objects under 1 kg count as pushed at all. The game
++			// pushes anything up to 10 kg, and a pushed object does not stop
++			// the body; pushed this gently, a door (2 kg the metal one, 5 the
++			// wooden one) or a crate would hardly move and the body would walk
++			// right into it. This way they stop the body as walls do.)
++			if(pVRCharBody !is null && (pVRCharBody.GetPushImpulse() > 0.5f || pVRCharBody.GetMaxPushForce() > 4.0f || pVRCharBody.GetMaxPushMass() > 1.01f))
++			{
++				pVRCharBody.SetPushImpulse(0.0f);
++				pVRCharBody.SetMaxPushForce(3.0f);
++				pVRCharBody.SetMaxPushMass(1.0f);
++			}
++		}
+=2
++		VRTimeMark(7079); // BunkerVR: timing
+=1019
++		if (mbVRFaceGlow) return; // BunkerVR: the VR mod draws this glow across the eyes (see DoDamageVignette)
+=101
++	[nosave] bool mbVRFaceGlow = false; // BunkerVR: the VR mod is drawing the hurt and heal glows
+=39
++		// BunkerVR: the hit is passed to the VR mod for its hit indicator (vr.cpp VrHurt): the view's edge reddened on
++		// the side it came from, an impact in the hands.
++		if (cVR_Active() && aType != eDamageType_Silent) VRTellHurt(afAmount, aType, a_idSource);
++		
+=205
++	// BunkerVR: how hard the hit was and where it came from, for the VR mod's hit indicator: a fall from below; a hit
++	// with a source (the shotgunner, a trench German's shot, a rat) as a direction from the camera at this moment (x right,
++	// y up, z ahead), an agent's from its chest rather than its feet; anything else from all around.
++	void VRTellHurt(float afAmount, int aType, tID a_idSource)
++	{
++		if (aType == eDamageType_Fall || aType == eDamageType_FallBig)
++		{
++			cVR_Hurt(afAmount, 2, 0.0f, 0.0f, 0.0f);
++			return;
++		}
++		iLuxEntity@ pSource = cLux_ID_Entity(a_idSource);
++		cCamera@ pCam = mBaseObj.GetCamera();
++		if (pSource is null || pCam is null)
++		{
++			cVR_Hurt(afAmount, 0, 0.0f, 0.0f, 0.0f);
++			return;
++		}
++		cVector3f vFrom = pSource.GetPosition() + cVector3f(0.0f, cLux_ID_Agent(a_idSource) !is null ? 0.9f : 0.0f, 0.0f) - pCam.GetPosition();
++		cVR_Hurt(afAmount, 1, cMath_Vector3Dot(vFrom, pCam.GetRight()), cMath_Vector3Dot(vFrom, pCam.GetUp()), cMath_Vector3Dot(vFrom, pCam.GetForward()));
++	}
++	
+=18
+-1
++		// BunkerVR: not in the headset. There the shake is kept out of the view and felt only as an even buzz in both
++		// hands (VRShakeAsBuzz), which a frame later would override the hit's own impact, sent just before by
++		// OnDamageTaken (cVR_Hurt: harder in the hand on the hit's side, then a heartbeat after a hard one).
++		if (!cVR_Active()) Effect_Shake_Start(afShake, 0.25, 0.05, 0.1f);
+=65
++		/////////////////
++		// BunkerVR: the red edges when hurt and the pale glow when healed are
++		// drawn here as part of the game's flat interface, so in the headset
++		// they would show on the panel floating in front of the player. With the VR mod
++		// running they are not drawn here: the mod is told how strong each is
++		// and draws them across both eyes. It answers through the camera:
++		// after setting a special roll value, reading the camera's matrix
++		// returns its data (12345 as its first number). The strengths travel
++		// in the camera's position, which is put straight back.
++		mbVRFaceGlow = false;
++		cCamera@ pVRGlowCam = mBaseObj.GetCamera();
++		if (pVRGlowCam !is null)
++		{
++			float fVRGlowRoll = pVRGlowCam.GetRoll();
++			pVRGlowCam.SetRoll(7006.0f);
++			cVector3f vVRGlowStatus = pVRGlowCam.GetMatrix().GetTranslation();
++			if (vVRGlowStatus.x > 12344.0f && vVRGlowStatus.x < 12346.0f && vVRGlowStatus.y > 0.5f)
++			{
++				mbVRFaceGlow = true;
++				float fVRHurt = fAlpha > 0.f ? gfxBrightVignette.mColor.a : 0.f;
++				float fVRHeal = mbHealingFxActive ? ImGui_GetStateFloat("HealingFxAlpha", 0.f) : 0.f;
++				cVector3f vVRGlowPos = pVRGlowCam.GetPosition();
++				pVRGlowCam.SetPosition(cVector3f(fVRHurt, fVRHeal, 0.f));
++				pVRGlowCam.SetRoll(7025.0f);
++				pVRGlowCam.GetMatrix();
++				pVRGlowCam.SetPosition(vVRGlowPos);
++			}
++			pVRGlowCam.SetRoll(fVRGlowRoll);
++		}
++		if (mbVRFaceGlow) return;
++		
+=544
++		//////////////////////////////////////////
++		// BunkerVR: no crosshair while a hand does the pointing.
++		// The crosshair marks the middle of the view, but with the VR mod things
++		// are picked by pointing a hand, so it would only mislead. The VR mod
++		// answers through the camera: after setting a special roll value, reading
++		// the camera's matrix returns its answer instead. Without the mod (or with
++		// no hand tracked) the answer does not match and the crosshair is drawn.
++		cCamera@ pVRCam = mBaseObj.GetCamera();
++		if(pVRCam !is null)
++		{
++			float fVRRealRoll = pVRCam.GetRoll();
++			pVRCam.SetRoll(7004.0f);
++			cVector3f vVRStatus = pVRCam.GetMatrix().GetTranslation();
++			pVRCam.SetRoll(fVRRealRoll);
++			if(vVRStatus.x > 12344.0f && vVRStatus.x < 12346.0f && vVRStatus.y > 0.5f) return;
++		}
++		
+=37
++		// BunkerVR: none of the item prompts in the headset (fire, load, throw,
++		// use, pour, wave), so only the hints show on screen: the labels at the
++		// hands say how to use each item.
++		if (cVR_Active()) return;
+=101
+-1
++		float fAlphaGoal = mBaseObj.GetCurrentStateId() == ePlayerState_Custom_CombinationLock ? 1.f : 0.f;
++		// BunkerVR: none of the number lock's prompts in the headset, where it
++		// is left by walking away and worked by the fingertip and trigger.
++		if (cVR_Active()) fAlphaGoal = 0.f;
+=1658
++	
++	// BunkerVR: a timing mark for the VR mod's log (7070 + 2 x the piece of
++	// work's number at its start, 7071 + 2 x it at its end; the mod times the
++	// gap, see CameraLogScriptTimings). Does nothing without the mod. Sent
++	// over the direct line (cVR_TimeMark).
++	void VRTimeMark(int alCode)
++	{
++		cVR_TimeMark(alCode);
++	}
++
++	// BunkerVR: the flashlight has been wound by its cord (the VR mod's way).
++	// The hint about winding it is done with, as when the game's own way is
++	// used (PlayerState_UsingLantern adds it as given). Otherwise it is
++	// shown each time the lamp is taken out (ItemCallbacks.OnHeld) and
++	// never goes away.
++	void _Global_VRLanternWound()
++	{
++		tString sHint = Hint_GetCurrentEntry();
++		if (sHint == "HintDynamoLantern" || sHint == "HintDynamoLantern_Toggle")
++			Hint_StopHint();
++		Hint_AddAsGiven("Hints", "HintDynamoLantern");
++		Hint_AddAsGiven("Hints", "HintDynamoLantern_Toggle");
++	}
+=196
++	// BunkerVR: the gas mask put on by hand in the headset (VRUpdateMask in
++	// PlayerBodyHandler.hps: the hand brought it to the face):
++	// on at once, as the game's own putting on ends (the level's callbacks,
++	// the mask's look and breathing, the muffled hearing), without its
++	// animation or its fades.
++	void _Global_VRPutOnGasMask()
++	{
++		if (mbGasMask_Equipped || mbGasMask_Equipping) return;
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		if (pMap is null) return;
++		
++		tString sCallback = "void OnGasMaskStartEquip()";
++		if (pMap.ScriptMethodExists(sCallback) && pMap.ScriptPrepare(sCallback))
++			pMap.ScriptExecute();
++		
++		cLux_IncHideModeEffectUserCount();
++		cLux_SetHideModeEffectsActive(true);
++		mbGasMask_Equipped = true;
++		SetGasmaskEffectActive(true);
++		
++		sCallback = "void OnGasMaskEquip()";
++		if (pMap.ScriptMethodExists(sCallback) && pMap.ScriptPrepare(sCallback))
++			pMap.ScriptExecute();
++	}
++	
++	//------------------------------------------------------------
++	
++	// BunkerVR: ...and taken off by hand (pulled off the face): off at once,
++	// as the game's own taking off ends.
++	void _Global_VRTakeOffGasMask()
++	{
++		if (mbGasMask_Equipped == false || mbGasMask_Equipping) return;
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		tString sCallback = "void OnGasMaskStartUnequip()";
++		if (pMap !is null && pMap.ScriptMethodExists(sCallback) && pMap.ScriptPrepare(sCallback))
++			pMap.ScriptExecute();
++		
++		mbGasMask_Equipped = false;
++		UnequipGasMask(false);
++	}
++	
++	//------------------------------------------------------------
++	
++	// BunkerVR: is the game's own putting on or taking off of the mask under
++	// way (its animation)?
++	void _Global_VRGasMaskEquipping()
++	{
++		cScript_SetGlobalReturnBool(mbGasMask_Equipping || mfGasMaskEquipStartDelay > 0.f || mfGasMaskUnequipStartDelay > 0.f);
++	}
++	
++	//------------------------------------------------------------
++	
+end

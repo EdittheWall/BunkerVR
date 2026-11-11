@@ -1,0 +1,94 @@
+BunkerVR patch 1
+file script/player/MoveState_Normal.hps
+from e7a8e39f034e0aa9a94bc0d8cd17382ba22ff46c89a6d195eaabb28ce8db7216 55277
+to 82b9422e278c9b006233cbb55a353844e757aa17b3cea1b2afdfe3134966c749 58914
+=46
++// BunkerVR: how loud a quieter step is (see _Global_VRQuietFootSound): a share
++// of the volume, on top of the soft "sneak" sound it uses. Low enough that the
++// steps for turning on the spot don't sound as loud as walking.
++const float gfVRQuietStepVolume = 0.45f;
+=1542
++
++	// BunkerVR: a quieter footstep, for a step the drawn feet take because the
++	// player turned on the spot in the room (see VRFootstepSound in
++	// Prop_PlayerBody.hps). It is the step the game makes while sneaking
++	// (crouched): the floor's soft sound, at gfVRQuietStepVolume of the
++	// volume, and the creatures hear it as sneaking. FootSound reads the flag
++	// and clears it before anything else, so it only applies to this one step.
++	void _Global_VRQuietFootSound()
++	{
++		mbVRQuietStep = true;
++		FootSound(eFootSound_Step, 0.0f);
++	}
++
++	// BunkerVR: a real step taken at a pace (real-body stealth; see VRFootstepSound and gfVRStepPaceCareful in
++	// Prop_PlayerBody.hps). Argument 0: 1 is a careful step, made as the game's sneaking step (its soft sound, heard
++	// within gfSneakAIRadius); 2 is a hurried one, made as the game's running step (heard within gfRunAIRadius), or
++	// as its walking step when crouched. FootSound reads it and clears it, like mbVRQuietStep.
++	void _Global_VRPacedFootSound()
++	{
++		mlVRStepPace = cScript_GetGlobalArgInt(0);
++		FootSound(eFootSound_Step, 0.0f);
++	}
+=5
++		bool bVRQuiet = mbVRQuietStep; // BunkerVR: a quieter step? (see _Global_VRQuietFootSound)
++		mbVRQuietStep = false;
++		int lVRPace = mlVRStepPace; // BunkerVR: a real step's pace? (see _Global_VRPacedFootSound)
++		mlVRStepPace = 0;
+=109
+-1
++
++		// BunkerVR: a quieter step (see _Global_VRQuietFootSound): the soft one,
++		// and not as loud. Crawling keeps its own sound, only quieter.
++		float fVRVolume = 1.0f;
++		if(bVRQuiet && aType == eFootSound_Step)
++		{
++			if(moveType == eFootMoveType_Walk || moveType == eFootMoveType_Run)
++			{
++				moveType = eFootMoveType_Sneak;
++				fMaxDist = gfMaxSoundRangeSneak;
++			}
++			fVRVolume = gfVRQuietStepVolume;
++		}
++		// BunkerVR: a real step's pace (see _Global_VRPacedFootSound): careful gives the sneaking step; hurried gives
++		// the running step (the walking one when crouched). Crawling keeps its own.
++		else if(lVRPace != 0 && aType == eFootSound_Step && mbCrawling == false)
++		{
++			if(lVRPace == 1 && moveType == eFootMoveType_Walk)
++			{
++				moveType = eFootMoveType_Sneak;
++				fMaxDist = gfMaxSoundRangeSneak;
++			}
++			else if(lVRPace == 2 && moveType == eFootMoveType_Walk)
++			{
++				moveType = eFootMoveType_Run;
++				fMaxDist = gfMaxSoundRangeRun;
++			}
++			else if(lVRPace == 2 && moveType == eFootMoveType_Sneak)
++			{
++				moveType = eFootMoveType_Walk;
++				fMaxDist = gfMaxSoundRangeWalk;
++			}
++		}
++
+=10
+-1
++
++		// BunkerVR: every footstep sound is filed under the size of the room
++		// (player/footsteps/default/<small_room, medium_room, large_room or
++		// exterior>/<step type>), which the level's soundscape areas give.
++		// The BunkerVR grab test map has none, and without one its steps are
++		// silent (hpl.log: "Could not find sound event data
++		// player/footsteps/default/default"). That map names a room size
++		// here ("BunkerVR_FootstepRoom"); the game's own levels never do.
++		if(mbCrawling==false && sPrefix=="")
++			sPrefix = cScript_GetGlobalVarString("BunkerVR_FootstepRoom");
++
+=28
+-1
++		if(cLux_PlayGuiSoundDataEx(sSoundDataName, eSoundEntryType_World, fVRVolume, true, extraData)) // (BunkerVR: the game passes 1.0f)
+=253
++
++	[nosave] bool mbVRQuietStep = false;	// BunkerVR: is the footstep being made a quieter one (_Global_VRQuietFootSound)?
++	[nosave] int mlVRStepPace = 0;		// BunkerVR: the pace of the real step being made, 1 careful, 2 hurried (_Global_VRPacedFootSound)
+end

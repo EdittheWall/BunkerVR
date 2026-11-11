@@ -1,0 +1,17 @@
+BunkerVR patch 1
+file script/player/Player.hps
+from add166b8b97d6349dbb17bd551a114adfdc92df1a28da80c3230a34abc8c78fe 71399
+to 37895545780271d093979c5c935cb2cef76e7b1bb6f8f0837a85a1ee3eceaae8 72172
+=2062
+-1
++			// BunkerVR: real-body stealth. In VR how low the player's real head is counts, not only whether the game
++			// has them crouched: "BunkerVR_StealthLow" (PlayerBodyHandler.hps VRUpdateStealthLow) is 0 standing up,
++			// 1 at the game's crouch and up to 1.5 lower still; a game crouch counts as at least 1. The base runs from
++			// the game's 0.8 standing to its 0.6 crouched, and on down to 0.5 at the lowest, less the game's own
++			// 0.3 * fT for darkness. Outside the headset the value is never set (0), which gives the game's own
++			// result.
++			float fVRLow = cMath_Clamp(cScript_GetGlobalVarFloat("BunkerVR_StealthLow"), 0.0f, 1.5f);
++			if (Player_GetCrouching()) fVRLow = cMath_Max(fVRLow, 1.0f);
++			float fVRBase = 0.8f - 0.2f * cMath_Min(fVRLow, 1.0f) - 0.2f * cMath_Max(fVRLow - 1.0f, 0.0f);
++			mfPlayerVisibilityMul = fVRBase - (0.3f * fT);
+end
