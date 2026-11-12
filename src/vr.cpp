@@ -70,6 +70,7 @@ static void TakeGlErrorsBefore(const char* what)
 // SteamVR only the eye layers (see PanelsIntoEyes). Set when connecting to the
 // headset software, before any set of pictures is made.
 static bool g_panelsInEyes = false;
+static bool g_runtimeSteamVr = false; // the headset software is SteamVR (its play area is always set from its room setup)
 
 // Every swapchain created, its images, and which image was released last. On
 // SteamVR the mod draws the panels into the eye images itself (PanelsIntoEyes),
@@ -355,6 +356,7 @@ static volatile unsigned long long g_lastPcInputMs = 0;
 // back to the flat screen: the head and hands are held where they last were,
 // and the view keeps its VR shape, until the headset is put back on.
 static bool g_headsetOff = false;
+static bool g_quitAsked = false; // the headset software said EXITING: the game is to close (VrQuitAsked)
 // "Freeze my hands" (the hand poses tool): the hands' poses are
 // not updated from the controllers, and are held as while the headset is off.
 static volatile bool g_handsFrozen = false;
@@ -471,7 +473,7 @@ static XrAction g_sprintAction = XR_NULL_HANDLE;
 static XrAction g_menuAction = XR_NULL_HANDLE;
 static double g_gameMenuEscapeFromMs = -1000000.0; // the game's Escape is held for 80 ms from then ("Open Game Menu" on the Player page)
 static double g_menuKeySentMs = -1000000.0; // when the mod last sent the game's menu key while not paused (see GamePausedOrAsked)
-static XrAction g_gunAction = XR_NULL_HANDLE;    // A on the right controller: draw or holster
+static XrAction g_gunAction = XR_NULL_HANDLE;    // A on the right controller: open the revolver, check the shotgun's shells
 static XrAction g_aimAction2 = XR_NULL_HANDLE;   // X on the left controller: puts away what is held
 static XrAction g_vrMenuAction = XR_NULL_HANDLE; // Y on the left controller: the mod's own menu
 static bool g_vrMenuReady = false;
@@ -865,7 +867,7 @@ static XrVector3f NeckPoint(const XrPosef& head)
 
 // The floor (see "Measure my size"): how high it is in the room's
 // measure (g_floorSpace, whose zero height is the head's when the headset's
-// software last set the room). From the play area, whose origin is on the
+// software last set the room; for some, the floor's). From the play area, whose origin is on the
 // floor, each frame (UpdateStageFloor); or, when the headset has none, from
 // a controller touched to it while measuring. (With a play area, a touch is
 // only a check, in the log: a hand that went low without reaching the floor
@@ -997,21 +999,33 @@ static void ChooseHeadsetFloor(const char* runtimeName, const char* systemName)
     SaveSettings();
 }
 
-// Once per headset frame. (A play area less than 30 cm below the room's zero
-// is not believed: some headsets give the room itself when no floor is set.)
-static void UpdateStageFloor(XrTime time)
+// Once per headset frame. A play area is believed when it is well below the
+// room's zero (the head's height when the headset's software set the room),
+// or, on SteamVR, whose play area always comes from its room setup and which
+// can set the room on the floor itself (fed by Virtual Desktop: the head some
+// 1.6 m up in the room), when the head is well above it (kStageHeadAbove);
+// then for as long as it stays put. (Elsewhere one near the room's zero is not
+// believed: some headsets give the room itself when no floor is set, and a
+// room set with the headset lying low would pass for a floor.)
+static const float kStageHeadAbove = 0.8f;
+static void UpdateStageFloor(XrTime time, bool headKnown, float headY)
 {
     if (g_stageSpace == XR_NULL_HANDLE) return;
     XrSpaceLocation location = { XR_TYPE_SPACE_LOCATION };
-    bool known = XR_SUCCEEDED(xrLocateSpace(g_stageSpace, g_floorSpace, time, &location)) &&
-                 (location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0 && location.pose.position.y < -0.30f;
+    bool located = XR_SUCCEEDED(xrLocateSpace(g_stageSpace, g_floorSpace, time, &location)) &&
+                   (location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0;
+    float y = location.pose.position.y;
+    bool known = located && (y < -0.30f || (g_runtimeSteamVr && headKnown && headY - y > kStageHeadAbove) ||
+                             (g_stageFloorKnown && fabsf(y - g_stageFloorY) < 0.02f));
     if (known != g_stageFloorKnown)
     {
         static int logsLeft = 10;
         if (logsLeft > 0)
         {
             --logsLeft;
-            if (known) Log("VR: the play area's floor is %.0f cm below the room's zero height.", -location.pose.position.y * 100.0f);
+            if (known && y < -0.30f) Log("VR: the play area's floor is %.0f cm below the room's zero height.", -y * 100.0f);
+            else if (known) Log("VR: the play area's floor is %.0f cm from the room's zero height, the head %.0f cm above it: the room is set on the floor.",
+                                y * 100.0f, (headY - y) * 100.0f);
             else Log("VR: the play area's floor is no longer known.");
         }
     }
@@ -1421,14 +1435,13 @@ bool VrGetPointingHandPose(HeadPose& pose, int& handIndex)
     return found;
 }
 
-void VrAdjustWorldScale(float factor)
+void VrStepWorldScale(int steps)
 {
-    float scale = GetSettings().worldScale * factor;
-    if (scale < 0.25f) scale = 0.25f;
-    if (scale > 4.0f) scale = 4.0f;
-    GetSettings().worldScale = scale;
+    Settings& s = GetSettings();
+    SetSizeStep(s.sizeStep + steps);
     SaveSettings();
-    Log("VR: world scale is now %.2f (the world looks %.0f%% of the size it does at 1.00).", scale, 100.0f / scale);
+    Log("VR: world scale is now %.3f (calibrated %.3f, adjusted %+d%%; the world looks %.0f%% of the size it does at 1.00).",
+        s.worldScale, s.worldScaleCalibrated, s.sizeStep * 5, 100.0f / s.worldScale);
 }
 
 void VrToggleSwapEyes()
@@ -1596,7 +1609,6 @@ int VrGetFingers(int hand, float curls[3])
 {
     curls[0] = curls[1] = curls[2] = 0.0f;
     if (hand != 0 && hand != 1) return 0;
-    if (!GetSettings().handPoses) return 0; // hand poses off: one squeeze curl on top of the game's animation
 
     // A hand that holds one of the game's things keeps the game's fingers.
     if ((hand == 0 ? CameraLeftItemKind() : CameraRightItemKind()) != kItemNone) return 2;
@@ -1819,11 +1831,12 @@ static bool SetupHands()
         Check(xrCreateAction(g_actionSet, &sprintInfo, &g_sprintAction), "Creating the sprint input") &&
         Check(xrCreateAction(g_actionSet, &menuInfo, &g_menuAction), "Creating the menu input");
 
-    // And two for the gun: draw/holster, and aim.
+    // And two more: A for the gun, and X. (The A action keeps its first name,
+    // "holster", which the runtimes' saved bindings know it by.)
     XrActionCreateInfo gunInfo = { XR_TYPE_ACTION_CREATE_INFO };
     gunInfo.actionType = XR_ACTION_TYPE_BOOLEAN_INPUT;
     lstrcpynA(gunInfo.actionName, "holster", XR_MAX_ACTION_NAME_SIZE);
-    lstrcpynA(gunInfo.localizedActionName, "Draw or holster", XR_MAX_LOCALIZED_ACTION_NAME_SIZE);
+    lstrcpynA(gunInfo.localizedActionName, "Open revolver", XR_MAX_LOCALIZED_ACTION_NAME_SIZE);
 
     XrActionCreateInfo aimInfo2 = { XR_TYPE_ACTION_CREATE_INFO };
     aimInfo2.actionType = XR_ACTION_TYPE_BOOLEAN_INPUT;
@@ -1831,7 +1844,7 @@ static bool SetupHands()
     lstrcpynA(aimInfo2.localizedActionName, "Aim / second action", XR_MAX_LOCALIZED_ACTION_NAME_SIZE);
 
     g_gunButtonsReady = g_moreButtonsReady &&
-        Check(xrCreateAction(g_actionSet, &gunInfo, &g_gunAction), "Creating the holster input") &&
+        Check(xrCreateAction(g_actionSet, &gunInfo, &g_gunAction), "Creating the A button input") &&
         Check(xrCreateAction(g_actionSet, &aimInfo2, &g_aimAction2), "Creating the aim input");
 
     // And one for the mod's own menu.
@@ -2612,7 +2625,7 @@ static void UpdateMeasure(const XrPosef& head)
                 float was = s.worldScale;
                 s.eyeHeight = eyeHeight;
                 s.bodyHeight = 0.0f; // measured, not set by hand
-                s.worldScale = kGameEyeHeight / eyeHeight; // (0.88 to 1.36, within the menu's 0.5 to 2.5)
+                SetWorldScaleCalibrated(kGameEyeHeight / eyeHeight); // (0.88 to 1.36; the player's adjustment kept)
                 bool heightWas = !s.seated && s.heightOffset != 0.0f;
                 if (!s.seated) s.heightOffset = 0.0f; // standing, the floor sets the height
                 SaveSettings();
@@ -2739,7 +2752,7 @@ static void UndoBody()
     s.floorGuessed = g_bodyBefore.floorGuessed;
     s.eyeHeight = g_bodyBefore.eyeHeight;
     s.bodyHeight = g_bodyBefore.bodyHeight;
-    s.worldScale = g_bodyBefore.worldScale;
+    SetWorldScaleCalibrated(g_bodyBefore.worldScaleCalibrated);
     s.armLength = g_bodyBefore.armLength;
     s.holsterRight = g_bodyBefore.holsterRight;
     s.holsterDown = g_bodyBefore.holsterDown;
@@ -3344,7 +3357,7 @@ static float g_gripValue[2] = { 0.0f, 0.0f };    // how far each grip button is 
 static float g_triggerValue[2] = { 0.0f, 0.0f }; // and each trigger
 static bool g_rightInHolster = false;   // is the right palm at the holster (set in DrawHands)?
 static bool g_rightGripDown = false;
-static double g_virtualGunTapUntil = 0; // until then, behave as if the gun button (A) is pressed
+static double g_virtualGunTapUntil = 0; // until then, the gun is to be drawn or put away (UpdateGunButton)
 static bool g_virtualGunTapHip = false;  // that tap is the right hip's: the revolver's own (script command 78)
 
 // Once a headset frame, after the mod's menu has had the pointer (`pointing`:
@@ -3913,9 +3926,9 @@ static void UpdateGrabInput()
     }
 
     // --- The holster: squeezing the right grip at the right hip draws the gun
-    // --- or puts it away, exactly as a tap of the gun button would.
+    // --- or puts it away (the only way to do either: UpdateGunButton).
     bool rightGripNow = grip[1] > (g_rightGripDown ? kRelease : kPress);
-    bool holsterGrab = rightGripNow && !g_rightGripDown && g_rightInHolster && GetSettings().holster && !g_reloadKeyDown;
+    bool holsterGrab = rightGripNow && !g_rightGripDown && g_rightInHolster && !g_reloadKeyDown;
 
     // --- Behind the right shoulder: the shotgun. Out, the hand
     // --- held there a quarter of a second puts it away; carried, a right
@@ -4524,10 +4537,9 @@ static void UpdateGrabInput()
         }
         else if (gunMode && hand == 0 && g_reloadKeyDown)
         {
-            // The revolver is open. With the ammo pouch, a squeeze at the left
-            // hip takes a bullet out. Without it, any squeeze away from the
-            // gun does (it becomes "carrying a bullet" further down).
-            if (GetSettings().ammoPouch && g_leftAtLightHolster && !LeftTakesThingNotBullet())
+            // The revolver is open: a squeeze at the ammo pouch, on the left
+            // hip, takes a bullet out.
+            if (g_leftAtLightHolster && !LeftTakesThingNotBullet())
             {
                 g_handUse[hand] = kHandBullet;
                 Buzz(0, 0.04f, 0.5f);
@@ -4544,7 +4556,7 @@ static void UpdateGrabInput()
             {
                 g_handUse[hand] = kHandNothing;
                 static int logsLeft = 6;
-                if (GetSettings().ammoPouch && g_leftAtLightHolster && logsLeft > 0)
+                if (g_leftAtLightHolster && logsLeft > 0)
                 {
                     --logsLeft;
                     Log("VR: left hand squeezed in the ammo pouch's reach, %.0f cm from its spot, touching a thing: no bullet taken.", g_leftToPouch * 100.0f);
@@ -4615,11 +4627,7 @@ static void UpdateGrabInput()
     // --- trigger and its long animation, is shut off in the headset by its
     // --- script: PlayerState_UsingHealthItem OnUse.)
     {
-        // (How many turns are needed is a setting, 1 to 3: 3 unless the player
-        // chooses fewer, Settings::bandageTurns.)
-        int turnsNeeded = GetSettings().bandageTurns;
-        if (turnsNeeded < 1) turnsNeeded = 1;
-        if (turnsNeeded > 3) turnsNeeded = 3;
+        const int turnsNeeded = 3;
 
         // The winding's count: the angle the right hand has gone around the
         // forearm, added up, and the turns told so far. Every pull out of the
@@ -4654,7 +4662,7 @@ static void UpdateGrabInput()
                 HintUsed("bandage_open", NowMs());
                 Buzz(0, 0.08f, 0.8f);
                 Buzz(1, 0.05f, 0.5f);
-                Log("VR: bandage pulled out of its tin. Wind it round the left forearm (%d time%s to heal).", turnsNeeded, turnsNeeded == 1 ? "" : "s");
+                Log("VR: bandage pulled out of its tin. Wind it round the left forearm (%d times to heal).", turnsNeeded);
             }
         }
         else if (g_bandagePhase == 1)
@@ -4905,15 +4913,15 @@ static void UpdateGrabInput()
         }
     }
 
-    // --- Loading bullets by hand, while the ammo check is held open: a
-    // --- squeezed left hand away from the gun is carrying a bullet; touching
-    // --- the gun with it loads it. Move away and back for the next one.
+    // --- Loading bullets by hand, while the ammo check is held open: a bullet
+    // --- taken at the ammo pouch (above), carried to the gun, loads it.
     //
     // For the revolver its own script does the loading (Prop_Gun.hps): it
     // sees the bullet reach the cylinder, puts it in at once and says so. It
     // also tips the spent shells out when the open gun is held muzzle-up.
-    // The click below (one click of the interact button) is for a gun whose
-    // script doesn't report, as the shotgun's doesn't.
+    // For a gun whose script doesn't report, a squeezed left hand away from
+    // the gun is carrying a bullet, and touching the gun with it clicks the
+    // interact button once to load it.
     bool byScript = CameraRevolverScriptActive();
     int happened = CameraTakeRevolverEvent();
     if (happened == 1)
@@ -4936,7 +4944,7 @@ static void UpdateGrabInput()
 
     if (gunMode && g_reloadKeyDown && g_handDown[0])
     {
-        if (g_handUse[0] == kHandNothing && leftToGun > 0.24f && !(byScript && GetSettings().ammoPouch) && happened != 1 &&
+        if (g_handUse[0] == kHandNothing && leftToGun > 0.24f && !byScript && happened != 1 &&
             leftKind == kItemNone) // (not with something already in the left hand, as above)
             g_handUse[0] = kHandBullet;
         else if (g_handUse[0] == kHandBullet && leftToGun < 0.15f && !g_grabHeld && !byScript)
@@ -5297,25 +5305,21 @@ static int MakeMark(const char* why, char* prefix, int prefixSize)
 }
 
 // The gun's controls.
-//   Drawing and putting away: squeeze the right grip at the holster, or (when
-//     "A button" is chosen in the menu) tap A.
+//   Drawing and putting away: squeeze the right grip at the holster (or X puts
+//     it away): a tap of the gun's controls (g_virtualGunTapUntil).
 //   Opening the revolver: hold A and swing the gun. It stays open, with the
 //     game's "check ammo" key held down for you, until you swing it shut.
 static void UpdateGunButton(bool gunMode)
 {
     enum { kIdle, kOpen, kSettling };
     static int phase = kIdle;
-    static bool wasPressed = false;
-    static bool swingArmed = true, swungThisPress = false;
-    static double pressedAt = 0, keyDownAt = 0, doneAt = 0, gunGoneSince = 0;
+    static bool swingArmed = true;
+    static double keyDownAt = 0, doneAt = 0, gunGoneSince = 0;
     static float openAxis[3] = { 0, 0, 0 }; // which way the wrist turned in the flick that opened the revolver
 
     double now = NowMs();
     bool button = ReadButton(g_gunAction);
-    bool pressedNow = button && !wasPressed;
-    bool releasedNow = !button && wasPressed;
     bool holsterTap = now < g_virtualGunTapUntil;
-    bool holsterOn = GetSettings().holster;
 
     // One swing counts once: the wrist has to slow down before the next.
     // To open (A is held, which already rules out accidents) the first fast
@@ -5326,14 +5330,7 @@ static void UpdateGunButton(bool gunMode)
     if (g_rightSwing || (opening && g_rightSwingAtOnce)) swingArmed = false;
     else if (g_rightSwingSpeed < 2.5f) swingArmed = true;
 
-    if (pressedNow)
-    {
-        pressedAt = now;
-        swungThisPress = false;
-    }
-
     // The shotgun's press-check (see g_shotgunCheckHeld): A held with it out.
-    // A press that showed the shells is not a tap that puts it away.
     {
         bool checkHeld = gunMode && CameraShotgunHeld() && button;
         if (checkHeld != g_shotgunCheckHeld)
@@ -5347,7 +5344,6 @@ static void UpdateGunButton(bool gunMode)
             }
         }
         g_shotgunCheckHeld = checkHeld;
-        if (checkHeld && CameraShotgunCheckShown()) swungThisPress = true;
     }
 
     switch (phase)
@@ -5355,9 +5351,9 @@ static void UpdateGunButton(bool gunMode)
     case kIdle:
         if (!gunMode)
         {
-            if (holsterTap || (!holsterOn && pressedNow))
+            if (holsterTap)
             {
-                SendScriptCommand(holsterTap && g_virtualGunTapHip ? 78 : 1); // draw (at the hip: the revolver; A: the gun used last)
+                SendScriptCommand(g_virtualGunTapHip ? 78 : 1); // draw (at the hip: the revolver; else the gun used last)
                 g_virtualGunTapUntil = 0;
                 g_virtualGunTapHip = false;
                 doneAt = now;
@@ -5370,7 +5366,6 @@ static void UpdateGunButton(bool gunMode)
             // is loaded at any time, by hand, and the game's own ammo check
             // would put it in the left hand). The key goes down now and stays
             // down; the script puts the game into its reload state at once.
-            swungThisPress = true;
             SetExtraKey(kKeyHolster, true);
             SendScriptCommand(3);
             HintUsed("gun_open", now);
@@ -5381,11 +5376,11 @@ static void UpdateGunButton(bool gunMode)
             Log("VR: gun swung with A held (%.1f rad/s, turning about %+.2f %+.2f %+.2f) -> opening the revolver.",
                 g_rightSwingSpeed, openAxis[0], openAxis[1], openAxis[2]);
         }
-        else if (holsterTap || (!holsterOn && releasedNow && !swungThisPress && now - pressedAt < 500))
+        else if (holsterTap)
         {
             // (At the hip with the shotgun out, the revolver is taken out in its place,
             // as behind the shoulder the shotgun takes the revolver's.)
-            SendScriptCommand(holsterTap && g_virtualGunTapHip && CameraShotgunHeld() ? 78 : 2); // put away
+            SendScriptCommand(g_virtualGunTapHip && CameraShotgunHeld() ? 78 : 2); // put away
             g_virtualGunTapUntil = 0;
             g_virtualGunTapHip = false;
             doneAt = now;
@@ -5398,10 +5393,6 @@ static void UpdateGunButton(bool gunMode)
         if (gunMode) gunGoneSince = 0;
         else if (gunGoneSince == 0) gunGoneSince = now;
         bool gunGone = gunGoneSince != 0 && now - gunGoneSince > 800;
-
-        // A press of A while it is open does nothing by itself (and is not
-        // taken as "put away" when it is let go later).
-        if (pressedNow) swungThisPress = true;
 
         // Shutting it takes a flick the other way from the one that opened it,
         // so tipping the muzzle up to empty the shells, or reaching for a
@@ -5459,7 +5450,6 @@ static void UpdateGunButton(bool gunMode)
         break;
     }
 
-    wasPressed = button;
     g_gunButtonBusy = phase == kOpen || phase == kSettling;
     g_reloadKeyDown = phase == kOpen;
 }
@@ -5524,28 +5514,26 @@ static bool ReadButton(XrAction action)
 // each setting as a short list of choices. These two turn a setting into its
 // place in the list and back.
 //   0 playing: seated, standing          4 height: -20 .. +20 cm in 5 cm steps
-//   1 turning: smooth, snap              5 draw the gun with: holster, A button
-//   2 snap angle: 30, 45, 60, 90         6 cutscenes: on a screen, through your eyes
-//   3 turn speed: slow .. very fast      7 jump: off, right stick up
+//   1 turning: smooth, snap              6 cutscenes: on a screen, through your eyes
+//   2 snap angle: 30, 45, 60, 90
+//   3 turn speed: slow .. very fast
 static const float kMenuSnapAngles[4] = { 30.0f, 45.0f, 60.0f, 90.0f };
 static const float kMenuTurnSpeeds[4] = { 2000.0f, 3000.0f, 4500.0f, 6500.0f };
-//  10 walking follows: head, left controller    20 bullet count shown: pouch, cylinder
-//  11 walking speed: full, follows the stick    21 empty hands follow my fingers: off, on
-//  12 crouch by ducking: off, on                22 throw help: off .. strong
-//  13 how far to duck: a little .. a lot        23 hand reach: short .. very long
-//  14 your size: 80 .. 120 %                    24 vibration: off .. strong
-//  15 game menu distance: near .. far           25 (unused)
-//  16 game menu size: small .. large            26 bandage turns: 1, 2, 3
-//  17 blood across the eyes: off, on            27 gun pushes things: off, on
-//  18 pointer steadying: off .. strong          28 (button) recenter the view
-//  19 bullets come from: pouch, any squeeze      29 PC keyboard and mouse: off, on
-//                                                30 door handles need turning: off, on
+//  10 walking follows: head, left controller    22 throw help: off .. strong
+//  11 walking speed: full, follows the stick    23 hand reach: short .. very long
+//  12 crouch by ducking: off, on                24 vibration: off .. strong
+//  13 how far to duck: a little .. a lot        25 (unused)
+//  14 world scale: -10 .. +10 % of the calibrated scale, in 5 % steps
+//  15 game menu distance: near .. far           29 PC keyboard and mouse: off, on
+//  16 game menu size: small .. large            30 door handles need turning: off, on
+//  17 blood across the eyes: off, on
+//  18 pointer steadying: off .. strong
 //  33 monitor view steadying: off .. strong      34 monitor view width: narrow, normal, wide
 //  35 knockdowns and death: through your eyes, on the cutscene screen, faded to black
 //  39 (button) recalibrate: the start-up page from the beginning
+//  44 not a choice: the calibrated world scale in thousandths (the World Scale row's labels)
 static const float kMenuDuckSeated[3] = { 0.08f, 0.12f, 0.18f };
 static const float kMenuDuckStanding[3] = { 0.20f, 0.30f, 0.45f };
-static const float kMenuWorldScales[5] = { 0.80f, 0.90f, 1.00f, 1.10f, 1.20f };
 static const float kMenuHudDistances[3] = { 1.0f, 1.5f, 2.2f };
 static const float kMenuHudWidths[3] = { 1.4f, 1.8f, 2.4f };
 static const float kMenuPointerSmooth[4] = { 0.0f, 0.5f, 0.75f, 0.9f };
@@ -5580,43 +5568,35 @@ int VrGetMenuOption(int index)
         int step = (int)floorf(s.heightOffset / 0.05f + 0.5f) + 4;
         return step < 0 ? 0 : (step > 8 ? 8 : step);
     }
-    case 5: return s.holster ? 0 : 1;
     case 6: return 0; // unused: cutscenes always play on a screen
-    case 7: return s.jumpStick ? 1 : 0;
     case 10: return s.moveDir == 1 ? 1 : 0;
     case 11: return s.analogWalk ? 1 : 0;
     case 12: return s.duckCrouch ? 1 : 0;
     case 13: return NearestOf(kMenuDuckSeated, 3, s.duckSeated);
-    case 14: return NearestOf(kMenuWorldScales, 5, s.worldScale);
+    case 14: return s.sizeStep + 2;
     case 15: return NearestOf(kMenuHudDistances, 3, s.hudDistance);
     case 16: return NearestOf(kMenuHudWidths, 3, s.hudWidth);
     case 17: return s.faceEffects ? 1 : 0;
     case 18: return NearestOf(kMenuPointerSmooth, 4, s.pointerSmooth);
-    case 19: return s.ammoPouch ? 0 : 1;
-    case 20: return s.ammoCounter == 1 ? 1 : 0;
-    case 21: return s.handPoses ? 1 : 0;
     case 22: return NearestOf(kMenuThrowBoosts, 4, s.throwBoost);
     case 23: return NearestOf(kMenuHandReaches, 4, s.handReach);
     case 24: return NearestOf(kMenuBuzzScales, 4, s.buzzScale);
     case 25: return 0; // unused: healing is always by wrapping the arm
-    case 26: return s.bandageTurns < 1 ? 0 : (s.bandageTurns > 3 ? 2 : s.bandageTurns - 1);
-    case 27: return s.gunPush ? 1 : 0;
-    case 28: return 0; // a button: "Recenter View"
     case 29: return s.pcInput ? 1 : 0;
     case 30: return s.doorTurn ? 1 : 0;
-    case 31: return s.bodyFollow ? 1 : 0;
     case 32: return s.logicAtHeadsetRate ? 1 : 0;
     case 33: return NearestOf(kMenuMonitorSmooth, 4, s.monitorSmooth);
     case 34: return NearestOf(kMenuMonitorWidths, 3, s.monitorWidth);
     case 35: return s.roughView < 0 ? 0 : (s.roughView > 2 ? 2 : s.roughView); // (read by the body script, VRUpdateRoughMove; three choices)
     case 36: return (int)(s.pullReach * 100.0f + 0.5f); // not a choice: the pull's reach in centimeters (read by the body script, VRFindPullTarget)
-    case 37: return s.viewSway == 1 ? 1 : 0; // (read by the body script, VRSteadyEyes: reduced or off)
+    case 37: return s.viewSway == 1 ? 1 : 0; // (read by the body script, VRSteadyEyes: the default or off)
     case 38: return 0; // unused: cutscenes always play on the cinema screen
     case 39: return 0; // a button: "Recalibrate"
     case 40: return s.interactionHints < 0 ? 0 : (s.interactionHints > 2 ? 2 : s.interactionHints); // (Until Learned, Always, Off)
     case 41: return 0; // a button: "Show Learned Hints Again"
     case 42: return s.vignetteStrength < 0 ? 0 : (s.vignetteStrength > 3 ? 3 : s.vignetteStrength); // (the vignette's strength)
     case 43: return s.moveVignette < 0 ? 0 : (s.moveVignette > 3 ? 3 : s.moveVignette); // (the movement vignette)
+    case 44: return (int)(s.worldScaleCalibrated * 1000.0f + 0.5f); // not a choice: for the World Scale row's labels
     default: return 0;
     }
 }
@@ -5638,9 +5618,7 @@ void VrSetMenuOption(int index, int choice)
     case 2: if (choice > 3) return; s.snapAngle = kMenuSnapAngles[choice]; break;
     case 3: if (choice > 3) return; s.turnSpeed = kMenuTurnSpeeds[choice]; break;
     case 4: if (choice > 8) return; s.heightOffset = (float)(choice - 4) * 0.05f; break;
-    case 5: if (choice > 1) return; s.holster = choice == 0; break;
     case 6: return;
-    case 7: if (choice > 1) return; s.jumpStick = choice == 1; break;
     case 10: if (choice > 1) return; s.moveDir = choice; break;
     case 11: if (choice > 1) return; s.analogWalk = choice == 1; break;
     case 12: if (choice > 1) return; s.duckCrouch = choice == 1; break;
@@ -5649,23 +5627,17 @@ void VrSetMenuOption(int index, int choice)
         s.duckSeated = kMenuDuckSeated[choice];
         s.duckStanding = kMenuDuckStanding[choice];
         break;
-    case 14: if (choice > 4) return; s.worldScale = kMenuWorldScales[choice]; break;
+    case 14: if (choice > 4) return; SetSizeStep(choice - 2); break;
     case 15: if (choice > 2) return; s.hudDistance = kMenuHudDistances[choice]; break;
     case 16: if (choice > 2) return; s.hudWidth = kMenuHudWidths[choice]; break;
     case 17: if (choice > 1) return; s.faceEffects = choice == 1; break;
     case 18: if (choice > 3) return; s.pointerSmooth = kMenuPointerSmooth[choice]; break;
-    case 19: if (choice > 1) return; s.ammoPouch = choice == 0; break;
-    case 20: if (choice > 1) return; s.ammoCounter = choice; break;
-    case 21: if (choice > 1) return; s.handPoses = choice == 1; break;
     case 22: if (choice > 3) return; s.throwBoost = kMenuThrowBoosts[choice]; break;
     case 23: if (choice > 3) return; s.handReach = kMenuHandReaches[choice]; break;
     case 24: if (choice > 3) return; s.buzzScale = kMenuBuzzScales[choice]; break;
     case 25: return; // (unused: healing is always by wrapping the arm)
-    case 26: if (choice > 2) return; s.bandageTurns = choice + 1; break;
-    case 27: if (choice > 1) return; s.gunPush = choice == 1; break;
     case 29: if (choice > 1) return; s.pcInput = choice == 1; break;
     case 30: if (choice > 1) return; s.doorTurn = choice == 1; break;
-    case 31: if (choice > 1) return; s.bodyFollow = choice == 1; break;
     case 32: if (choice > 1) return; s.logicAtHeadsetRate = choice == 1; break;
     case 33: if (choice > 3) return; s.monitorSmooth = kMenuMonitorSmooth[choice]; break;
     case 34: if (choice > 2) return; s.monitorWidth = kMenuMonitorWidths[choice]; break;
@@ -5677,10 +5649,6 @@ void VrSetMenuOption(int index, int choice)
     case 43: if (choice > 3) return; s.moveVignette = choice; break;
     case 41:
         HintsForget();
-        return;
-    case 28:
-        VrRecenter();
-        Log("VR: the view was re-centred from the game's VR menu.");
         return;
     case 39:
         StartupWantedFromSettings(); // (the start-up page, from the beginning)
@@ -6367,7 +6335,6 @@ static void UpdateMoveInput(bool menuPointer)
         // While the game has you crouched (by the stick or by ducking), up
         // stands you up instead: the body script does it (command 9).
         bool pushedUp = haveTurn && turnY > 0.75f && fabsf(turnX) < 0.5f;
-        bool up = pushedUp && GetSettings().jumpStick;
         if (!haveTurn || turnY < 0.4f) armed = true;
         if (pushedUp && armed && CameraGameCrouched())
         {
@@ -6380,7 +6347,7 @@ static void UpdateMoveInput(bool menuPointer)
                 Log("VR: right stick up while crouched -> stand up.");
             }
         }
-        else if (up && armed)
+        else if (pushedUp && armed)
         {
             armed = false;
             SetExtraKey(kKeyJump, true);
@@ -7180,7 +7147,7 @@ static void StartupSetHeight()
     float was = s.worldScale;
     s.bodyHeight = height;
     s.eyeHeight = height * kEyesOfHeight;
-    s.worldScale = kGameEyeHeight / s.eyeHeight; // (0.89 to 1.64, within the menu's 0.5 to 2.5)
+    SetWorldScaleCalibrated(kGameEyeHeight / s.eyeHeight); // (0.89 to 1.64; the player's adjustment kept)
     if (!s.seated) s.heightOffset = 0.0f;
     SaveSettings();
     Log("VR: the start-up page: your height set to %.0f cm, your eyes taken as %.1f cm up. World scale %.3f (was %.3f).",
@@ -7532,6 +7499,14 @@ static void OnVrMenuAction(int action)
         VrMenuSetOpen(false);
         g_gameMenuEscapeFromMs = NowMs() + 200.0;
         Log("VR: \"Open Game Menu\" pressed: the game's Escape is sent.");
+    }
+    else if (action == kMenuActionWorldScaleMoved)
+    {
+        // (The Player page's number is the calibrated scale; the scale in use follows it, with the
+        // player's adjustment.)
+        Settings& s = GetSettings();
+        SetWorldScaleCalibrated(s.worldScaleCalibrated);
+        SaveSettings();
     }
     else if (action == kMenuActionPouchMoved || action == kMenuActionHolsterMoved) // (the Body page's numbers)
     {
@@ -8045,10 +8020,9 @@ static bool PrepareAmmoCounter()
     bool shotgunCheck = CameraShotgunHeld() && g_shotgunCheckHeld && CameraShotgunCheckShown() && g_aimValid[1];
     if (shotgunCheck)
     {
-        // The shotgun's press-check (see g_shotgunCheckHeld): above its receiver,
-        // whichever place the setting has for the revolver's. The game's own picture of
-        // a shell with "x" and how many are loaded, in the game's lettering, as at the
-        // pouch, so it matches the game's look.
+        // The shotgun's press-check (see g_shotgunCheckHeld): above its receiver.
+        // The game's own picture of a shell with "x" and how many are loaded, in
+        // the game's lettering, as at the pouch, so it matches the game's look.
         const XrQuaternionf& q = g_aimRoom[1].orientation;
         float d[3] = { -2 * (q.x * q.z + q.w * q.y), -2 * (q.y * q.z - q.w * q.x), -(1 - 2 * (q.x * q.x + q.y * q.y)) };
         at[0] = g_aimRoom[1].position.x + d[0] * 0.12f;
@@ -8057,7 +8031,7 @@ static bool PrepareAmmoCounter()
         wsprintfA(text, "loaded %d", loaded);
         g_counterWidthMetres = 0.08f;
     }
-    else if (GetSettings().ammoCounter == 0)
+    else
     {
         // At the pouch: the spare bullets, while the revolver is open or the
         // left hand is near the pouch. The game's own picture of them with its
@@ -8071,19 +8045,6 @@ static bool PrepareAmmoCounter()
         wsprintfA(text, CameraShotgunHeld() ? "shells %d" : "pouch %d", spare); // (the shotgun's: its shell's picture)
         g_counterWidthMetres = 0.08f;
     }
-    else
-    {
-        // Above the open cylinder: loaded / spare. (7 cm above the hand's
-        // pointing pose.)
-        if (!g_reloadKeyDown || !g_aimValid[1]) return false;
-        const XrQuaternionf& q = g_aimRoom[1].orientation;
-        float d[3] = { -2 * (q.x * q.z + q.w * q.y), -2 * (q.y * q.z - q.w * q.x), -(1 - 2 * (q.x * q.x + q.y * q.y)) };
-        at[0] = g_aimRoom[1].position.x + d[0] * 0.05f;
-        at[1] = g_aimRoom[1].position.y + d[1] * 0.05f + 0.07f;
-        at[2] = g_aimRoom[1].position.z + d[2] * 0.05f;
-        wsprintfA(text, "%d / %d", loaded, spare);
-        g_counterWidthMetres = 0.11f;
-    }
 
     // Turned to face the head.
     if (!PoseFacingHead(at, g_counterPose, 0.05f)) return false;
@@ -8092,22 +8053,18 @@ static bool PrepareAmmoCounter()
     bool textChanged = strcmp(text, g_counterShownText) != 0;
     if (g_counterSwapchain != XR_NULL_HANDLE && !textChanged) return true;
 
-    // (At the pouch the game's picture, square; else, or should the game's files
-    // not be read, the tag with the number.)
-    bool atPouch = GetSettings().ammoCounter == 0 && !shotgunCheck;
+    // (The game's picture, square; should the game's files not be read, the tag with the number.)
     const unsigned char* pixels = shotgunCheck ? VrPouchPicture(loaded, true, width, height)
-                                  : (atPouch ? VrPouchPicture(spare, strncmp(text, "shells", 6) == 0, width, height) : nullptr);
+                                               : VrPouchPicture(spare, strncmp(text, "shells", 6) == 0, width, height);
     if (!pixels)
     {
         char number[24];
-        if (atPouch) wsprintfA(number, "%d", spare);
-        else if (shotgunCheck) wsprintfA(number, "%d", loaded);
-        else lstrcpynA(number, text, sizeof(number));
+        wsprintfA(number, "%d", shotgunCheck ? loaded : spare);
         pixels = VrCounterPicture(number, width, height);
     }
     if (g_counterSwapchain != XR_NULL_HANDLE && (width != g_counterSwapchainWidth || height != g_counterSwapchainHeight))
     {
-        // (Another size: the pouch's picture and the tag above the cylinder differ.)
+        // (Another size: the game's picture and the tag differ.)
         XrDestroySwapchainGl(g_counterSwapchain);
         g_counterSwapchain = XR_NULL_HANDLE;
     }
@@ -8169,7 +8126,7 @@ static bool PrepareAmmoCounter()
         if (logsLeft > 0)
         {
             --logsLeft;
-            Log("VR: the bullet counter shows \"%s\" (%s).", text, shotgunCheck ? "above the shotgun, its press-check" : (atPouch ? "at the pouch" : "above the cylinder"));
+            Log("VR: the bullet counter shows \"%s\" (%s).", text, shotgunCheck ? "above the shotgun, its press-check" : "at the pouch");
         }
     }
     return g_counterShownText[0] != 0;
@@ -8258,12 +8215,11 @@ static void PlayerToRoom(const float player[3], float room[3])
 static bool HintAtBody(int hand, int carried, const HintInfo*& info, float room[3])
 {
     info = nullptr;
-    const Settings& s = GetSettings();
     bool gunMode = CameraGunHeld(), shotgun = CameraShotgunHeld();
     int rightKind = CameraRightItemKind(), leftKind = CameraLeftItemKind();
     if (hand == 1)
     {
-        if (g_rightInHolster && g_holsterRoomKnown && s.holster && !g_reloadKeyDown)
+        if (g_rightInHolster && g_holsterRoomKnown && !g_reloadKeyDown)
         {
             if (gunMode && !shotgun) info = HintFind("holster_put");
             else if (!gunMode && rightKind == kItemNone && (carried & kCarryRevolver)) info = HintFind("holster_draw");
@@ -8283,7 +8239,7 @@ static bool HintAtBody(int hand, int carried, const HintInfo*& info, float room[
     {
         if (g_leftAtLightHolster && g_pouchValid && leftKind == kItemNone && g_handUse[0] != kHandBullet)
         {
-            if (g_reloadKeyDown && s.ammoPouch && (carried & kCarryBullets)) info = HintFind("pouch_bullet");
+            if (g_reloadKeyDown && (carried & kCarryBullets)) info = HintFind("pouch_bullet");
             else if (gunMode && shotgun && (carried & kCarryShells)) info = HintFind("pouch_shell");
             for (int i = 0; i < 3; ++i) room[i] = g_pouchRoom[i];
         }
@@ -9440,7 +9396,7 @@ static void DrawHands(float tanHalfWidth, float tanHalfHeight, int width, int he
         // 20 cm below the neck, 13 cm to its right and 9 cm in front of it (unless put elsewhere
         // on the Holsters page), 19 cm with an item in the right hand (as the flashlight's place
         // grows with the flashlight in the hand: the hand holding a thing does not come as
-        // near). Never where the holster (with Weapon Draw at the hip) or the shotgun's place
+        // near). Never where the holster or the shotgun's place
         // behind the shoulder has the hand: their squeezes come first. (Not the flashlight's
         // place mirrored: a holster can reach up to 27.5 cm below the neck and in to 7 cm right
         // of it, and a flashlight set 32 cm below the neck would mirror to inside that reach.)
@@ -9454,7 +9410,7 @@ static void DrawHands(float tanHalfWidth, float tanHalfHeight, int width, int he
             float cz = neck.z + rz * settings.slotRight + fz * settings.slotForward;
             float dx = grip[1].position.x - cx, dy = grip[1].position.y - cy, dz = grip[1].position.z - cz;
             float reach = CameraRightItemKind() != kItemNone ? 0.19f : 0.15f;
-            g_rightAtChestSlot = sqrtf(dx * dx + dy * dy + dz * dz) < reach && !(g_rightInHolster && settings.holster) && !g_rightAtShoulder;
+            g_rightAtChestSlot = sqrtf(dx * dx + dy * dy + dz * dz) < reach && !g_rightInHolster && !g_rightAtShoulder;
             const float slot[3] = { cx, cy, cz };
             OutOfTheChest(slot, neck, fx, fz, g_chestSlotRoom);
         }
@@ -10349,7 +10305,8 @@ static bool Setup()
             (unsigned)XR_VERSION_PATCH(instanceProperties.runtimeVersion));
         // (SteamVR shows panels in overlays it hands out by their place in each frame's list, and
         // mixes up their pictures: the mod draws them into the eyes' pictures itself.)
-        g_panelsInEyes = strncmp(instanceProperties.runtimeName, "SteamVR", 7) == 0;
+        g_runtimeSteamVr = strncmp(instanceProperties.runtimeName, "SteamVR", 7) == 0;
+        g_panelsInEyes = g_runtimeSteamVr;
         if (g_panelsInEyes)
             Log("VR: SteamVR: the panels (the game's interface, the menus, the pointer, the labels) are drawn into the eyes' "
                 "pictures by the mod, and SteamVR is sent those alone.");
@@ -10603,7 +10560,15 @@ static void HandleEvents()
             {
                 g_sessionRunning = false;
                 g_state = VrState::Failed;
-                Log("VR: the headset software closed the session. VR is off until the game restarts.");
+                if (change->state == XR_SESSION_STATE_EXITING)
+                {
+                    // (The headset software's own Quit, or the software closing: the game
+                    // closes too, by its own exit, as VR games do (cVR_QuitAsked, asked by
+                    // the menu script each frame).)
+                    g_quitAsked = true;
+                    Log("VR: the headset software asks the game to close (its own Quit, or it is closing): the game closes.");
+                }
+                else Log("VR: the headset software closed the session. VR is off until the game restarts.");
             }
         }
         else if (event.type == XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING)
@@ -10777,6 +10742,32 @@ static bool EnsureEyeKeep()
     return true;
 }
 
+// The game's finished picture (`source`: left, bottom, right, top in window
+// pixels) into a framebuffer or a texture of the mod's, stretched to fill
+// `width` x `height`. Taken from the engine's own drawing target (stereo in
+// one frame), the picture has not had the engine's image correction yet (the
+// player's gamma: CameraPictureCorrection), so it gets it on the way. Taken
+// from the window, at its swap, it already has it.
+static void CopyGamePicture(const int source[4], GLuint targetFramebuffer, int width, int height)
+{
+    float gamma = 1.0f, brightness = 1.0f, contrast = 1.0f;
+    if (g_gamePicture != 0 && CameraPictureCorrection(gamma, brightness, contrast) &&
+        GlCopyCorrected(g_gamePicture, source[0], source[1], source[2], source[3], targetFramebuffer, 0, 0, width, height, gamma,
+                        brightness, contrast))
+        return;
+    GlCopy(g_gamePicture, source[0], source[1], source[2], source[3], targetFramebuffer, 0, 0, width, height);
+}
+
+static void CopyGamePictureToTexture(const int source[4], GLuint texture, int width, int height)
+{
+    float gamma = 1.0f, brightness = 1.0f, contrast = 1.0f;
+    if (g_gamePicture != 0 && CameraPictureCorrection(gamma, brightness, contrast) &&
+        GlCopyToTextureCorrected(g_gamePicture, source[0], source[1], source[2], source[3], texture, width, height, gamma,
+                                 brightness, contrast))
+        return;
+    GlCopyToTexture(g_gamePicture, source[0], source[1], source[2], source[3], texture, width, height);
+}
+
 // Copies part of the game's finished picture into the next shared picture of
 // one eye. `source` is left, bottom, right, top in window pixels. (On SteamVR
 // into the eye's kept picture instead: PanelsIntoEyes hands it on.)
@@ -10785,8 +10776,7 @@ static bool CopyGameImageToHeadset(int eye, const int source[4])
     if (g_panelsInEyes)
     {
         if (!EnsureEyeKeep()) return false;
-        GlCopy(g_gamePicture, source[0], source[1], source[2], source[3], g_eyeKeepFramebuffer[eye], 0, 0, g_eyeKeepWidth,
-               g_eyeKeepHeight);
+        CopyGamePicture(source, g_eyeKeepFramebuffer[eye], g_eyeKeepWidth, g_eyeKeepHeight);
         g_eyeKeepSerial[eye] = g_frameSerialAtBegin;
         return true;
     }
@@ -10800,8 +10790,7 @@ static bool CopyGameImageToHeadset(int eye, const int source[4])
     bool ready = Check(XrWaitSwapchainImageGl(g_swapchains[eye], &waitInfo), "Waiting for the headset picture");
 
     if (ready && index < g_swapchainImageCounts[eye])
-        GlCopyToTexture(g_gamePicture, source[0], source[1], source[2], source[3],
-                        g_swapchainImages[eye][index].image, g_swapchainWidth, g_swapchainHeight);
+        CopyGamePictureToTexture(source, g_swapchainImages[eye][index].image, g_swapchainWidth, g_swapchainHeight);
 
     return Check(XrReleaseSwapchainImageGl(g_swapchains[eye], nullptr), "Handing the headset picture back") && ready;
 }
@@ -10819,7 +10808,7 @@ static bool HoldLeftPicture(const int source[4], const XrFovf& covered)
         g_holdHeight = g_swapchainHeight;
     }
 
-    GlCopy(g_gamePicture, source[0], source[1], source[2], source[3], g_holdFramebuffer, 0, 0, g_holdWidth, g_holdHeight);
+    CopyGamePicture(source, g_holdFramebuffer, g_holdWidth, g_holdHeight);
     g_holdValid = true;
     g_holdPose = g_frameEyePose;
     g_holdFov = covered;
@@ -11463,6 +11452,22 @@ static bool EnsureGuiSwapchain(int width, int height)
     return true;
 }
 
+// A part of the captured interface (left, bottom, right, top) into a panel's
+// texture, stretched to fill `width` x `height`. It is captured before the
+// engine's image correction, which the window's interface gets with the rest
+// of the frame (the player's gamma: CameraPictureCorrection), so it gets it on
+// the way. Its colours are multiplied by how solid they are. The window's own
+// picture (framebuffer 0, the cutscene screen's) has had the correction
+// already, and its alpha means nothing: it is copied as it is.
+static void CopyGuiPicture(GLuint guiFramebuffer, int left, int bottom, int right, int top, GLuint texture, int width, int height)
+{
+    float gamma = 1.0f, brightness = 1.0f, contrast = 1.0f;
+    if (guiFramebuffer != 0 && CameraPictureCorrection(gamma, brightness, contrast) &&
+        GlCopyToTextureCorrected(guiFramebuffer, left, bottom, right, top, texture, width, height, gamma, brightness, contrast, true))
+        return;
+    GlCopyToTexture(guiFramebuffer, left, bottom, right, top, texture, width, height);
+}
+
 // Copies the captured interface into the next shared panel picture.
 static bool CopyGuiToHeadset(GLuint guiFramebuffer, int width, int height)
 {
@@ -11475,7 +11480,7 @@ static bool CopyGuiToHeadset(GLuint guiFramebuffer, int width, int height)
     bool ready = Check(XrWaitSwapchainImageGl(g_guiSwapchain, &waitInfo), "Waiting for the panel picture");
 
     if (ready && index < g_guiSwapchainImageCount)
-        GlCopyToTexture(guiFramebuffer, 0, 0, width, height, g_guiSwapchainImages[index].image, width, height);
+        CopyGuiPicture(guiFramebuffer, 0, 0, width, height, g_guiSwapchainImages[index].image, width, height);
 
     return Check(XrReleaseSwapchainImageGl(g_guiSwapchain, nullptr), "Handing the panel picture back") && ready;
 }
@@ -11560,7 +11565,7 @@ static bool CopyPieceToHeadset(PieceSwapchain& piece, const float part[4], GLuin
     bool ready = Check(XrWaitSwapchainImageGl(piece.swapchain, &waitInfo), "Waiting for the piece picture");
     if (ready && index < piece.imageCount)
     {
-        GlCopyToTexture(guiFramebuffer, left, bottom, right, top, piece.images[index].image, piece.width, piece.height);
+        CopyGuiPicture(guiFramebuffer, left, bottom, right, top, piece.images[index].image, piece.width, piece.height);
         if (piece.sizes > 1) GlMakeSmallerCopies(piece.images[index].image);
     }
     bool released = Check(XrReleaseSwapchainImageGl(piece.swapchain, nullptr), "Handing the piece picture back");
@@ -12225,7 +12230,8 @@ static void ComposeMonitorPicture(bool newLeftEyePicture, bool haveGui, GLuint g
     // Keep a copy of each new left-eye picture (the window currently holds it).
     if (newLeftEyePicture)
     {
-        GlCopy(g_gamePicture, 0, 0, width, height, g_monitorFramebuffer, 0, 0, width, height);
+        const int whole[4] = { 0, 0, width, height };
+        CopyGamePicture(whole, g_monitorFramebuffer, width, height);
         g_monitorHasPicture = true;
     }
 
@@ -12670,6 +12676,38 @@ struct SendPartTimer
     ~SendPartTimer() { g_sendPartMs[part] += NowMs() - started; }
 };
 
+// The interface's picture as the window shows it: the window's own pictures
+// have the game's correction (gamma, brightness, contrast) from the engine, so
+// the interface laid over them (on the monitor, and on the cutscene screen)
+// gets the same, in a picture of the mod's own. With no correction set, or if
+// that picture cannot be made, the interface's own picture.
+static GLuint g_windowGuiTexture = 0, g_windowGuiFramebuffer = 0;
+static int g_windowGuiWidth = 0, g_windowGuiHeight = 0;
+static bool g_windowGuiFailed = false;
+
+static GLuint WindowInterfacePicture(GLuint guiTexture, GLuint guiFramebuffer, int width, int height)
+{
+    float gamma = 1.0f, brightness = 1.0f, contrast = 1.0f;
+    if (g_windowGuiFailed || width <= 0 || height <= 0 || !CameraPictureCorrection(gamma, brightness, contrast)) return guiTexture;
+    if (width != g_windowGuiWidth || height != g_windowGuiHeight)
+    {
+        GlDeleteTarget(g_windowGuiTexture, g_windowGuiFramebuffer);
+        g_windowGuiWidth = g_windowGuiHeight = 0;
+        if (!GlCreateTarget(width, height, g_windowGuiTexture, g_windowGuiFramebuffer))
+        {
+            g_windowGuiFailed = true;
+            Log("VR: the interface's corrected picture for the window could not be made: the monitor shows it uncorrected.");
+            return guiTexture;
+        }
+        g_windowGuiWidth = width;
+        g_windowGuiHeight = height;
+    }
+    if (!GlCopyToTextureCorrected(guiFramebuffer, 0, 0, width, height, g_windowGuiTexture, width, height, gamma, brightness,
+                                  contrast, true))
+        return guiTexture;
+    return g_windowGuiTexture;
+}
+
 // Second half of a headset frame: the game has finished drawing, so send the
 // picture to the headset.
 static void EndFrameWork()
@@ -12996,6 +13034,7 @@ static void EndFrameWork()
     bool haveGui = GlLoadFunctions() && GuiGetCaptured(g_frameSerialAtBegin, guiTexture, guiFramebuffer, guiWidth, guiHeight);
     double interfaceStarted = NowMs(); // (the interface's part of the sending, to the end of the cutscene screen's)
     if (haveGui) CaptureInterfaceOnFrameEnd(guiFramebuffer, guiWidth, guiHeight); // (after a capture: the interface's picture too)
+    GLuint windowGuiTexture = haveGui ? WindowInterfacePicture(guiTexture, guiFramebuffer, guiWidth, guiHeight) : 0;
     if (theatre)
     {
         // Lay the interface (subtitles and so on) over the game's picture (as
@@ -13016,7 +13055,7 @@ static void EndFrameWork()
             const float black[3] = { 0.0f, 0.0f, 0.0f };
             float gameFade = CameraFadeAlpha();
             if (gameFade > 0.004f) GlDrawSolid(0, width, height, black, gameFade);
-            if (haveGui) GlDrawOver(guiTexture, 0, width, height);
+            if (haveGui) GlDrawOver(windowGuiTexture, 0, width, height);
             // (Darkened while changing to or from the screen.)
             if (g_theatreDark > 0.004f) GlDrawSolid(0, width, height, black, g_theatreDark);
             if (!pausedOnScreen && g_frameShouldShow && CopyPieceToHeadset(g_screenPicture, kWholePicture, 0, width, height, "cutscene screen"))
@@ -13441,7 +13480,7 @@ static void EndFrameWork()
     if (GlLoadFunctions() && !theatre)
     {
         SendPartTimer timer(kSendPartMonitor);
-        ComposeMonitorPicture(eyePictureCopied && g_frameEye == 0, haveGui, guiTexture);
+        ComposeMonitorPicture(eyePictureCopied && g_frameEye == 0, haveGui, windowGuiTexture);
     }
 }
 
@@ -13828,6 +13867,42 @@ bool VrHeadsetIsOff()
     return g_headsetOff;
 }
 
+// Is the headset away from the game for more than a moment: taken off (its
+// session stopped), or showing the headset software's own menu (SteamVR's
+// dashboard, the Meta menu: the game still shown, without its input)? The menu
+// script then opens the game's menu (VRPauseWhileAway in MenuHandler.hps), as
+// VR games pause there. Not before the game first had the headset's input.
+bool VrHeadsetAway()
+{
+    static const double kAwayAfterMs = 250.0;
+    static double awaySinceMs = -1.0;
+    static bool everFocused = false, said = false;
+    if (g_sessionFocused) everFocused = true;
+    bool away = everFocused && g_state == VrState::Ready && (g_headsetOff || !g_sessionFocused);
+    if (!away)
+    {
+        if (said) Log("VR: the headset is back in use, with its input.");
+        awaySinceMs = -1.0;
+        said = false;
+        return false;
+    }
+    double nowMs = NowMs();
+    if (awaySinceMs < 0.0) awaySinceMs = nowMs;
+    if (nowMs - awaySinceMs < kAwayAfterMs) return false;
+    if (!said)
+    {
+        said = true;
+        Log("VR: the headset is away (%s): the game's menu is asked for.",
+            g_headsetOff ? "taken off" : "its own menu is open, the game has no input");
+    }
+    return true;
+}
+
+bool VrQuitAsked()
+{
+    return g_quitAsked;
+}
+
 bool VrHandsFrozen()
 {
     return g_handsFrozen;
@@ -13909,6 +13984,52 @@ void VrSetHandsFrozen(bool frozen)
     Log("VR: the hands are %s.", frozen ? "frozen where they are (the hand poses tool's \"Freeze my hands\")" : "following the controllers again");
 }
 
+// Are the game's scripts the mod's? BunkerVR Setup patches them, and a Steam
+// update or Steam's "Verify integrity of game files" puts the game's own back.
+// Without its scripts the mod cannot work (no hands, body or items), so VR is
+// not started then: the game runs as it is, and the player is told to run
+// Setup again. One file is enough to tell: Steam puts back every changed file
+// at once. A file that cannot be read counts as the mod's (the game itself
+// then says what is wrong).
+static bool GameScriptsAreTheMods()
+{
+    wchar_t path[MAX_PATH];
+    DWORD length = GetModuleFileNameW(nullptr, path, MAX_PATH);
+    while (length > 0 && path[length - 1] != L'\\') --length;
+    path[length] = L'\0';
+    static const wchar_t kScript[] = L"script\\custom\\modules\\MenuHandler.hps";
+    if (length + (DWORD)wcslen(kScript) + 1 >= MAX_PATH) return true;
+    lstrcatW(path, kScript);
+    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return true;
+    LARGE_INTEGER size = {};
+    bool theMods = true;
+    if (GetFileSizeEx(file, &size) && size.QuadPart > 0 && size.QuadPart < 16 * 1024 * 1024)
+    {
+        char* text = new char[(size_t)size.QuadPart + 1];
+        DWORD read = 0;
+        if (ReadFile(file, text, (DWORD)size.QuadPart, &read, nullptr) && read > 0)
+        {
+            text[read] = '\0';
+            theMods = strstr(text, "cVR_") != nullptr;
+        }
+        delete[] text;
+    }
+    CloseHandle(file);
+    return theMods;
+}
+
+static DWORD WINAPI ScriptsNotTheModsMessage(LPVOID)
+{
+    MessageBoxW(nullptr,
+                L"The game's own files have been put back, by a Steam update or by Steam's \"Verify integrity of game "
+                L"files\", so BunkerVR can't run and the game starts without VR.\n\n"
+                L"Run BunkerVR Setup again, then start the game. If Setup says the game was updated, BunkerVR needs an "
+                L"update too.\n\nTo play without VR, uninstall BunkerVR in Windows' Installed apps.",
+                L"BunkerVR", MB_OK | MB_ICONWARNING | MB_TOPMOST | MB_SETFOREGROUND);
+    return 0;
+}
+
 // First half of a headset frame: wait for the headset's timing and read where
 // the head will be, so the game can draw its next picture from there.
 static void BeginFrameWork()
@@ -13920,6 +14041,15 @@ static void BeginFrameWork()
         // confirmed the account.
         if (LicenceState() != 1) return;
 #endif
+        if (!GameScriptsAreTheMods())
+        {
+            g_state = VrState::Failed;
+            Log("VR: the game's scripts are its own, not BunkerVR's (a Steam update or a check of the game's files put "
+                "them back): VR is not started; the player is told to run BunkerVR Setup again.");
+            HANDLE thread = CreateThread(nullptr, 0, ScriptsNotTheModsMessage, nullptr, 0, nullptr);
+            if (thread) CloseHandle(thread);
+            return;
+        }
         if (Setup())
         {
             g_state = VrState::Ready;
@@ -14045,7 +14175,7 @@ static void BeginFrameWork()
     XrView eyes[2];
     g_framePoseValid = headValid && LocateEyes(frameState.predictedDisplayTime, eyes);
     if (headValid) g_frameHeadPose = head.pose;
-    UpdateStageFloor(frameState.predictedDisplayTime); // (before the re-center below, which may use it)
+    UpdateStageFloor(frameState.predictedDisplayTime, headValid, head.pose.position.y); // (before the re-center below, which may use it)
     if (headValid) UpdateMeasure(head.pose);
     if (headValid && g_haveReference) UpdateDuck(head.pose);
 

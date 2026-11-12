@@ -150,8 +150,8 @@ static bool KeyPressed(int key, bool& wasDown)
 //   F4    switches between the game's own arms and plain blocks for the hands.
 //   F5    makes thumbstick turning slower (by 15% per press).
 //   F6    makes thumbstick turning faster (by 15% per press).
-//   F7    makes the world look smaller (by 5% per press).
-//   F8    makes the world look bigger (by 5% per press).
+//   F7    makes the world look smaller (one 5% step of the World Scale row).
+//   F8    makes the world look bigger (one 5% step of the World Scale row).
 //   F9    saves what each eye sees to picture files (a testing aid).
 //   F11   opens the hand poses tool on the PC's screen in front, or brings it
 //         to the front (only while the game's window is in front:
@@ -183,8 +183,8 @@ static void CheckKeys()
     if (pressed[kF4]) VrToggleGameHands();
     if (pressed[kF5]) VrAdjustTurnSpeed(1.0f / 1.15f);
     if (pressed[kF6]) VrAdjustTurnSpeed(1.15f);
-    if (pressed[kF7]) VrAdjustWorldScale(1.05f);
-    if (pressed[kF8]) VrAdjustWorldScale(1.0f / 1.05f);
+    if (pressed[kF7]) VrStepWorldScale(1);
+    if (pressed[kF8]) VrStepWorldScale(-1);
     if (pressed[kEnd]) VrToggleBothEyes();
     if (pressed[kF11])
     {

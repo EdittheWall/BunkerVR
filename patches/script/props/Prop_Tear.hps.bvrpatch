@@ -1,9 +1,18 @@
 BunkerVR patch 1
 file script/props/Prop_Tear.hps
 from 29dfd700c863c638caa08a752dce991cd733301e83506ca30aec4aa92ca60368 25457
-to a63d6be7ab372d87b25132df18d766c862b48b76755b9258079499f84c957bd7 25679
+to 20b81f2089921cfeb5fd33ce0bc1cb44c372b2ef6ffcd8d7a3ea7eb186a22b0a 25997
 =65
 +		// BunkerVR: stored on the object itself for a hand's own hold (VRUpdateFreeHand
 +		// in PlayerBodyHandler.hps), which drags a heavy object as the grab does.
 +		mBaseObj.SetVarBool("BunkerVR_IsHeavy", mbGrab_IsHeavy);
+=619
++	// BunkerVR: the way the joint pointed to its body when the level was
++	// loaded: a ball joint's rest, which GetJointAngle measures its bend from
++	// (for a VR hand's pull: VRTearBend in PlayerState_Interact_Tear.hps).
++	void _Global_VRRestDir()
++	{
++		cScript_SetGlobalReturnVector3f(mvOnLoadJointToBody);
++	}
++	
 end

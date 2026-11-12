@@ -1,7 +1,7 @@
 BunkerVR patch 1
 file script/modules/PlayerBodyHandler.hps
 from e3bfe183959e10e4973f8350d62240ce83d26e8d7fcf482351712754acd42861 128394
-to 1b1b33086197ea4ba553765622b7f8bab0b06a7ae56038a927c971b0c0e63dfd 772201
+to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 =9
 +#include "custom/helpers/helper_bunkervr.hps"
 +#include "custom/helpers/helper_bunkervr_items.hps"
@@ -3096,21 +3096,8 @@ to 1b1b33086197ea4ba553765622b7f8bab0b06a7ae56038a927c971b0c0e63dfd 772201
 +			return;
 +		}
 +		
-+		cLuxPlayer@ pPlayer = cLux_GetPlayer();
-+		cCamera@ pCam = pPlayer !is null ? pPlayer.GetCamera() : null;
 +		cLuxMap@ pMap = cLux_GetCurrentMap();
-+		if(pCam is null || pMap is null) return;
-+		
-+		// Switched on in the mod's menu? (special roll value 7033, second number)
-+		float fRealRoll = pCam.GetRoll();
-+		pCam.SetRoll(7033.0f);
-+		cVector3f vAnswer = pCam.GetMatrix().GetTranslation();
-+		pCam.SetRoll(fRealRoll);
-+		if(vAnswer.x < 12344.0f || vAnswer.x > 12346.0f || vAnswer.y < 0.5f)
-+		{
-+			mbVRGunPushKnown = false;
-+			return;
-+		}
++		if(pMap is null) return;
 +		
 +		iLuxEntity@ pGun = pMap.GetEntityByName(Item_GetHeldEntity(eItemHandlerHand_Right));
 +		iPhysicsBody@ pMuzzle = pGun !is null ? pGun.GetBodyFromName("Body_BulletStart") : null;
@@ -5097,12 +5084,24 @@ to 1b1b33086197ea4ba553765622b7f8bab0b06a7ae56038a927c971b0c0e63dfd 772201
 +				if(fFrom >= fMove + fOff) return avTo;
 +				continue;
 +			}
-+			// Stopped where it is its thickness off the surface, square to it; the rest of the move along it.
++			// Stopped where it is its thickness off the surface, square to it; the rest of the move along it, as far as nothing
++			// else solid is in the way (into a corner, the slide would take it inside the other surface, and from inside the
++			// next moves pass through it: an end let go there would sink into the floor).
 +			float fStop = cMath_Clamp(fFrom + fHitAt - fOff / cMath_Max(fFacing, 0.2f), 0.0f, fMove);
 +			cVector3f vAt = avFrom + vDir * fStop;
 +			cVector3f vRest = avTo - vAt;
 +			abHit = true;
-+			return vAt + vRest - vNormal * cMath_Vector3Dot(vRest, vNormal);
++			cVector3f vSlide = vRest - vNormal * cMath_Vector3Dot(vRest, vNormal);
++			float fSlide = vSlide.Length();
++			if(fSlide < 0.00001f) return vAt;
++			cVector3f vSlideDir = vSlide / fSlide;
++			float fSlideHit;
++			cVector3f vSlideNormal;
++			iPhysicsBody@ pSlideHit = cLux_GetClosestBody(vAt, vSlideDir, fSlide + fOff, fSlideHit, vSlideNormal);
++			float fSlideFacing = -cMath_Vector3Dot(vSlideNormal, vSlideDir);
++			if(pSlideHit !is null && pSlideHit.IsCharacter() == false && pSlideHit.GetCollide() && fSlideFacing > 0.0f)
++				fSlide = cMath_Clamp(fSlideHit - fOff / cMath_Max(fSlideFacing, 0.2f), 0.0f, fSlide);
++			return vAt + vSlideDir * fSlide;
 +		}
 +		return avTo;
 +	}
@@ -10541,17 +10540,8 @@ to 1b1b33086197ea4ba553765622b7f8bab0b06a7ae56038a927c971b0c0e63dfd 772201
 +		cVector3f vHead = mtxHead.GetTranslation();
 +		cVector3f vNeck = vHead - cMath_MatrixMul3x3(mtxHead, cVector3f(0.0f, gfVRNeckToEyesUp, -gfVRNeckToEyesForward));
 +
-+		// Switched on and off in the VR menu (Moving page; option 31). Asked
-+		// twice a second. (A mod without that option answers 0: off.)
-+		mfVRFollowOptionWait -= afTimeStep;
-+		if(mfVRFollowOptionWait <= 0.0f)
-+		{
-+			mfVRFollowOptionWait = 0.5f;
-+			bool bOn = VRModOption(31) == 1;
-+			if(bOn != mbVRFollowOn) VRFollowNote(93, cVector3f(bOn ? 1.0f : 0.0f, 0.0f, 0.0f));
-+			mbVRFollowOn = bOn;
-+		}
-+		bool bFollow = mbVRFollowOn && Player_GetCrawling() == false;
++		// (Always, but not while crawling.)
++		bool bFollow = Player_GetCrawling() == false;
 +
 +		/////////////////////////////
 +		// The game's body goes under the neck, where it fits.
@@ -11840,8 +11830,6 @@ to 1b1b33086197ea4ba553765622b7f8bab0b06a7ae56038a927c971b0c0e63dfd 772201
 +	[nosave] float mfVRHeadBlackTime = 0.0f;		// BunkerVR: how long the view has been black for that
 +	[nosave] float mfVRFollowFar = 0.0f;			// BunkerVR: how far the neck was from the game's body at the last update (for the notes)
 +	[nosave] float mfVRFollowWall = -1.0f;		// BunkerVR: how far along the line from the body to the head a wall was (-1: none; for the notes)
-+	[nosave] float mfVRFollowOptionWait = 0.0f;	// BunkerVR: seconds until the option is asked again
-+	[nosave] bool mbVRFollowOn = false;			// BunkerVR: is following switched on (VR option 31)?
 +	[nosave] int mlVRFollowNotes = 0;			// BunkerVR: how many "the body moved" notes have been sent
 +	[nosave] int mlVRFollowNotesAll = 0;			// BunkerVR: how many follow notes have been sent in all
 +	[nosave] float mfVRLogicRateWait = 0.0f;		// BunkerVR: seconds until the logic rate is looked at again (VRMatchLogicRate)

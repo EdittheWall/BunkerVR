@@ -50,6 +50,7 @@ void CameraLogScriptTimings(unsigned long long frames);
 // too. The game's main thread.
 void CameraScriptTimeMark(int code);
 void CameraWatchSoundListener(); // logs the sound listener; test runs with a stand-in runtime only (g_standIn, vr.cpp)
+bool CameraInstallListenerHook(); // the sound's listener (the ears) put at the real head; writes its own line to the log
 void CameraScriptNote(int note, float a, float b, float c);
 
 // How many updates of the player script have finished since the game started
@@ -132,6 +133,17 @@ float CameraFadeAlpha();
 // the engine's fade every frame, not only the body script's news. False
 // (and logged) if it could not be found.
 bool CameraInstallFadeHook();
+
+// Hooks the engine's last drawing step, which applies the player's Gamma (and
+// the engine's Brightness and Contrast) to the frame on its way to the window,
+// so that CameraPictureCorrection has them. False (and logged) if it could not
+// be found.
+bool CameraInstallPictureCorrectionHook();
+
+// The correction the engine gives the window's picture: gamma (the colour is
+// raised to the power 1 / gamma), then contrast about the middle grey, then
+// brightness. True if it changes the picture at all.
+bool CameraPictureCorrection(float& gamma, float& brightness, float& contrast);
 
 // Is the game's loading screen up (as its menu script last reported)?
 bool CameraLoadingScreen();

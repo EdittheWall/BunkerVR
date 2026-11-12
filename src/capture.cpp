@@ -1,5 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -165,6 +166,30 @@ static double AverageDifference(const unsigned char* a, const unsigned char* b)
     return (double)total / kSampleCount;
 }
 
+// A picture read from the engine's own drawing target has not had the
+// engine's image correction yet (the player's gamma: CameraPictureCorrection).
+// This gives it the same, so that a capture shows what the eye was shown.
+static void CorrectAsTheWindow(unsigned char* bgra, int width, int height)
+{
+    float gamma = 1.0f, brightness = 1.0f, contrast = 1.0f;
+    if (!CameraPictureCorrection(gamma, brightness, contrast)) return;
+    unsigned char table[256];
+    for (int i = 0; i < 256; ++i)
+    {
+        float c = powf(i / 255.0f, 1.0f / gamma);
+        c = ((c - 0.5f) * contrast + 0.5f) * brightness;
+        c = c < 0.0f ? 0.0f : (c > 1.0f ? 1.0f : c);
+        table[i] = (unsigned char)(c * 255.0f + 0.5f);
+    }
+    size_t bytes = (size_t)width * (size_t)height * 4;
+    for (size_t i = 0; i < bytes; i += 4) // (blue, green, red; the alpha as it is)
+    {
+        bgra[i] = table[bgra[i]];
+        bgra[i + 1] = table[bgra[i + 1]];
+        bgra[i + 2] = table[bgra[i + 2]];
+    }
+}
+
 void CaptureOnFrameEnd(int eye, unsigned long long serial, int width, int height, unsigned int source)
 {
     if (g_stage == Stage::Idle)
@@ -191,6 +216,7 @@ void CaptureOnFrameEnd(int eye, unsigned long long serial, int width, int height
             g_stage = Stage::Idle;
             return;
         }
+        if (source != 0) CorrectAsTheWindow(g_pictures[eye], width, height);
 
         char label[96];
         snprintf(label, sizeof(label), "CAPTURE %d: %s eye picture, headset frame %llu", g_captureNumber,

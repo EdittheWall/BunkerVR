@@ -879,6 +879,130 @@ bool GlDrawOver(GLuint texture, GLuint targetFramebuffer, int width, int height)
 }
 
 // ---------------------------------------------------------------------------
+// The game's image correction (gamma, contrast, brightness)
+// ---------------------------------------------------------------------------
+// The engine corrects its finished frame on the way to the window, with the
+// same steps as its base_image_correction_frag shader. A copy of the frame
+// taken before that gets the correction here: copied into the bottom-left of
+// a picture of the mod's own (one for every copy, as large as the largest
+// so far), then drawn from there into the target, pixel for pixel.
+
+static GLuint g_correctProgram = 0;
+static GLuint g_correctVertexArray = 0;
+static GLint g_correctStepsLocation = -1, g_correctOriginLocation = -1;
+static bool g_correctFailed = false;
+static GLuint g_correctTexture = 0, g_correctFramebuffer = 0;
+static int g_correctWidth = 0, g_correctHeight = 0;
+
+static bool EnsureCorrectProgram()
+{
+    if (g_correctProgram != 0) return true;
+    if (g_correctFailed || glxUniform4f == nullptr) return false;
+
+    const char* vertexSource =
+        "#version 150\n"
+        "void main() {\n"
+        "    vec2 corner = vec2(gl_VertexID == 1 ? 3.0 : -1.0, gl_VertexID == 2 ? 3.0 : -1.0);\n"
+        "    gl_Position = vec4(corner, 0.0, 1.0);\n"
+        "}\n";
+    // steps: the power (1 / gamma), the contrast, the brightness, and 1 for a
+    // picture with its colours multiplied by how solid they are (the
+    // interface's), which is corrected as the colours themselves, then
+    // multiplied again; light beyond what a pixel covers (an added glow:
+    // color above its solidness) is kept as it is. origin: the target's pixel
+    // that reads the picture's first.
+    const char* fragmentSource =
+        "#version 150\n"
+        "uniform sampler2D picture;\n"
+        "uniform vec4 steps;\n"
+        "uniform vec3 origin;\n"
+        "out vec4 colour;\n"
+        "void main() {\n"
+        "    vec4 t = texelFetch(picture, ivec2(gl_FragCoord.xy - origin.xy), 0);\n"
+        "    bool multiplied = steps.w > 0.5;\n"
+        "    float solid = multiplied ? max(t.a, 1.0 / 255.0) : 1.0;\n"
+        "    vec3 c = pow(max(t.rgb / solid, vec3(0.0)), vec3(steps.x));\n"
+        "    c = clamp(((c - 0.5) * steps.y + 0.5) * steps.z, 0.0, 1.0);\n"
+        "    vec3 added = multiplied ? max(t.rgb - vec3(t.a), vec3(0.0)) : vec3(0.0);\n"
+        "    colour = vec4(multiplied ? c * t.a + added : c, t.a);\n"
+        "}\n";
+
+    GLuint program = BuildProgram(vertexSource, fragmentSource, "image correction");
+    if (program == 0)
+    {
+        g_correctFailed = true;
+        return false;
+    }
+
+    glxUseProgram(program);
+    glxUniform1i(glxGetUniformLocation(program, "picture"), 0); // read from texture slot 0
+    g_correctStepsLocation = glxGetUniformLocation(program, "steps");
+    g_correctOriginLocation = glxGetUniformLocation(program, "origin");
+    glxGenVertexArrays(1, &g_correctVertexArray);
+    g_correctProgram = program;
+    return true;
+}
+
+bool GlCopyCorrected(GLuint sourceFramebuffer, int sourceLeft, int sourceBottom, int sourceRight, int sourceTop,
+                     GLuint targetFramebuffer, int targetLeft, int targetBottom, int targetRight, int targetTop,
+                     float gamma, float brightness, float contrast, bool premultiplied)
+{
+    int width = targetRight - targetLeft, height = targetTop - targetBottom;
+    if (!g_loaded || g_correctFailed || width <= 0 || height <= 0 || !(gamma > 0.0f) || !EnsureCorrectProgram()) return false;
+    if (width > g_correctWidth || height > g_correctHeight)
+    {
+        int newWidth = width > g_correctWidth ? width : g_correctWidth;
+        int newHeight = height > g_correctHeight ? height : g_correctHeight;
+        GlDeleteTarget(g_correctTexture, g_correctFramebuffer);
+        g_correctWidth = g_correctHeight = 0;
+        if (!GlCreateTarget(newWidth, newHeight, g_correctTexture, g_correctFramebuffer))
+        {
+            g_correctFailed = true; // (not tried again every frame: the pictures are copied uncorrected from now on)
+            return false;
+        }
+        g_correctWidth = newWidth;
+        g_correctHeight = newHeight;
+    }
+    GlCopy(sourceFramebuffer, sourceLeft, sourceBottom, sourceRight, sourceTop, g_correctFramebuffer, 0, 0, width, height);
+
+    glxBindFramebuffer(GLX_DRAW_FRAMEBUFFER, targetFramebuffer);
+    glViewport(targetLeft, targetBottom, width, height);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    glDisable(GLX_FRAMEBUFFER_SRGB);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+
+    glxUseProgram(g_correctProgram);
+    glxUniform4f(g_correctStepsLocation, 1.0f / gamma, contrast, brightness, premultiplied ? 1.0f : 0.0f);
+    glxUniform3f(g_correctOriginLocation, (float)targetLeft, (float)targetBottom, 0.0f);
+    glxBindVertexArray(g_correctVertexArray);
+    glxActiveTexture(GLX_TEXTURE0);
+    glxBindSampler(0, 0);
+    glBindTexture(GL_TEXTURE_2D, g_correctTexture);
+
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    return true; // the caller's GlStateGuard puts every setting back
+}
+
+bool GlCopyToTextureCorrected(GLuint sourceFramebuffer, int sourceLeft, int sourceBottom, int sourceRight, int sourceTop,
+                              GLuint texture, int textureWidth, int textureHeight, float gamma, float brightness, float contrast,
+                              bool premultiplied)
+{
+    if (!g_loaded) return false;
+    if (g_copyFramebuffer == 0) glxGenFramebuffers(1, &g_copyFramebuffer);
+    glxBindFramebuffer(GLX_DRAW_FRAMEBUFFER, g_copyFramebuffer);
+    glxFramebufferTexture2D(GLX_DRAW_FRAMEBUFFER, GLX_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+    bool drawn = GlCopyCorrected(sourceFramebuffer, sourceLeft, sourceBottom, sourceRight, sourceTop, g_copyFramebuffer, 0, 0,
+                                 textureWidth, textureHeight, gamma, brightness, contrast, premultiplied);
+    glxBindFramebuffer(GLX_DRAW_FRAMEBUFFER, g_copyFramebuffer);
+    glxFramebufferTexture2D(GLX_DRAW_FRAMEBUFFER, GLX_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+    return drawn;
+}
+
+// ---------------------------------------------------------------------------
 // Screen effects (blood and dark edges across the face)
 // ---------------------------------------------------------------------------
 

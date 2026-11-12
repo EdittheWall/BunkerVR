@@ -7,9 +7,17 @@ struct Settings
 {
     // How big you are compared with the game's world. 1.0 means one real meter
     // of head movement (and your real eye spacing) equals one meter in the
-    // game. Bigger numbers make the world look smaller. ("Calibrate Height"
-    // sets it from your eye height: see eyeHeight.)
+    // game. Bigger numbers make the world look smaller. It is always
+    // worldScaleCalibrated with the player's own adjustment applied
+    // (sizeStep): use SetWorldScaleCalibrated and SetSizeStep to change it.
     float worldScale = 1.0f;
+
+    // The world scale that calibrating the height sets: it makes the player's
+    // eyes as high in the game as the soldier's (see eyeHeight).
+    float worldScaleCalibrated = 1.0f;
+
+    // The player's adjustment to it, in 5% steps: -2 to +2, 0 = as calibrated.
+    int sizeStep = 0;
 
     // The interface panel (HUD and menus) floating in front of your face:
     // how far away it is and how wide it is, in meters.
@@ -58,7 +66,6 @@ struct Settings
     // The holster: squeeze the right grip at your right hip to draw the gun or
     // put it away. Where the hip is, measured from your head in real meters
     // (to the right, down, forwards), and how big the area is (radius).
-    bool holster = true;
     float holsterRight = 0.20f;
     float holsterDown = 0.50f;
     float holsterForward = 0.0f;
@@ -84,17 +91,11 @@ struct Settings
     // How much the elbows move with the hands (0 = a fixed rule, 1 = normal).
     float elbowMove = 1.0f;
 
-    // The gun pushes loose things it touches.
-    bool gunPush = true;
-
     // Cutscenes: 0 = on a large flat screen in a dark room, 1 = through your
     // own eyes (the game moves you; you can still look around). Unused:
     // cutscenes are always on the screen (see cutsceneView, below). Kept so
     // the settings file keeps its cutscene_mode line.
     int cutsceneMode = 0;
-
-    // Pushing the right stick up jumps.
-    bool jumpStick = true;
 
     // Blood, red edges and dark edges drawn across both eyes when hurt, and the
     // gas mask's view when it is on.
@@ -108,12 +109,6 @@ struct Settings
     // holding it (twisting the wrist, as on a real handle). Off: taking hold
     // of the handle is enough.
     bool doorTurn = true;
-
-    // The game's own body (what bumps into walls and doors) follows the
-    // player's real steps and leaning, where it fits; the view darkens when
-    // the head goes into a wall (PlayerBodyHandler.hps, VRFollowHead). Off:
-    // it moves only with the stick.
-    bool bodyFollow = true;
 
     // The game's own logic (physics, scripts, AI) runs as many times a second
     // as the headset shows pictures, instead of the monitor's rate the game
@@ -197,28 +192,14 @@ struct Settings
     // Settings file only (eye_position_drawing).
     bool eyePositionForDrawing = true;
 
-    // ---- The revolver
-
-    // Where bullets come from while the revolver is open: true = a pouch on
-    // the left hip (squeeze the left hand there to take one), false = any
-    // squeeze of the left hand away from the gun.
-    bool ammoPouch = true;
-
-    // Where the bullet count is shown: 0 = at the pouch on the left hip (the
-    // spare bullets, while the revolver is out and the left hand is near, or
-    // the revolver is open), 1 = above the open cylinder (loaded / spare).
-    int ammoCounter = 0;
-
     // ---- Accessibility
 
     // How strongly the controllers buzz: 0 = not at all, 1 = as designed.
     float buzzScale = 1.0f;
 
     // Bandages and medkits are always used by wrapping them round the left
-    // forearm. A heal_mode line in an older settings file is ignored.
-
-    // How many times the bandage must go round the arm (1 to 3, default 3).
-    int bandageTurns = 3;
+    // forearm three times. Older settings files' heal_mode and bandage_turns
+    // lines are ignored.
 
     // The hints on the objects (hints.h): 0 each kind until it has
     // been used a few times ("Until Learned"), 1 always, 2 never.
@@ -228,6 +209,12 @@ struct Settings
     // 1 normal (the labels' 40 cm picture, letters about 1.3 cm), 2 large (1.25), 3 very large (1.5).
     // Saved as hint_size; the Accessibility page.
     int hintSize = 1;
+
+    // The game's own graphics settings set once to the mod's recommended ones for the headset, lower than
+    // the game's defaults (VRRecommendedGraphics in MenuHandler.hps, at the first start in the headset;
+    // cVR_RecommendedGraphicsOnce). Never again once done, whatever the player sets afterwards. Saved as
+    // graphics_recommended.
+    bool graphicsRecommended = false;
 
     // How thick the left forearm is taken to be when the bandage is drawn
     // wound round it: meters from the middle of the arm to where the cloth
@@ -256,11 +243,7 @@ struct Settings
     float gunTip = -10.0f;
     float gunLean = -29.0f;
 
-    // ---- Hands and menus
-
-    // Empty hands are posed from the controllers' finger sensors (open hand,
-    // fist, pointing, thumbs up) instead of on top of the game's animation.
-    bool handPoses = true;
+    // ---- Menus
 
     // How much the menu pointer is steadied against the hand's tremble:
     // 0 = not at all, 0.9 = a great deal. Quick moves always follow at once.
@@ -321,7 +304,7 @@ struct Settings
     float pullReach = 1.5f;
 
     // The drawn body's own sway in the view. The view hangs on the body's
-    // eyes, which its walking and standing animations move: 0 reduced
+    // eyes, which its walking and standing animations move: 0 the default
     // (the steps' bob cut to about a quarter, the standing sway taken out),
     // 1 none (the steps' bob taken out as well). The game's full motion is
     // not offered: a 2 in the file is taken as 0. The body script reads it
@@ -342,8 +325,8 @@ struct Settings
 
     // Your real eye height above the floor, standing up straight, in real
     // meters ("Calibrate Height" on the Player page; 0 = not measured).
-    // Measuring sets the world scale from it: the soldier's eye height
-    // (1.838 m) over yours, which makes your real body his size. And
+    // Measuring sets the calibrated world scale from it: the soldier's eye
+    // height (1.838 m) over yours, which makes your real body his size. And
     // playing standing, the view's height is put at it above the floor at
     // each re-center, so the game's floor is where your real floor is
     // (StandingHeightFromFloor in vr.cpp).
@@ -418,6 +401,11 @@ struct Settings
 Settings& GetSettings();
 void LoadSettings();
 void SaveSettings();
+
+// The world scale's two parts (see Settings::worldScale): each sets its own
+// and works out worldScale again. Neither saves.
+void SetWorldScaleCalibrated(float scale);
+void SetSizeStep(int step);
 
 // For benchmark runs (the remote "set" command in vr.cpp): one of the drawing's speed switches, "name=0" or "name=1"
 // (right_eye_shadows, right_eye_no_wait, right_eye_earlier_queries), changed for this run and not saved.

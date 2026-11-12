@@ -41,6 +41,8 @@ static DWORD WINAPI SetupThread(LPVOID)
         Log("ERROR: could not install the interface hook. The HUD and menus will stay drawn on the 3D picture.");
 
     CameraInstallFadeHook(); // the game's fades to black as the engine has them; writes its own line to the log
+    CameraInstallPictureCorrectionHook(); // the player's gamma for the headset's pictures; writes its own line to the log
+    CameraInstallListenerHook(); // the sound's listener at the real head; writes its own line to the log
     EngineTimeInstall(); // the game's own update timed by part; writes its own line to the log
 
     if (!InstallSceneHook())

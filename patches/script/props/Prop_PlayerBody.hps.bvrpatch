@@ -1,7 +1,7 @@
 BunkerVR patch 1
 file script/props/Prop_PlayerBody.hps
 from ba36bdf8d3d2fa9de890ddce0c8df64ccd18782dc68bb4da635903418c3b6dff 20897
-to 0ed26125c84ac6e80f30dd970354ca026a827de303caf028c0ee99ec64fe6696 425677
+to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 =7
 +#include "custom/helpers/helper_bunkervr_shotgun.hps" // BunkerVR: the shotgun worked by hand
 +#include "custom/helpers/helper_bunkervr_hints.hps" // BunkerVR: hints shown on objects
@@ -2045,6 +2045,14 @@ to 0ed26125c84ac6e80f30dd970354ca026a827de303caf028c0ee99ec64fe6696 425677
 +
 +		iPhysicsBody@ pBody = null;
 +		if(mvVRTouchBody[alHand] != tID_Invalid) @pBody = cLux_ID_Body(mvVRTouchBody[alHand]);
++		// (Torn off its joint since it was touched, it is a loose thing now:
++		// let go of, as loose things are left alone.)
++		if(pBody !is null && VRBodyOwnJoint(pBody) is null)
++		{
++			VRDoorNote(alHand, pBody, "lets go of", "it is off its joint");
++			mvVRTouchBody[alHand] = tID_Invalid;
++			return cVector3f(0.0f);
++		}
 +		if(pBody is null)
 +		{
 +			mvVRTouchBody[alHand] = tID_Invalid;
@@ -2119,10 +2127,17 @@ to 0ed26125c84ac6e80f30dd970354ca026a827de303caf028c0ee99ec64fe6696 425677
 +		bool bOncoming = false;
 +		cVector3f vMove = avPalm - avLast;
 +		float fMove = vMove.Length();
++		// (Neither way in the first 0.4 seconds after the hand let go of a
++		// door's handle or a drawer's, a plank, or anything else it held: it is
++		// still right in front of what it pulled, which would have stopped on
++		// it; and its path then starts where it was drawn holding it, on the
++		// thing itself, so the thing's far side would be found, and the hand
++		// kept on that, behind the thing, the arm pulled out to the real hand.)
++		bool bJustLetGo = mfVRPressFreeFor[alHand] <= 0.4f;
 +		// (Not along the palm's path while it is still, under half a millimeter
 +		// a frame (4.5 cm a second), or across a jump: the view moved. A larger
 +		// "still" lets a hand reaching slowly for a door go through it.)
-+		if(fMove >= 0.0005f && fMove <= 0.5f)
++		if(fMove >= 0.0005f && fMove <= 0.5f && bJustLetGo == false)
 +		{
 +			cVector3f vDir = vMove * (1.0f / fMove);
 +			cVector3f vStart = avLast - vDir * 0.03f;
@@ -2136,10 +2151,7 @@ to 0ed26125c84ac6e80f30dd970354ca026a827de303caf028c0ee99ec64fe6696 425677
 +				vHitAt = vStart + vDir * fHit;
 +			}
 +		}
-+		// (Not in the first 0.4 seconds after the hand let go of a door's
-+		// handle or a drawer's, or anything else it held: it is still right in
-+		// front of what it pulled, which would have stopped on it.)
-+		if(pBody is null && mfVRPressFreeFor[alHand] > 0.4f)
++		if(pBody is null && bJustLetGo == false)
 +		{
 +			cVector3f vPalmSpeed = fMove <= 0.3f ? vMove * (1.0f / mfVRArmStep) : cVector3f(0.0f);
 +			@pBody = VRPushedBody(VRFindOncoming(avPalm, vPalmSpeed, vHitAt, vHitOut));
@@ -2214,14 +2226,14 @@ to 0ed26125c84ac6e80f30dd970354ca026a827de303caf028c0ee99ec64fe6696 425677
 +	// BunkerVR: the joint a body turns or slides on: the one it hangs from
 +	// (as its child), not one that hangs from it (on a door with a handle,
 +	// the body's first joint can be the handle's own little hinge). Null:
-+	// none.
++	// none (a broken joint, as a plank's torn off, is none).
 +	iPhysicsJoint@ VRBodyOwnJoint(iPhysicsBody@ apBody)
 +	{
 +		if(apBody is null) return null;
 +		for(int i = 0; i < apBody.GetJointNum(); i++)
 +		{
 +			iPhysicsJoint@ pJoint = apBody.GetJoint(i);
-+			if(pJoint !is null && pJoint.GetChildBody() is apBody) return pJoint;
++			if(pJoint !is null && pJoint.IsBroken() == false && pJoint.GetChildBody() is apBody) return pJoint;
 +		}
 +		return null;
 +	}

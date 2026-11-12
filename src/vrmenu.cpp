@@ -315,7 +315,8 @@ static void BuildPages()
     // --- below says how each is going.
     AddSwitch(kPagePlayer, "Play Mode", &s.seated, "Standing", "Seated", kMenuActionSeatedChanged);
     AddNumber(kPagePlayer, "Height Offset", &s.heightOffset, 0.025f, 0, -0.6f, 0.6f, "%+.1f cm", 100.0f);
-    AddNumber(kPagePlayer, "World Scale", &s.worldScale, 0.02f, 0, 0.5f, 2.5f, "%.0f %%", 100.0f);
+    AddNumber(kPagePlayer, "World Scale (Calibrated)", &s.worldScaleCalibrated, 0.02f, 0, 0.5f, 2.5f, "%.0f %%", 100.0f,
+              kMenuActionWorldScaleMoved);
     AddButton(kPagePlayer, "Recenter View (or hold Y)", kMenuActionRecenter);
     AddButton(kPagePlayer, "Open Game Menu (pause)", kMenuActionGameMenu); // (on SteamVR the left menu button is not the game's)
     AddButton(kPagePlayer, "Calibrate Height (stand up straight, then pull a trigger)", kMenuActionMeasureSize);
@@ -349,7 +350,7 @@ static void BuildPages()
     // guidelines group the comfort options. Its name says what it darkens, since in a Meta survey 40% of MR
     // and VR players didn't recognize the term "vignette".)
     AddCycle4(kPageComfort, "Movement Vignette (Darkens Edges)", &s.moveVignette, "Off", "Weak", "Medium", "Strong");
-    AddCycle2(kPageComfort, "Head Bob", &s.viewSway, "Reduced", "Off"); // (see Settings::viewSway)
+    AddCycle2(kPageComfort, "Head Bob", &s.viewSway, "Default", "Off"); // (see Settings::viewSway)
     AddCycle(kPageComfort, "Knockdown and Death View", &s.roughView, "No Comfort", "Cutscene Screen", "Vignette"); // (see Settings::roughView)
     AddCycle4(kPageComfort, "Knockdown Vignette Strength", &s.vignetteStrength, "None", "Weak", "Medium", "Strong"); // ("Knockdown" tells it from the movement vignette)
     // (There is no cutscene view choice: the game's cutscenes are always on the cinema screen,
@@ -359,18 +360,11 @@ static void BuildPages()
     // --- Movement
     AddChoice(kPageMovement, "Movement Direction", &s.moveDir, "Head", "Left Controller");
     AddSwitch(kPageMovement, "Movement Speed", &s.analogWalk, "Always Full", "Analog");
-    AddSwitch(kPageMovement, "Jump (Right Thumbstick Up)", &s.jumpStick, "Off", "On");
     AddSwitch(kPageMovement, "Physical Crouch", &s.duckCrouch, "Off", "On");
     AddNumber(kPageMovement, "Crouch Depth: Seated", &s.duckSeated, 0.01f, 0, 0.05f, 0.40f, "%.0f cm", 100.0f);
     AddNumber(kPageMovement, "Crouch Depth: Standing", &s.duckStanding, 0.02f, 0, 0.10f, 0.80f, "%.0f cm", 100.0f);
-    AddSwitch(kPageMovement, "Room-Scale Movement", &s.bodyFollow, "Off", "On");
 
-    // --- Hands: the hands, the weapons and where their ammunition comes from.
-    AddSwitch(kPageGun, "Finger Tracking", &s.handPoses, "Off", "On");
-    AddSwitch(kPageGun, "Weapon Draw", &s.holster, "A Button", "Hip Holster");
-    AddSwitch(kPageGun, "Ammo Pickup", &s.ammoPouch, "Anywhere", "Hip Pouch");
-    AddChoice(kPageGun, "Ammo Counter", &s.ammoCounter, "On Ammo Pouch", "On Weapon");
-    AddSwitch(kPageGun, "Weapon Collision", &s.gunPush, "Off", "On");
+    // --- Hands: how the weapon sits in the hand, and the elbows.
     AddNumber(kPageGun, "Weapon Yaw Offset (+ right)", &s.gunTurn, 1.0f, 0, -30.0f, 30.0f, "%+.0f deg");
     AddNumber(kPageGun, "Weapon Pitch Offset (+ up)", &s.gunTip, 1.0f, 0, -30.0f, 30.0f, "%+.0f deg");
     AddNumber(kPageGun, "Weapon Roll Offset (+ right)", &s.gunLean, 1.0f, 0, -45.0f, 45.0f, "%+.0f deg");
@@ -951,7 +945,7 @@ void VrMenuSetGameMenuButton(bool works)
 // right stick up jumps; `pull`: Distance Grab is on as the player plays now.
 // (Holding Y re-centers on every headset; the left menu button pauses only
 // where it is the game's, and on SteamVR the Player tab's Open Game Menu does.)
-static int ControlLines(int part, bool holster, bool jump, bool pull, ControlLine* out)
+static int ControlLines(int part, bool pull, ControlLine* out)
 {
     int n = 0;
     auto add = [&](const char* control, const char* action) {
@@ -973,17 +967,16 @@ static int ControlLines(int part, bool holster, bool jump, bool pull, ControlLin
         break;
     case 1:
         add("Stick", "Turn");
-        add("Stick up", jump ? "Jump, stand up" : "Stand up");
+        add("Stick up", "Jump, stand up");
         add("Stick down", "Crouch");
         add("Click stick", "Flashlight");
         add("Grip, Trigger", "Grab, use, fire");
-        if (!holster) add("A", "Draw revolver");
         add("Hold A, flick", "Open revolver");
         add("B", "Inventory");
         add("Hold B", "Check injuries");
         break;
     case 2:
-        if (holster) add("Right hip", "Revolver");
+        add("Right hip", "Revolver");
         add("Left hip", "Bullets, shells");
         add("Left chest", "Flashlight");
         add("Right chest", "Stored item"); // (the item slot for any one item, the game's hotkey 1)
@@ -1015,7 +1008,7 @@ static void DrawControlsPage()
     static const char* const kHeads[4] = { "LEFT CONTROLLER", "RIGHT CONTROLLER", "ON YOUR BODY", "WITH YOUR HANDS" };
     ControlLine lines[4][12];
     int counts[4];
-    for (int part = 0; part < 4; ++part) counts[part] = ControlLines(part, S().holster, S().jumpStick, ControlsPullOn(), lines[part]);
+    for (int part = 0; part < 4; ++part) counts[part] = ControlLines(part, ControlsPullOn(), lines[part]);
     int controllerRows = counts[0] > counts[1] ? counts[0] : counts[1];
     int tops[2] = { kRowsTop + 6, kRowsTop + 6 + (controllerRows + 1) * kControlsRow + 14 };
     for (int part = 0; part < 4; ++part)
@@ -1189,11 +1182,11 @@ int VrMenuLayoutProblems(void (*report)(const char* what))
     }
     // The Controls page: every line, with every choice of the
     // settings it follows, in its room; all of them above the footer.
-    for (int variant = 0; variant < 8; ++variant)
+    for (int variant = 0; variant < 2; ++variant)
     {
         ControlLine lines[4][12];
         int counts[4];
-        for (int part = 0; part < 4; ++part) counts[part] = ControlLines(part, (variant & 1) != 0, (variant & 2) != 0, (variant & 4) != 0, lines[part]);
+        for (int part = 0; part < 4; ++part) counts[part] = ControlLines(part, variant != 0, lines[part]);
         for (int part = 0; part < 4; ++part)
             for (int i = 0; i < counts[part]; ++i)
             {

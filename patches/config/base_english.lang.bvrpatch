@@ -1,20 +1,18 @@
 BunkerVR patch 1
 file config/base_english.lang
 from 7114e42bd563b81888592c60dd1103408cd675c7230994857cb58f3d2cdc1ed6 57782
-to 52a5b740ecc24e9eaa9ec01a0a5ac02e32ef182fe4c4505f3f5277c163c56aa6 70253
+to 284d46dc9c4ddfb2c1b6f0ae5be43392902d7770fe916f7eaab305515aa3a36d 67363
 =460
 +	<Entry Name="Options_VR">VR</Entry>
 +	<Entry Name="VRMenu">VR SETTINGS</Entry>
 +	<Entry Name="VR_Player">PLAYER</Entry>
-+	<Entry Name="VR_Player_Info">Play mode, height offset, world scale and recentering the view.</Entry>
++	<Entry Name="VR_Player_Info">Play mode, height offset and world scale.</Entry>
 +	<Entry Name="VR_Comfort">COMFORT</Entry>
 +	<Entry Name="VR_Comfort_Info">Turning, head bob, and how knockdowns and cutscenes are shown.</Entry>
 +	<Entry Name="VR_Movement">MOVEMENT</Entry>
-+	<Entry Name="VR_Movement_Info">Movement direction and speed, jumping, crouching and room-scale movement.</Entry>
-+	<Entry Name="VR_Hands">HANDS</Entry>
-+	<Entry Name="VR_Hands_Info">Finger tracking, drawing your weapon, ammunition and weapon collision.</Entry>
++	<Entry Name="VR_Movement_Info">Movement direction and speed, and crouching.</Entry>
 +	<Entry Name="VR_Access">ACCESSIBILITY</Entry>
-+	<Entry Name="VR_Access_Info">Interaction hints, bandage wraps, throw assist, grab reach, controller vibration and menu pointer smoothing.</Entry>
++	<Entry Name="VR_Access_Info">Interaction hints, throw assist, grab reach, controller vibration and menu pointer smoothing.</Entry>
 +	<Entry Name="VR_System">SYSTEM</Entry>
 +	<Entry Name="VR_System_Info">Menu distance and size, the spectator view on your monitor, and keyboard and mouse input.</Entry>
 +	<Entry Name="VR_MeasureAgain">RECALIBRATE</Entry>
@@ -37,14 +35,7 @@ to 52a5b740ecc24e9eaa9ec01a0a5ac02e32ef182fe4c4505f3f5277c163c56aa6 70253
 +	<Entry Name="VR_Height7">+15 cm</Entry>
 +	<Entry Name="VR_Height8">+20 cm</Entry>
 +	<Entry Name="VR_Size">World Scale</Entry>
-+	<Entry Name="VR_Size_Info">Your size relative to the game world. Above 100% you are larger, so the world appears smaller. Calibrating your height sets this for you.</Entry>
-+	<Entry Name="VR_Size80">80%</Entry>
-+	<Entry Name="VR_Size90">90%</Entry>
-+	<Entry Name="VR_Size100">100%</Entry>
-+	<Entry Name="VR_Size110">110%</Entry>
-+	<Entry Name="VR_Size120">120%</Entry>
-+	<Entry Name="VR_Recentre">Recenter View</Entry>
-+	<Entry Name="VR_Recentre_Info">Sit or stand comfortably and look straight ahead, then press either arrow on this row. Your view is recentered facing forward, at the correct height.</Entry>
++	<Entry Name="VR_Size_Info">Your size relative to the game world. Calibrating your height sets it (the middle choice); a higher percentage makes you larger, so the world appears smaller.</Entry>
 +	<Entry Name="VR_PressArrow">Press Either Arrow</Entry>
 +	<Entry Name="VR_Done">Done</Entry>
 +	<Entry Name="VR_Turning">Turn Style</Entry>
@@ -66,8 +57,8 @@ to 52a5b740ecc24e9eaa9ec01a0a5ac02e32ef182fe4c4505f3f5277c163c56aa6 70253
 +	<Entry Name="VR_MoveVignette">Movement Vignette</Entry>
 +	<Entry Name="VR_MoveVignette_Info">Darkens the edges of your view while the thumbsticks move or turn you, which helps many players avoid motion sickness. Your own movement is never darkened. Off, Weak, Medium or Strong.</Entry>
 +	<Entry Name="VR_HeadBob">Head Bob</Entry>
-+	<Entry Name="VR_HeadBob_Info">Camera motion from walking and breathing. Reduced keeps a little of it, Off removes it.</Entry>
-+	<Entry Name="VR_Reduced">Reduced</Entry>
++	<Entry Name="VR_HeadBob_Info">Camera motion from walking and breathing. Default keeps a little of it, Off removes it.</Entry>
++	<Entry Name="VR_Default">Default</Entry>
 +	<Entry Name="VR_Full">Full</Entry>
 +	<Entry Name="VR_Knockdown">Knockdown View</Entry>
 +	<Entry Name="VR_Knockdown_Info">How knockdowns, falls and the Beast's kills are shown. No Comfort: through your own eyes as the game moves you. Cutscene Screen: on a large screen. Vignette: through your own eyes, the edges of your view darkened while you are thrown about.</Entry>
@@ -96,38 +87,12 @@ to 52a5b740ecc24e9eaa9ec01a0a5ac02e32ef182fe4c4505f3f5277c163c56aa6 70253
 +	<Entry Name="VR_WalkSpeed_Info">Analog: a small push of the thumbstick moves you slowly and a full push at full speed. Always Full: any push moves you at full speed.</Entry>
 +	<Entry Name="VR_AlwaysFull">Always Full</Entry>
 +	<Entry Name="VR_FollowsStick">Analog</Entry>
-+	<Entry Name="VR_Jump">Jump</Entry>
-+	<Entry Name="VR_Jump_Info">Push the right thumbstick up to jump.</Entry>
-+	<Entry Name="VR_StickUp">Thumbstick Up</Entry>
 +	<Entry Name="VR_DuckCrouch">Physical Crouch</Entry>
 +	<Entry Name="VR_DuckCrouch_Info">Crouch in the game by crouching in real life. Pulling the right thumbstick down always crouches as well, and pushing it up stands you back up.</Entry>
 +	<Entry Name="VR_DuckDepth">Crouch Depth</Entry>
 +	<Entry Name="VR_DuckDepth_Info">How far your head must lower before you crouch in the game. Choose Shallow if crouching is difficult for you.</Entry>
 +	<Entry Name="VR_ALittle">Shallow</Entry>
 +	<Entry Name="VR_ALot">Deep</Entry>
-+	<Entry Name="VR_RoomScale">Room-Scale Movement</Entry>
-+	<Entry Name="VR_RoomScale_Info">Your character follows your real steps and leaning within your play area, and your view darkens if your head moves into a wall. Off: you move only with the thumbstick.</Entry>
-+	<Entry Name="VR_HandPoses">Finger Tracking</Entry>
-+	<Entry Name="VR_HandPoses_Info">Empty hands follow your fingers on the controller: open hand, point, fist or thumbs up.</Entry>
-+	<Entry Name="VR_GunDraw">Weapon Draw</Entry>
-+	<Entry Name="VR_GunDraw_Info">Hip Holster: grip at your right hip to draw the revolver. A Button: press A. Either way, hold A and flick the revolver to open its cylinder.</Entry>
-+	<Entry Name="VR_Holster">Hip Holster</Entry>
-+	<Entry Name="VR_AButton">A Button</Entry>
-+	<Entry Name="VR_BulletsFrom">Ammo Pickup</Entry>
-+	<Entry Name="VR_BulletsFrom_Info">Hip Pouch: with the revolver open, grip with your left hand at your left hip to take a bullet. Anywhere: grip with your left hand anywhere away from the weapon, which is easier when seated or with limited reach.</Entry>
-+	<Entry Name="VR_Pouch">Hip Pouch</Entry>
-+	<Entry Name="VR_AnySqueeze">Anywhere</Entry>
-+	<Entry Name="VR_BulletCount">Ammo Counter</Entry>
-+	<Entry Name="VR_BulletCount_Info">On Ammo Pouch: your spare ammunition is shown at your left hip while the revolver is open or your hand is near. On Weapon: loaded and spare rounds are shown above the open cylinder.</Entry>
-+	<Entry Name="VR_AtPouch">On Ammo Pouch</Entry>
-+	<Entry Name="VR_AboveCylinder">On Weapon</Entry>
-+	<Entry Name="VR_GunPush">Weapon Collision</Entry>
-+	<Entry Name="VR_GunPush_Info">Your weapon collides with objects instead of passing through them.</Entry>
-+	<Entry Name="VR_BandageTurns">Bandage Wraps</Entry>
-+	<Entry Name="VR_BandageTurns_Info">How many times the bandage must go around your arm to heal you. Pull the bandage out with your left hand, then wrap it around your left forearm with your right hand. This is the only way to heal.</Entry>
-+	<Entry Name="VR_One">1</Entry>
-+	<Entry Name="VR_Two">2</Entry>
-+	<Entry Name="VR_Three">3</Entry>
 +	<Entry Name="VR_ThrowHelp">Throw Assist</Entry>
 +	<Entry Name="VR_ThrowHelp_Info">Adds speed to thrown objects, so a gentle throw still travels far. Useful when seated or if a full swing is difficult.</Entry>
 +	<Entry Name="VR_Light">Low</Entry>

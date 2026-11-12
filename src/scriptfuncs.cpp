@@ -14,6 +14,7 @@
 #include "import_hook.h"
 #include "log.h"
 #include "pattern.h"
+#include "settings.h"
 #include "sight.h"
 #include "testlist.h"
 #include "vr.h"
@@ -568,6 +569,38 @@ static void ScriptHurt(float amount, int kind, float x, float y, float z)
     VrHurt(amount, kind, x, y, z);
 }
 
+// bool cVR_RecommendedGraphicsOnce(): are the game's graphics settings to be
+// set to the mod's recommended ones for the headset now? True once ever (the
+// first start in the headset); the settings file then remembers it
+// (graphics_recommended), and the player's own graphics settings are never
+// touched again. The menu script asks (VRRecommendedGraphics in
+// MenuHandler.hps).
+static bool ScriptRecommendedGraphicsOnce()
+{
+    Settings& s = GetSettings();
+    if (s.graphicsRecommended) return false;
+    s.graphicsRecommended = true;
+    SaveSettings();
+    return true;
+}
+
+// bool cVR_HeadsetAway(): is the headset taken off, or showing its own menu
+// (the game without the controllers), for more than a moment? The menu script
+// then pauses the game as its menu button does (VRPauseWhileAway in
+// MenuHandler.hps).
+static bool ScriptHeadsetAway()
+{
+    return VrHeadsetAway();
+}
+
+// bool cVR_QuitAsked(): has the headset software asked the game to close (its
+// own Quit, or it closing)? The menu script then exits the game as its Exit
+// button does (VRQuitWhenAsked in MenuHandler.hps).
+static bool ScriptQuitAsked()
+{
+    return VrQuitAsked();
+}
+
 struct ScriptFunction
 {
     const char* declaration;
@@ -614,6 +647,9 @@ static const ScriptFunction kFunctions[] = {
     { "void cVR_BeastSight(bool abOn, float afUp)", (void*)&ScriptBeastSight },
     { "bool cVR_StudioCardHolds()", (void*)&ScriptStudioCardHolds },
     { "void cVR_Hurt(float afAmount, int alKind, float afX, float afY, float afZ)", (void*)&ScriptHurt },
+    { "bool cVR_RecommendedGraphicsOnce()", (void*)&ScriptRecommendedGraphicsOnce },
+    { "bool cVR_HeadsetAway()", (void*)&ScriptHeadsetAway },
+    { "bool cVR_QuitAsked()", (void*)&ScriptQuitAsked },
 };
 
 // ---------------------------------------------------------------------------

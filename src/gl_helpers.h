@@ -74,6 +74,20 @@ void GlCopy(GLuint sourceFramebuffer, int sourceLeft, int sourceBottom, int sour
 void GlCopyToTexture(GLuint sourceFramebuffer, int sourceLeft, int sourceBottom, int sourceRight, int sourceTop,
                      GLuint texture, int textureWidth, int textureHeight);
 
+// GlCopy and GlCopyToTexture with the game's image correction on the way, as
+// the engine gives the window's picture (CameraPictureCorrection): the colour
+// to the power 1 / gamma, then the contrast about the middle grey, then times
+// the brightness. `premultiplied`: the picture's colours are multiplied by
+// how solid they are (the interface's), and are corrected as the colours
+// themselves. Like them, they leave the switches they change for the
+// caller's GlStateGuard. False if it could not be drawn.
+bool GlCopyCorrected(GLuint sourceFramebuffer, int sourceLeft, int sourceBottom, int sourceRight, int sourceTop,
+                     GLuint targetFramebuffer, int targetLeft, int targetBottom, int targetRight, int targetTop,
+                     float gamma, float brightness, float contrast, bool premultiplied = false);
+bool GlCopyToTextureCorrected(GLuint sourceFramebuffer, int sourceLeft, int sourceBottom, int sourceRight, int sourceTop,
+                              GLuint texture, int textureWidth, int textureHeight, float gamma, float brightness, float contrast,
+                              bool premultiplied = false);
+
 // Remakes the smaller copies (mipmaps) of `texture` from its full-size
 // picture (glGenerateMipmap; nothing if the driver lacks it). The texture
 // must have room for them. Leaves the game's own settings untouched.

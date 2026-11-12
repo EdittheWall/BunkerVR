@@ -33,6 +33,7 @@ static const HintInfo kHints[] = {
     { "throw",        "Swing and let go: Throw",             kHintUseTold,    0.08f }, // told as a thing is thrown (the mod's or the scripts')
     { "lock_touch",   "Fingertip: Touch a wheel",            kHintUseTold,    0.06f }, // a number lock
     { "lock_turn",    "Trigger: Turn this wheel",            kHintUseSqueeze, 0.05f },
+    { "tear_pull",    "Pull hard: Tear it off",              kHintUseTold,    0.08f }, // a nailed plank held (PlayerState_Interact_Tear.hps)
     // The items' own (the scripts).
     { "pump_hold",    "Grip: Hold the pump",                 kHintUseSqueeze, 0.06f }, // the shotgun
     { "pump_work",    "Pull back, push forward: Pump",       kHintUseTold,    0.06f },

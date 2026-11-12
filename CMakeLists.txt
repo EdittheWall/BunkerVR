@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(BunkerVR VERSION 2.08 LANGUAGES C CXX)
+project(BunkerVR VERSION 2.09 LANGUAGES C CXX)
 
 # The game is a 64-bit program, so the DLL must be 64-bit too.
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)

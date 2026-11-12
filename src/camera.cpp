@@ -774,6 +774,83 @@ float CameraFadeAlpha()
     return alpha;
 }
 
+// The player's Gamma (the game's options), with the engine's Brightness and
+// Contrast. The engine applies them in its very last step, as it draws the
+// finished frame into the window through its image correction shader
+// (base_image_correction_frag: the colour to the power 1 / gamma, then the
+// contrast about the middle grey, then times the brightness). The headset's
+// pictures are taken before that step, so the mod applies the same
+// correction to them itself (CameraPictureCorrection). The values are read
+// from the engine's graphics each time that step runs: brightness at +0x1F4,
+// gamma at +0x1F8, contrast at +0x1FC. The pattern matches once in the game;
+// its end is the division that turns the gamma into the shader's power.
+static const char* kImageCorrectionPattern =
+    "40 53 57 48 83 EC 78 48 8B 05 ?? ?? ?? ?? 48 8B F9 33 D2 B9 40 8D 00 00 FF 10 B9 B9 8D 00 00 FF 15 ?? ?? ?? ?? "
+    "44 8B 47 10 48 8D 5F 10 44 8B 4F 14 33 D2 33 C9 FF 15 ?? ?? ?? ?? 48 8B 8F D8 00 00 00 48 85 C9 0F 84 ?? ?? ?? ?? "
+    "F3 0F 10 15 ?? ?? ?? ?? 33 D2 F3 0F 5E 97 F8 01 00 00";
+typedef void (*ImageCorrectionDrawFunction)(void* graphics);
+static ImageCorrectionDrawFunction g_realImageCorrectionDraw = nullptr;
+static volatile float g_pictureGamma = 1.0f, g_pictureBrightness = 1.0f, g_pictureContrast = 1.0f;
+
+// A value the engine holds, if it is sensible (also catches "not a number").
+static void TakeCorrection(const char* fields, int offset, volatile float& into)
+{
+    float value = *(const float*)(fields + offset);
+    if (value >= 0.05f && value <= 10.0f) into = value;
+}
+
+static void HookedImageCorrectionDraw(void* graphics)
+{
+    const char* fields = (const char*)graphics;
+    float gammaWas = g_pictureGamma;
+    TakeCorrection(fields, 0x1F4, g_pictureBrightness);
+    TakeCorrection(fields, 0x1F8, g_pictureGamma);
+    TakeCorrection(fields, 0x1FC, g_pictureContrast);
+    static int logsLeft = 20;
+    if (g_pictureGamma != gammaWas && logsLeft > 0)
+    {
+        --logsLeft;
+        Log("CAMERA: the game's gamma is %.2f (brightness %.2f, contrast %.2f): the headset's pictures get the same correction.",
+            g_pictureGamma, g_pictureBrightness, g_pictureContrast);
+    }
+    g_realImageCorrectionDraw(graphics);
+}
+
+bool CameraInstallPictureCorrectionHook()
+{
+    HMODULE game = GetModuleHandleW(nullptr);
+    int matches = 0;
+    void* target = FindPattern(game, kImageCorrectionPattern, &matches);
+    if (matches != 1)
+    {
+        Log("CAMERA ERROR: expected to find the game's image correction exactly once, found it %d times (the headset gets no gamma).", matches);
+        return false;
+    }
+    MH_STATUS status = MH_Initialize();
+    if (status != MH_OK && status != MH_ERROR_ALREADY_INITIALIZED)
+    {
+        Log("CAMERA ERROR: could not start the hooking library for the image correction: %s", MH_StatusToString(status));
+        return false;
+    }
+    status = MH_CreateHook(target, (LPVOID)HookedImageCorrectionDraw, (LPVOID*)&g_realImageCorrectionDraw);
+    if (status == MH_OK) status = MH_EnableHook(target);
+    if (status != MH_OK)
+    {
+        Log("CAMERA ERROR: could not hook the game's image correction: %s", MH_StatusToString(status));
+        return false;
+    }
+    Log("CAMERA: hooked the game's image correction (gamma) at exe+0x%llX", (unsigned long long)((char*)target - (char*)game));
+    return true;
+}
+
+bool CameraPictureCorrection(float& gamma, float& brightness, float& contrast)
+{
+    gamma = g_pictureGamma;
+    brightness = g_pictureBrightness;
+    contrast = g_pictureContrast;
+    return fabsf(gamma - 1.0f) > 0.001f || fabsf(brightness - 1.0f) > 0.001f || fabsf(contrast - 1.0f) > 0.001f;
+}
+
 // What the body script last reported about the gun (see roll 7020).
 static bool g_gunHeld = false;
 static bool g_shotgunHeld = false; // and whether it is the shotgun
@@ -1354,8 +1431,7 @@ static bool AnswerScriptQuestion(void* camera)
     //             the third the other three fingers (each 0 to 1);
     //   20:       the hand holds one of the game's things: leave its fingers
     //             as the game's animation has them;
-    //   0:        hand poses are switched off: the whole hand closes by one
-    //             amount (roll 7013).
+    //   0:        no pose: the whole hand closes by one amount (roll 7013).
     // The arm script asks.
     if (question >= 7036.5f && question < 7038.5f)
     {
@@ -1601,7 +1677,7 @@ static bool AnswerScriptQuestion(void* camera)
     //         turn's step is in it, 0 if only a smooth turn's small steps)
     //   7031: left hand steadying the gun: (to the left, down, forwards), meters
     //   7032: (how far that hand closes 0..1, hand reach in meters, throw strength)
-    //   7033: (12345, 1 if the gun pushes things, 1 + how much the elbows move with the hands)
+    //   7033: (12345, 0, 1 + how much the elbows move with the hands)
     //   7034: (12345, 1 if "both eyes in step" is on, 1 while the right hand holds the flashlight's cord)
     if ((question >= 7014.5f && question < 7015.5f) || (question >= 7030.5f && question < 7034.5f))
     {
@@ -1645,7 +1721,7 @@ static bool AnswerScriptQuestion(void* camera)
                 Log("CAMERA: the arm script asked how much the elbows should move and was told %.1f.", settings.elbowMove);
             }
             world[3] = 12345.0f;
-            world[7] = settings.gunPush ? 1.0f : 0.0f;
+            world[7] = 0.0f; // (unused)
             world[11] = 1.0f + settings.elbowMove;
         }
         g_scriptAskedTime = GetTickCount64();
@@ -1997,33 +2073,114 @@ void CameraScriptTimeMark(int code)
     if (mark == 2 * 4 + 1) ++g_playerUpdatesEver; // the player script's update is done
 }
 
-// ---- The sound's listener, watched ----
-// Diagnostics for test runs with a stand-in OpenXR runtime only (g_standIn in vr.cpp): logs
-// where the engine puts the ears (cLowLevelSoundFmod, the function that stores what FMOD is
-// told each frame), five times a second, to check that they follow the real head.
+// ---- The sound's listener: at the real head ----
+// The engine puts the ears (cLowLevelSoundFmod's function that stores what FMOD is told each
+// frame: place, speed, ahead, up) where the game's camera is, turned as the view is, so they
+// follow the head's turn, nod and tilt. But in the headset the game's camera stays at the
+// middle of the play area while the real head walks about the room (the game's body follows
+// the head, the camera does not: VRFollowHead in PlayerBodyHandler.hps). A step away from that
+// middle left the ears behind, and the player's own sounds, made at the body and the hands
+// (the flashlight, the gun), came from one side or the other as the head turned. So the ears
+// are put at the middle of the real head in the game's world: the last view built undone, and
+// the head's middle placed in it. Not on the cutscene screen, without a fresh view (menus,
+// loading), or should that be implausibly far from the engine's place (more than
+// kListenerFurthest: a view left over from before a jump).
+static const char* kSetListenerPattern =
+    "48 8B C4 48 89 58 08 48 89 68 10 48 89 70 18 57 48 81 EC E0 00 00 00 0F 29 70 E8 48 8B E9 "
+    "0F 29 78 D8 48 8B F2 44 0F 29 40 C8";
+static const float kListenerFurthest = 5.0f; // the game's units: a play area some 4 m across, at the world's scale
 typedef void (*SetListenerFn)(void* self, const float* place, const float* speed, const float* ahead, const float* up);
 static SetListenerFn g_realSetListener = nullptr;
+static bool g_listenerLogged = false; // (CameraWatchSoundListener: where the ears are, in test runs)
+
+// The middle of the real head in the game's world (false: not known now).
+static bool HeadMiddleInWorld(float place[3])
+{
+    const LastView& v = g_lastView;
+    if (!v.valid || !v.headApplied || CameraTheatre()) return false;
+    unsigned long long serial = VrGetFrameSerial();
+    if (serial == 0 || v.serial + 4 < serial) return false;
+    HeadPose centre;
+    if (!VrGetHeadCentrePose(centre)) return false;
+    // The game's own view (world -> its camera: its turn, row after row, and its position part)
+    // undone: the head's middle is placed from the game's camera, as ApplyPose places it.
+    const float* m = v.gameView;
+    float fromCamera[3] = { centre.position[0] - m[3], centre.position[1] - m[7], centre.position[2] - m[11] };
+    for (int i = 0; i < 3; ++i)
+    {
+        place[i] = m[0 * 4 + i] * fromCamera[0] + m[1 * 4 + i] * fromCamera[1] + m[2 * 4 + i] * fromCamera[2];
+        if (!(place[i] == place[i])) return false; // (not a number)
+    }
+    return true;
+}
 
 static void HookedSetListener(void* self, const float* place, const float* speed, const float* ahead, const float* up)
 {
-    static double nextMs = 0.0;
-    static int linesLeft = 3000;
-    double now = QuestionClockMs();
-    if (linesLeft > 0 && now >= nextMs)
+    float head[3];
+    bool atHead = HeadMiddleInWorld(head);
+    float apart = 0.0f; // (squared)
+    if (atHead)
     {
-        nextMs = now + 200.0;
-        --linesLeft;
-        Log("LISTENER: at %.2f %.2f %.2f, ahead %.2f %.2f %.2f, up %.2f %.2f %.2f", place[0], place[1], place[2], ahead[0], ahead[1], ahead[2], up[0], up[1], up[2]);
+        float dx = head[0] - place[0], dy = head[1] - place[1], dz = head[2] - place[2];
+        apart = dx * dx + dy * dy + dz * dz;
+        if (apart > kListenerFurthest * kListenerFurthest) atHead = false;
     }
-    g_realSetListener(self, place, speed, ahead, up);
+    const float* used = atHead ? head : place;
+
+    static bool toldAtHead = false;
+    if (atHead && !toldAtHead && apart > 0.05f * 0.05f)
+    {
+        toldAtHead = true;
+        Log("CAMERA: the sound's listener is put at the real head (%.2f %.2f %.2f; the engine had it at %.2f %.2f %.2f).",
+            head[0], head[1], head[2], place[0], place[1], place[2]);
+    }
+    if (g_listenerLogged)
+    {
+        static double nextMs = 0.0;
+        static int linesLeft = 3000;
+        double now = QuestionClockMs();
+        if (linesLeft > 0 && now >= nextMs)
+        {
+            nextMs = now + 200.0;
+            --linesLeft;
+            Log("LISTENER: at %.2f %.2f %.2f (%s; the engine's %.2f %.2f %.2f), ahead %.2f %.2f %.2f, up %.2f %.2f %.2f", used[0], used[1], used[2],
+                atHead ? "the real head" : "the engine's place", place[0], place[1], place[2], ahead[0], ahead[1], ahead[2], up[0], up[1], up[2]);
+        }
+    }
+    g_realSetListener(self, used, speed, ahead, up);
+}
+
+bool CameraInstallListenerHook()
+{
+    HMODULE game = GetModuleHandleW(nullptr);
+    int matches = 0;
+    void* target = FindPattern(game, kSetListenerPattern, &matches);
+    if (matches != 1)
+    {
+        Log("CAMERA ERROR: expected to find the sound listener's function exactly once, found it %d times (the ears stay where the game's camera is).", matches);
+        return false;
+    }
+    MH_STATUS status = MH_Initialize();
+    if (status != MH_OK && status != MH_ERROR_ALREADY_INITIALIZED)
+    {
+        Log("CAMERA ERROR: could not start the hooking library for the sound listener: %s", MH_StatusToString(status));
+        return false;
+    }
+    status = MH_CreateHook(target, (LPVOID)HookedSetListener, (LPVOID*)&g_realSetListener);
+    if (status == MH_OK) status = MH_EnableHook(target);
+    if (status != MH_OK)
+    {
+        Log("CAMERA ERROR: could not hook the sound listener's function: %s (the ears stay where the game's camera is).", MH_StatusToString(status));
+        return false;
+    }
+    Log("CAMERA: the sound's listener is hooked at exe+0x%llX: the ears go with the real head.", (unsigned long long)((char*)target - (char*)game));
+    return true;
 }
 
 void CameraWatchSoundListener()
 {
-    char* target = (char*)GetModuleHandleW(nullptr) + 0x4387D0;
-    MH_STATUS status = MH_CreateHook(target, (LPVOID)HookedSetListener, (LPVOID*)&g_realSetListener);
-    if (status == MH_OK) status = MH_EnableHook(target);
-    Log("CAMERA: the sound's listener is %s.", status == MH_OK ? "watched" : "not watched: the hook failed");
+    g_listenerLogged = true;
+    Log("CAMERA: the sound's listener is %s.", g_realSetListener != nullptr ? "watched (LISTENER lines)" : "not watched: its hook is not in");
 }
 
 void CameraScriptNote(int note, float a, float b, float c)

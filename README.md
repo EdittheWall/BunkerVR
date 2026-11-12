@@ -56,6 +56,9 @@ Windows may show "Windows protected your PC". Click **More info**, then **Run an
 
 To update BunkerVR, run the newest BunkerVR Setup. To uninstall, remove BunkerVR in Windows' **Installed apps**.
 
+If Steam updates the game, or you use **Verify integrity of game files**, run BunkerVR Setup again. Both put the
+game's original files back, and BunkerVR will tell you when it needs this.
+
 ## Playing
 
 | | Left controller | Right controller |
@@ -63,7 +66,7 @@ To update BunkerVR, run the newest BunkerVR Setup. To uninstall, remove BunkerVR
 | **Thumbstick** | Move. Click: sprint | Turn. Up: jump or stand up. Down: crouch. Click: flashlight |
 | **Grip** | Grab | Grab |
 | **Trigger** | Use held item | Fire or use held item |
-| **Buttons** | X: put away. Y: menu (hold: recenter) | A: weapon. B: inventory |
+| **Buttons** | X: put away. Y: menu (hold: recenter) | A (hold, flick): open revolver. B: inventory |
 
 Everything else is done with your hands, and small hints show you how the first few times. Full controls are in
 [docs/controls.md](docs/controls.md), and every VR option is in the game's menu under **Options > VR**

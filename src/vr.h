@@ -54,9 +54,10 @@ unsigned long long VrGetFrameSerial();
 // Swaps which eye gets which picture. A testing aid; no key calls it.
 void VrToggleSwapEyes();
 
-// Makes the game world look smaller (factor above 1) or bigger (factor below 1)
-// by changing how big you are compared with it. The result is saved.
-void VrAdjustWorldScale(float factor);
+// Makes the game world look smaller (steps above 0) or bigger (below 0) by
+// moving the player's adjustment of the world scale, 5% a step, -10% to +10%
+// of the calibrated scale. The result is saved.
+void VrStepWorldScale(int steps);
 
 // While a controller is being squeezed to grab, fills in where that hand
 // points from, relative to "straight ahead" (the same way as the head pose).
@@ -234,7 +235,7 @@ int VrPullState(int hand);
 // sensors. Fills in how far the thumb, the first finger and the other three
 // fingers are closed (0 to 1). Returns 1 = pose the hand with these, 2 = the
 // hand holds one of the game's things (leave the fingers as animated), 0 =
-// hand poses are switched off.
+// not a hand (anything but 0 or 1).
 int VrGetFingers(int hand, float curls[3]);
 
 // Healing by hand: 0 = the bandage is still in its tin, 1 = the roll is out
@@ -249,6 +250,14 @@ void* VrGameWindow();
 
 // Has the headset been taken off (head and hands held where they were)?
 bool VrHeadsetIsOff();
+
+// Is the headset away for more than a moment: taken off, or showing its own
+// menu (the game without its input)? (cVR_HeadsetAway: the game is paused.)
+bool VrHeadsetAway();
+
+// Has the headset software asked the game to close (its own Quit, or it
+// closing: the session's EXITING)? (cVR_QuitAsked: the game exits.)
+bool VrQuitAsked();
 
 // "Freeze my hands" in the hand poses tool: the game's hands
 // stay where they are in the room, whatever the controllers do (put down on

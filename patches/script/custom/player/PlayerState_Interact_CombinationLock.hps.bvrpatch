@@ -1,7 +1,7 @@
 BunkerVR patch 1
 file script/custom/player/PlayerState_Interact_CombinationLock.hps
 from 0c1225cb293a3b81e5e04256d3366d3c7e001b56b1cdb39d18316d502f6b5e2a 21819
-to 599b17f3a3fe20f1a8c905af8eb039358ae2a1efa835528d52cd310c31565556 37394
+to 6b125fc23677ccc0cc5e0b0f2dd5918bab3547c5f0c08a06e9954d127c147c0d 38250
 =11
 +#include "custom/helpers/helper_bunkervr_hints.hps" // BunkerVR: the hints on the objects
 =19
@@ -15,7 +15,8 @@ to 599b17f3a3fe20f1a8c905af8eb039358ae2a1efa835528d52cd310c31565556 37394
 +const float gfVRRollerSpacing = 0.0174f;	// the bunker's lock: its rollers' centers this far apart (its model's points; used if they cannot be read)
 +const float gfVRLockAwayDistance = 0.25f;	// (meters, real) no fingertip this near the lock...
 +const float gfVRLockAwayTime = 2.0f;		// ...for this long (seconds), once a fingertip has turned it: left
-+const float gfVRLockHeadAway = 1.0f;		// left too with the head this far from it (meters, real), as the player walks away
++const float gfVRLockHeadAway = 1.4f;		// left too with the head this far from it (meters, real: past any arm's reach, as the player walks away)...
++const float gfVRLockHeadAwayTime = 0.3f;	// ...for this long (seconds)
 +
 =82
 +		mbVR = cVR_Active(); // BunkerVR: the rollers turned by a VR fingertip
@@ -103,6 +104,7 @@ to 599b17f3a3fe20f1a8c905af8eb039358ae2a1efa835528d52cd310c31565556 37394
 +		mlVRFingerRoller = -1;
 +		mlVRLitHand = -1;
 +		mfVRAwayTime = 0.0f;
++		mfVRHeadAwayTime = 0.0f;
 +		mbVRFingerUsed = false;
 +		mlVRTurnLogs = 0;
 +		mvVRRollerX.resize(0);
@@ -169,6 +171,9 @@ to 599b17f3a3fe20f1a8c905af8eb039358ae2a1efa835528d52cd310c31565556 37394
 +		if(pProp is null || mvVRRollerX.length() == 0) return;
 +		cMatrixf mtxToLock = cMath_MatrixInverse(pProp.GetMatrix());
 +		float fNow = float(cEngine_GetGameTime());
++		// (Distances in real meters: the game's world is the player's scale times bigger.)
++		float fScale = 1.0f;
++		float fHeadFrom = (VRHeadPosition(fScale) - pProp.GetPosition()).Length() / fScale;
 +		int lHandOn = -1;
 +		int lRollerOn = -1;
 +		bool bNear = false;
@@ -180,7 +185,7 @@ to 599b17f3a3fe20f1a8c905af8eb039358ae2a1efa835528d52cd310c31565556 37394
 +			if(cMath_Abs(fNow - cScript_GetGlobalVarFloat("BunkerVR_IndexTipTime" + lHand)) > 0.25f) continue;
 +			cVector3f vTipWorld = cScript_GetGlobalVarVector3f("BunkerVR_IndexTip" + lHand);
 +			vTips[lHand] = vTipWorld;
-+			if((vTipWorld - pProp.GetPosition()).Length() < gfVRLockAwayDistance) bNear = true;
++			if((vTipWorld - pProp.GetPosition()).Length() < gfVRLockAwayDistance * fScale) bNear = true;
 +			if((vTipWorld - pProp.GetPosition()).Length() < fNearest)
 +			{
 +				fNearest = (vTipWorld - pProp.GetPosition()).Length();
@@ -229,13 +234,17 @@ to 599b17f3a3fe20f1a8c905af8eb039358ae2a1efa835528d52cd310c31565556 37394
 +		if(lHandOn >= 0) BunkerVR_HintOffer(lHandOn, "lock_turn", vTips[lHandOn]);
 +		else if(lNearestHand >= 0 && mlRollerIndex < 0) BunkerVR_HintOffer(lNearestHand, "lock_touch", pProp.GetPosition());
 +
-+		// Left: the fingertips away once one has turned it, or the head away.
++		// Left: the fingertips away once one has turned it, or the head walked away from it
++		// (past any arm's reach, even one stretched past a real wall in the way, for a moment).
 +		if(bNear || mbVRFingerUsed == false) mfVRAwayTime = 0.0f;
 +		else mfVRAwayTime += afTimeStep;
-+		bool bHeadAway = (VRHeadPosition() - pProp.GetPosition()).Length() > gfVRLockHeadAway;
++		if(fHeadFrom > gfVRLockHeadAway) mfVRHeadAwayTime += afTimeStep;
++		else mfVRHeadAwayTime = 0.0f;
++		bool bHeadAway = mfVRHeadAwayTime > gfVRLockHeadAwayTime;
 +		if(mbExit == false && (mfVRAwayTime > gfVRLockAwayTime || bHeadAway))
 +		{
-+			Log("BunkerVR: the number lock " + pProp.GetName() + " is left (" + (bHeadAway ? "the head is away from it" : "no fingertip near it") + ")\n");
++			Log("BunkerVR: the number lock " + pProp.GetName() + " is left (" + (bHeadAway ? "the head is away from it" : "no fingertip near it") + ", the head " +
++				int(fHeadFrom * 100.0f + 0.5f) + " cm from it)\n");
 +			Exit();
 +		}
 +	}
@@ -299,10 +308,12 @@ to 599b17f3a3fe20f1a8c905af8eb039358ae2a1efa835528d52cd310c31565556 37394
 +		return true;
 +	}
 +
-+	// Where the eyes are: the real head (the mod's roll 7006: is it followed;
-+	// 7005: where), else the game's camera.
-+	cVector3f VRHeadPosition()
++	// Where the eyes are: the real head (the mod's roll 7006: is it followed,
++	// and how many times bigger the player is than the game's character,
++	// afScale; 7005: where), else the game's camera.
++	cVector3f VRHeadPosition(float &out afScale)
 +	{
++		afScale = 1.0f;
 +		cLuxPlayer@ pPlayer = cLux_GetPlayer();
 +		cCamera@ pCam = pPlayer !is null ? pPlayer.GetCamera() : null;
 +		if(pCam is null) return cVector3f(0.0f);
@@ -312,6 +323,7 @@ to 599b17f3a3fe20f1a8c905af8eb039358ae2a1efa835528d52cd310c31565556 37394
 +		cVector3f vStatus = pCam.GetMatrix().GetTranslation();
 +		if(vStatus.x > 12344.0f && vStatus.x < 12346.0f && vStatus.y > 0.5f)
 +		{
++			if(vStatus.z > 0.5f && vStatus.z < 3.0f) afScale = vStatus.z;
 +			pCam.SetRoll(7005.0f);
 +			vHead = pCam.GetMatrix().GetTranslation();
 +		}
@@ -333,6 +345,7 @@ to 599b17f3a3fe20f1a8c905af8eb039358ae2a1efa835528d52cd310c31565556 37394
 +	[nosave] int mlVRFingerRoller = -1;			// ...and which roller
 +	[nosave] int mlVRLitHand = -1;				// the hand whose fingertip lit the lit roller (its ticks; -1 none yet)
 +	[nosave] float mfVRAwayTime = 0.0f;			// seconds no fingertip has been near the lock
++	[nosave] float mfVRHeadAwayTime = 0.0f;		// seconds the head has been gfVRLockHeadAway from it
 +	[nosave] bool mbVRFingerUsed = false;		// has a fingertip been on a roller yet?
 +	[nosave] int mlVRTurnLogs = 0;				// (digits noted in the log, the first 40)
 end

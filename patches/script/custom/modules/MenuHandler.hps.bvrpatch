@@ -1,14 +1,13 @@
 BunkerVR patch 1
 file script/custom/modules/MenuHandler.hps
 from bb2962b3e05ecb0e7bac7d0b8a37e96adcbbb1b2e33ed0eab9ca55307e270619 424823
-to ff65385ba63d72d26d5353eb7a676ad8eac5cda86c67c51407364c25a26c3195 463813
+to b0d1de6bbbf291be8a5e1f73f0605db8549bcb1878baca2f084f5a0065a9f702 467410
 =47
 +	eMainMenuButtonID_VR, // BunkerVR
 =50
 +	eMainMenuGroup_Options_VR, // BunkerVR: the VR menu's first page (opened from the main menu, not from Options)
-+	eMainMenuGroup_VR_Comfort, // BunkerVR: its six pages
++	eMainMenuGroup_VR_Comfort, // BunkerVR: its five pages
 +	eMainMenuGroup_VR_Movement,
-+	eMainMenuGroup_VR_Hands,
 +	eMainMenuGroup_VR_Access,
 +	eMainMenuGroup_VR_Player,
 +	eMainMenuGroup_VR_System,
@@ -257,11 +256,120 @@ to ff65385ba63d72d26d5353eb7a676ad8eac5cda86c67c51407364c25a26c3195 463813
 +		cVR_JumpDone(); // (the mod then asks the body script for what is to be made and pressed)
 +	}
 +
++	// BunkerVR: at the first start in the headset, the game's own graphics settings set to the mod's
++	// recommended ones for VR, lighter than the game's defaults (each eye's world is drawn at the
++	// window's size, both every frame, at the headset's 72 to 120 frames a second): the heaviest
++	// effects off or lower, and film grain off (its noise differs between the eyes). As the game's
++	// options menu sets them, saved and applied, so the options menu shows them. Only lowered, never
++	// raised; and only this once (cVR_RecommendedGraphicsOnce: the mod's settings remember it), so
++	// whatever the player sets afterwards is kept for good. Only in the main menu, never while playing
++	// (a headset that starts following the head after a save is loaded waits for the main menu).
++	void VRRecommendedGraphics()
++	{
++		if(mbMenuActive == false || cVR_Active() == false) return;
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		if(pMap is null || pMap.GetName() != "main_menu") return;
++		cConfigFile@ pConfig = cLux_GetUserConfig();
++		if(pConfig is null || cVR_RecommendedGraphicsOnce() == false) return;
++		tString sChanged = "";
++		if(pConfig.GetBool("Graphics", "SSAOActive", true))
++		{
++			pConfig.SetBool("Graphics", "SSAOActive", false);
++			sChanged += " ambient occlusion off;";
++		}
++		if(pConfig.GetBool("Graphics", "WorldReflection", true))
++		{
++			pConfig.SetBool("Graphics", "WorldReflection", false);
++			sChanged += " world reflections off;";
++		}
++		if(pConfig.GetBool("Graphics", "Refraction", true))
++		{
++			pConfig.SetBool("Graphics", "Refraction", false);
++			sChanged += " refraction off;";
++		}
++		if(pConfig.GetInt("Graphics", "ShadowResolution", 2) > 1)
++		{
++			pConfig.SetInt("Graphics", "ShadowResolution", 1);
++			pConfig.SetBool("Graphics", "BodyShadows", false); // (as the options menu has it: the body's shadow only above medium)
++			sChanged += " shadow detail medium;";
++		}
++		if(pConfig.GetInt("Graphics", "DirLightSliceNum", 4) > 2)
++		{
++			pConfig.SetInt("Graphics", "DirLightSliceNum", 2);
++			sChanged += " the sun's shadows in 2 slices;";
++		}
++		if(pConfig.GetInt("Graphics", "TerrainTessellation", 0) > 0 || pConfig.GetInt("Graphics", "TerrainQuality", 0) > 0)
++		{
++			pConfig.SetInt("Graphics", "TerrainQuality", 0); // (the options menu's tessellation row sets both)
++			pConfig.SetInt("Graphics", "TerrainTessellation", 0);
++			sChanged += " ground tessellation off;";
++		}
++		if(pConfig.GetBool("Graphics", "FilmGrainActive", true))
++		{
++			pConfig.SetBool("Graphics", "FilmGrainActive", false);
++			sChanged += " film grain off;";
++		}
++		if(sChanged == "")
++		{
++			Log("BunkerVR: the recommended graphics for the headset, this once: all already as light (nothing changed)\n");
++			return;
++		}
++		if(cLux_GetSaveConfigAtExit()) pConfig.Save();
++		bool bRestart = cLux_ApplyUserConfig();
++		Log("BunkerVR: the game's graphics set to the recommended ones for the headset, this once:" + sChanged +
++			(bRestart ? " (the game applies some at its next start)" : "") + "\n");
++	}
++
++	// BunkerVR: the headset taken off, or its own menu opened (SteamVR's dashboard, the Meta menu):
++	// the game paused as its menu button pauses it, once each time the headset is away, wherever the
++	// game lets its menu open (not while loading, in the main menu, or where the game keeps it shut).
++	// An open inventory is shut first, as the menu button shuts it. Back in the headset, the player
++	// finds the game's menu and goes on from it.
++	[nosave] bool mbVRPausedWhileAway = false;
++	void VRPauseWhileAway()
++	{
++		if(cVR_HeadsetAway() == false)
++		{
++			mbVRPausedWhileAway = false;
++			return;
++		}
++		if(mbVRPausedWhileAway || mbMenuActive) return;
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		if(pMap is null || pMap.GetName() == "main_menu" || LoadScreen_IsVisible() || GameStats_GetGuiActive() || mbPauseMenuEnabled == false) return;
++		if(Sketchbook_IsOpen())
++		{
++			Sketchbook_Close();
++			return;
++		}
++		mbVRPausedWhileAway = true;
++		mbMainMenuActive = false;
++		mfTransitionAlpha = 1.f;
++		SetMenuActive(true);
++		mbPauseSoundDelay = true;
++		if (mlBlurID == -1) mlBlurID = Effect_Blur_Start(1,0);
++		Log("BunkerVR: the headset is away (taken off, or its own menu open): the game is paused\n");
++	}
++
++	// BunkerVR: the headset software's own Quit (or the software closing) closes the game, as its Exit
++	// button does: VR games close when the headset's menu quits them.
++	[nosave] bool mbVRQuitting = false;
++	void VRQuitWhenAsked()
++	{
++		if(mbVRQuitting || cVR_QuitAsked() == false) return;
++		mbVRQuitting = true;
++		Log("BunkerVR: the headset software asked the game to close: the game exits\n");
++		if(mbMenuActive) SetMenuActive(false);
++		cLux_Exit();
++	}
++
 =2
++		VRQuitWhenAsked(); // BunkerVR
 +		VRSendLoadingNews();
 +		VRSendMenuRoom(); // BunkerVR
 +		VRUpdateJump(afTimeStep); // BunkerVR
 +		VRUpdateStartupBlur(); // BunkerVR
++		VRRecommendedGraphics(); // BunkerVR
++		VRPauseWhileAway(); // BunkerVR
 +		
 =283
 +		if(cVR_Active()) mouseGfx.mColor = cColor(1.0f, 0.0f); // BunkerVR: drawn unseen in the headset, so the game's default cannot take its place
@@ -306,7 +414,6 @@ to ff65385ba63d72d26d5353eb7a676ad8eac5cda86c67c51407364c25a26c3195 463813
 +			case eMainMenuGroup_Options_VR: // BunkerVR: its pages hide the title image, as the game's Options do
 +			case eMainMenuGroup_VR_Comfort:
 +			case eMainMenuGroup_VR_Movement:
-+			case eMainMenuGroup_VR_Hands:
 +			case eMainMenuGroup_VR_Access:
 +			case eMainMenuGroup_VR_Player:
 +			case eMainMenuGroup_VR_System:
@@ -340,10 +447,6 @@ to ff65385ba63d72d26d5353eb7a676ad8eac5cda86c67c51407364c25a26c3195 463813
 +			case eMainMenuGroup_VR_Movement:
 +			{
 +				GuiVRPage(1); break;
-+			}
-+			case eMainMenuGroup_VR_Hands:
-+			{
-+				GuiVRPage(2); break;
 +			}
 +			case eMainMenuGroup_VR_Access:
 +			{
@@ -620,8 +723,25 @@ to ff65385ba63d72d26d5353eb7a676ad8eac5cda86c67c51407364c25a26c3195 463813
 +		pCam.SetPosition(vRealPos);
 +	}
 +
-+	// One row of a page: a setting with a list of choices.
-+	void VROptionRow(const array<tString> &in avMenuItems, int alOption, const array<tString> &in avChoices, cVector2f avRightAnchor, cVector3f avInfoBoxPos)
++	// The World Scale row's choices (the mod's option 14): the calibrated scale
++	// (option 44, in thousandths) with -10%, -5%, 0, +5% and +10% of it, each
++	// named by the scale it gives, in percent.
++	array<tString> VRSizeLabels()
++	{
++		int lCalibrated = VRGetOption(44);
++		if(lCalibrated <= 0) lCalibrated = 1000;
++		array<tString> vLabels;
++		for(int i = -2; i <= 2; i++)
++		{
++			int lPercent = int(float(lCalibrated) * (1.0f + 0.05f * float(i)) / 10.0f + 0.5f);
++			vLabels.push_back("" + lPercent + "%");
++		}
++		return vLabels;
++	}
++
++	// One row of a page: a setting with a list of choices (their names looked up
++	// in the language file's asCategory; "": shown as they are).
++	void VROptionRow(const array<tString> &in avMenuItems, int alOption, const array<tString> &in avChoices, cVector2f avRightAnchor, cVector3f avInfoBoxPos, const tString &in asCategory = "menu")
 +	{
 +		if (OptionMenu_CheckOutOfLimits(mlCurrentItemId) == false)
 +		{
@@ -629,7 +749,7 @@ to ff65385ba63d72d26d5353eb7a676ad8eac5cda86c67c51407364c25a26c3195 463813
 +			bool bModHere = lValue >= 0;
 +			if (lValue < 0 || lValue >= int(avChoices.length())) lValue = 0;
 +
-+			int lNewValue = OptionMenu_ButtonOptionsMultiSelect(avMenuItems[mlCurrentItemId-mlFirstItemId], kOptionsAccessibilityButtonPos, mlCurrentItemId, msSelectedVRButton, avChoices, lValue, false, mlActionHorizontal, "menu", 0, avRightAnchor, avInfoBoxPos, mfTransitionAlpha, false, false, true, "", cString_To16Char(""), false, false);
++			int lNewValue = OptionMenu_ButtonOptionsMultiSelect(avMenuItems[mlCurrentItemId-mlFirstItemId], kOptionsAccessibilityButtonPos, mlCurrentItemId, msSelectedVRButton, avChoices, lValue, false, mlActionHorizontal, asCategory, 0, avRightAnchor, avInfoBoxPos, mfTransitionAlpha, false, false, true, "", cString_To16Char(""), false, false);
 +			if (lNewValue != lValue && bModHere)
 +			{
 +				VRSetOption(alOption, lNewValue);
@@ -679,7 +799,7 @@ to ff65385ba63d72d26d5353eb7a676ad8eac5cda86c67c51407364c25a26c3195 463813
 +	{
 +		GuiPauseDarkOverlay();
 +
-+		array<tString> vMenuItems = {"VR_Player", "VR_Comfort", "VR_Movement", "VR_Hands", "VR_Access", "VR_System", "VR_MeasureAgain"};
++		array<tString> vMenuItems = {"VR_Player", "VR_Comfort", "VR_Movement", "VR_Access", "VR_System", "VR_MeasureAgain"};
 +		if (cLux_GetInputHandler().GetGamepadWasLastDeviceUsed()==false)
 +			vMenuItems.push_back("Back");
 +
@@ -701,7 +821,6 @@ to ff65385ba63d72d26d5353eb7a676ad8eac5cda86c67c51407364c25a26c3195 463813
 +		VRHubItem(vMenuItems, eMainMenuGroup_VR_Player, "VR_Playing", vRightAnchor, vInfoBoxPos);
 +		VRHubItem(vMenuItems, eMainMenuGroup_VR_Comfort, "VR_Turning", vRightAnchor, vInfoBoxPos);
 +		VRHubItem(vMenuItems, eMainMenuGroup_VR_Movement, "VR_WalkDir", vRightAnchor, vInfoBoxPos);
-+		VRHubItem(vMenuItems, eMainMenuGroup_VR_Hands, "VR_HandPoses", vRightAnchor, vInfoBoxPos);
 +		VRHubItem(vMenuItems, eMainMenuGroup_VR_Access, "VR_Hints", vRightAnchor, vInfoBoxPos);
 +		VRHubItem(vMenuItems, eMainMenuGroup_VR_System, "VR_MenuDistance", vRightAnchor, vInfoBoxPos);
 +		VRHubMeasureAgain(vMenuItems, vRightAnchor, vInfoBoxPos);
@@ -747,9 +866,9 @@ to ff65385ba63d72d26d5353eb7a676ad8eac5cda86c67c51407364c25a26c3195 463813
 +		OptionMenu_ShowGamepadButtons(true);
 +	}
 +
-+	// One of the VR menu's six pages: 0 comfort, 1 movement, 2 hands, 3
-+	// accessibility, 4 player, 5 system, with the rows grouped as the mod's
-+	// own menu has them. The number VROptionRow gets for each row below is
++	// One of the VR menu's five pages: 0 comfort, 1 movement, 3
++	// accessibility, 4 player, 5 system (2 is not used), with the rows grouped
++	// as the mod's own menu has them. The number VROptionRow gets for each row below is
 +	// the mod's number for that setting (see VrGetMenuOption in the mod's
 +	// vr.cpp).
 +	void GuiVRPage(int alPage)
@@ -767,8 +886,7 @@ to ff65385ba63d72d26d5353eb7a676ad8eac5cda86c67c51407364c25a26c3195 463813
 +			vMenuItems.push_back("VR_Playing");
 +			vMenuItems.push_back("VR_Height");
 +			vMenuItems.push_back("VR_Size");
-+			vMenuItems.push_back("VR_Recentre");
-+			vWidest.push_back("VR_PressArrow");
++			vWidest.push_back("VR_Standing");
 +		}
 +		else if(alPage == 0)
 +		{
@@ -790,30 +908,15 @@ to ff65385ba63d72d26d5353eb7a676ad8eac5cda86c67c51407364c25a26c3195 463813
 +			sTitle = "VR_Movement";
 +			vMenuItems.push_back("VR_WalkDir");
 +			vMenuItems.push_back("VR_WalkSpeed");
-+			vMenuItems.push_back("VR_Jump");
 +			vMenuItems.push_back("VR_DuckCrouch");
 +			vMenuItems.push_back("VR_DuckDepth");
-+			vMenuItems.push_back("VR_RoomScale");
 +			vWidest.push_back("VR_LeftController");
-+			vWidest.push_back("VR_StickUp");
-+		}
-+		else if(alPage == 2)
-+		{
-+			sTitle = "VR_Hands";
-+			vMenuItems.push_back("VR_HandPoses");
-+			vMenuItems.push_back("VR_GunDraw");
-+			vMenuItems.push_back("VR_BulletsFrom");
-+			vMenuItems.push_back("VR_BulletCount");
-+			vMenuItems.push_back("VR_GunPush");
-+			vWidest.push_back("VR_AtPouch");
-+			vWidest.push_back("VR_Holster");
 +		}
 +		else if(alPage == 3)
 +		{
 +			sTitle = "VR_Access";
 +			vMenuItems.push_back("VR_Hints");
 +			vMenuItems.push_back("VR_HintsReset");
-+			vMenuItems.push_back("VR_BandageTurns");
 +			vMenuItems.push_back("VR_ThrowHelp");
 +			vMenuItems.push_back("VR_Reach");
 +			vMenuItems.push_back("VR_Vibration");
@@ -863,13 +966,11 @@ to ff65385ba63d72d26d5353eb7a676ad8eac5cda86c67c51407364c25a26c3195 463813
 +		{
 +			array<tString> vPlaying = {"VR_Seated", "VR_Standing"};
 +			array<tString> vHeight = {"VR_Height0", "VR_Height1", "VR_Height2", "VR_Height3", "VR_Height4", "VR_Height5", "VR_Height6", "VR_Height7", "VR_Height8"};
-+			array<tString> vSize = {"VR_Size80", "VR_Size90", "VR_Size100", "VR_Size110", "VR_Size120"};
-+			array<tString> vRecentre = {"VR_PressArrow", "VR_Done"};
++			array<tString> vSize = VRSizeLabels(); // (shown as they are, not looked up in the language file)
 +
 +			VROptionRow(vMenuItems, 0, vPlaying, vRightAnchor, vInfoBoxPos);
 +			VROptionRow(vMenuItems, 4, vHeight, vRightAnchor, vInfoBoxPos);
-+			VROptionRow(vMenuItems, 14, vSize, vRightAnchor, vInfoBoxPos);
-+			VROptionRow(vMenuItems, 28, vRecentre, vRightAnchor, vInfoBoxPos); // the mod always answers "first choice"; picking the other one recenters the view
++			VROptionRow(vMenuItems, 14, vSize, vRightAnchor, vInfoBoxPos, "");
 +		}
 +		else if(alPage == 0)
 +		{
@@ -877,7 +978,7 @@ to ff65385ba63d72d26d5353eb7a676ad8eac5cda86c67c51407364c25a26c3195 463813
 +			array<tString> vSnapAngle = {"VR_Angle30", "VR_Angle45", "VR_Angle60", "VR_Angle90"};
 +			array<tString> vTurnSpeed = {"VR_Slow", "VR_Normal", "VR_Fast", "VR_VeryFast"};
 +			// (The head bob and the view during knockdowns and the Beast's kill: the mod's VR options 37 and 35.)
-+			array<tString> vHeadBob = {"VR_Reduced", "VR_Off"};
++			array<tString> vHeadBob = {"VR_Default", "VR_Off"};
 +			array<tString> vKnockdown = {"VR_NoComfort", "VR_CutsceneScreen", "VR_Vignette"};
 +			array<tString> vVignette = {"VR_VignetteNone", "VR_VignetteWeak", "VR_VignetteMedium", "VR_VignetteStrong"};
 +			
@@ -898,27 +999,12 @@ to ff65385ba63d72d26d5353eb7a676ad8eac5cda86c67c51407364c25a26c3195 463813
 +		{
 +			array<tString> vWalkDir = {"VR_MyHead", "VR_LeftController"};
 +			array<tString> vWalkSpeed = {"VR_AlwaysFull", "VR_FollowsStick"};
-+			array<tString> vJump = {"VR_Off", "VR_StickUp"};
 +			array<tString> vDuckDepth = {"VR_ALittle", "VR_Normal", "VR_ALot"};
 +
 +			VROptionRow(vMenuItems, 10, vWalkDir, vRightAnchor, vInfoBoxPos);
 +			VROptionRow(vMenuItems, 11, vWalkSpeed, vRightAnchor, vInfoBoxPos);
-+			VROptionRow(vMenuItems, 7, vJump, vRightAnchor, vInfoBoxPos);
 +			VROptionRow(vMenuItems, 12, vOffOn, vRightAnchor, vInfoBoxPos);
 +			VROptionRow(vMenuItems, 13, vDuckDepth, vRightAnchor, vInfoBoxPos);
-+			VROptionRow(vMenuItems, 31, vOffOn, vRightAnchor, vInfoBoxPos);
-+		}
-+		else if(alPage == 2)
-+		{
-+			array<tString> vGunDraw = {"VR_Holster", "VR_AButton"};
-+			array<tString> vBulletsFrom = {"VR_Pouch", "VR_AnySqueeze"};
-+			array<tString> vBulletCount = {"VR_AtPouch", "VR_AboveCylinder"};
-+
-+			VROptionRow(vMenuItems, 21, vOffOn, vRightAnchor, vInfoBoxPos);
-+			VROptionRow(vMenuItems, 5, vGunDraw, vRightAnchor, vInfoBoxPos);
-+			VROptionRow(vMenuItems, 19, vBulletsFrom, vRightAnchor, vInfoBoxPos);
-+			VROptionRow(vMenuItems, 20, vBulletCount, vRightAnchor, vInfoBoxPos);
-+			VROptionRow(vMenuItems, 27, vOffOn, vRightAnchor, vInfoBoxPos);
 +		}
 +		else if(alPage == 5)
 +		{
@@ -935,7 +1021,6 @@ to ff65385ba63d72d26d5353eb7a676ad8eac5cda86c67c51407364c25a26c3195 463813
 +		}
 +		else
 +		{
-+			array<tString> vTurns = {"VR_One", "VR_Two", "VR_Three"};
 +			array<tString> vThrow = {"VR_Off", "VR_Light", "VR_Medium", "VR_Strong"};
 +			array<tString> vReach = {"VR_Short", "VR_Normal", "VR_Long", "VR_VeryLong"};
 +			array<tString> vVibration = {"VR_Off", "VR_Light", "VR_Normal", "VR_Strong"};
@@ -945,7 +1030,6 @@ to ff65385ba63d72d26d5353eb7a676ad8eac5cda86c67c51407364c25a26c3195 463813
 +
 +			VROptionRow(vMenuItems, 40, vHints, vRightAnchor, vInfoBoxPos); // (the hints on the objects)
 +			VROptionRow(vMenuItems, 41, vHintsReset, vRightAnchor, vInfoBoxPos); // (the mod always answers "first choice"; picking the other one shows every hint again)
-+			VROptionRow(vMenuItems, 26, vTurns, vRightAnchor, vInfoBoxPos); // (3 unless chosen fewer)
 +			VROptionRow(vMenuItems, 22, vThrow, vRightAnchor, vInfoBoxPos);
 +			VROptionRow(vMenuItems, 23, vReach, vRightAnchor, vInfoBoxPos);
 +			VROptionRow(vMenuItems, 24, vVibration, vRightAnchor, vInfoBoxPos);

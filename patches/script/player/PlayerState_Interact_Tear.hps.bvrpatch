@@ -1,0 +1,396 @@
+BunkerVR patch 1
+file script/player/PlayerState_Interact_Tear.hps
+from 9d25bbb019356396d71734db1cb85639be803899970131a5a65d5d46d223a811 15132
+to ec08fe3953200804bfa1bdcb0df3ecca81018fb7138d7b700d81ac112a6247b5 34926
+=4
++#include "custom/helpers/helper_bunkervr_hints.hps" // BunkerVR: the hints on the objects
+=12
++// BunkerVR: a plank held by a VR hand gives as far as the hand pulls it from
++// where it took hold: not at all for the first gfVRTearSlack (meters), then
++// all of its give once pulled gfVRTearReach further (see VRTearByHand).
++const float gfVRTearSlack = 0.03f;
++const float gfVRTearReach = 0.12f;
++// ...the health of a plank torn by its health alone goes this many times as
++// fast as by the game's own pull, so that it comes off in one firm pull,
++// before the hand is pulled off it...
++const float gfVRTearHealthMul = 2.5f;
++// ...and at its full give, with a hand this far off the spot it holds,
++// pulling on, it comes off anyway (meters)...
++const float gfVRTearYankPast = 0.15f;
++// ...and taken up again within this long of a hand's hold on it ending (the
++// other hand keeping it, or a hand slipping off), its health carries over
++// (seconds).
++const float gfVRTearTakenAgainWithin = 1.0f;
++
+=111
++		mbVRTearFromSet = false; // BunkerVR: a hand's pull starts afresh (VRTearByHand)
++		mlVRTearHelp = -1; // BunkerVR: no other hand on it yet...
++		mbVRTearHelpSqueezeWas = true; // ...and a squeeze already going on doesn't count as one starting
++		// BunkerVR: taken up again soon after a VR hand's hold on it ended (see
++		// OnLeaveState), its health carries over.
++		float fVRTearLeftFor = float(cEngine_GetGameTime()) - mfVRTearLeftAt;
++		if (mVRTearLeftProp == mPropID && fVRTearLeftFor > -0.001f && fVRTearLeftFor < gfVRTearTakenAgainWithin) mfHealth = mfVRTearLeftHealth;
+=32
++		// BunkerVR: a VR hand's hold ending is remembered for a moment, for the
++		// plank taken up again (let go of, slipped off, or left to the other
++		// hand, which the game then gives it to; see OnEnterState); and no hand
++		// holds it now, for the body script's VRTouchKind (see VRTearByHand).
++		if (mbVRHoldSet)
++		{
++			mVRTearLeftProp = mPropID;
++			mfVRTearLeftAt = float(cEngine_GetGameTime());
++			mfVRTearLeftHealth = mfHealth;
++		}
++		cScript_SetGlobalVarID("BunkerVR_DoorBody", tID_Invalid);
+=54
++
++		// BunkerVR: is a VR hand holding it (see VRTearByHand)?
++		int lVRHand = 1;
++		cVector3f vVRPalm = cVector3f(0.0f);
++		bool bVRHand = VRGrabbingHand(lVRHand, vVRPalm);
+=32
++			if (bVRHand) VRTornByHand(lVRHand, pProp); // BunkerVR
+=15
++
++		// BunkerVR: held by a VR hand, the hand's pull sets the tear's speed
++		// (VRTearByHand), not the mouse or the sticks; nor is the view turned to
++		// keep the plank on the screen (CheckOutsideAtScreenEdgeAndMove), which in
++		// the headset would turn the world around the player.
++		if (bVRHand)
++		{
++			mvMoveAdd = cVector2f(0);
++			if (VRTearByHand(lVRHand, vVRPalm, pProp, pJoint, pBody, fFract, afTimeStep) == false)
++				cLux_GetPlayer().ChangeState(mlPreviousState);
++			return;
++		}
+=164
++
++	//------------------------------------------------------------
++
++	/////////////////////////////////////////
++	// BunkerVR: a plank torn off by a VR hand
++	/////////////////////////////////////////
++
++	// Held by a VR hand (the base state's VRHoldSpot: the hand is drawn on the
++	// spot it took hold of, which moves with the plank), the plank gives as the
++	// hand pulls away from where it took hold, the way the plank can move
++	// (VRTearHandWants). How much of its give it is to have (the game's joint
++	// fraction) follows how far the hand is pulled (gfVRTearSlack,
++	// gfVRTearReach), and the game's own tear takes it there: the plank comes
++	// no faster than the game lets it, creaks (the game's stress sound), and is
++	// torn off as the game has it (at 95% of its give, or with its health
++	// gone). Its health goes only while it gives, and for a plank torn by its
++	// health alone faster than by the game's pull (gfVRTearHealthMul); at its
++	// full give, a hand pulled well past its spot tears it off
++	// (gfVRTearYankPast). Eased off, it springs back. The other hand can take
++	// hold too (VRUpdateTearHelp), and the plank then gives to the hand that
++	// pulls it further. A hold begun on a plank still partly pulled keeps it
++	// there. A light tick in the hand as it gives, stronger the further it has
++	// gone. False: the hand was pulled off it.
++	bool VRTearByHand(int alHand, const cVector3f &in avPalm, cLuxProp@ apProp, iPhysicsJoint@ apJoint, iPhysicsBody@ apBody, float afFract, float afTimeStep)
++	{
++		cVector3f vSpot = VRHoldSpot(apBody, alHand, avPalm, "the plank");
++		cVector3f vHand = avPalm - mvVRHoldPalmOff;
++		if (VRHoldPulledOff(alHand, vHand, vSpot, afTimeStep)) return false;
++		if (mbVRTearFromSet == false)
++		{
++			mbVRTearFromSet = true;
++			mvVRTearFrom = vSpot;
++			// (A ball joint's rest, which its bend is measured from: the
++			// game's own, kept by the plank since the level was loaded.)
++			if (mTearType == eTearType_Ball)
++			{
++				cScript_RunGlobalFunc(apProp.GetName(), "cScrPropTear", "_Global_VRRestDir");
++				mvVRTearRest = cScript_GetGlobalReturnVector3f();
++				if (mvVRTearRest.Length() < 0.5f) mvVRTearRest = VRTearToBody(apJoint, apBody); // (not known: as it is now)
++				mvVRTearRest = cMath_Vector3Normalize(mvVRTearRest);
++			}
++			mfVRTearPullAdd = VRTearGiven(afFract);
++			mvVRTearLeanFrom = mTearType == eTearType_Ball ? VRTearLeanNow(VRTearToBody(apJoint, apBody), afFract) : cVector3f(0.0f);
++			mfVRTearFractWas = afFract;
++			mfVRTearTickWait = 0.0f;
++			mfVRTearMost = 0.0f;
++		}
++
++		// The variables the body script's VRTouchKind reads, as for a held
++		// door: the other hand, touching the plank, takes hold of it too.
++		cScript_SetGlobalVarID("BunkerVR_DoorBody", mBodyID);
++		cScript_SetGlobalVarFloat("BunkerVR_DoorTime", float(cEngine_GetGameTime()));
++
++		// The give the hands want (the one that wants more), and how far off
++		// its spot the hand furthest off is.
++		float fPulled = 0.0f;
++		cVector3f vBend = cVector3f(0.0f);
++		float fWanted = VRTearHandWants(apJoint, vHand, vSpot, mvVRTearFrom, mfVRTearPullAdd, mvVRTearLeanFrom, vBend, fPulled);
++		float fOff = (vHand - vSpot).Length();
++		cVector3f vHelpHand = cVector3f(0.0f);
++		cVector3f vHelpSpot = cVector3f(0.0f);
++		bool bTwoHands = VRUpdateTearHelp(apBody, apJoint, alHand, afFract, vHelpHand, vHelpSpot, afTimeStep);
++		if (bTwoHands)
++		{
++			float fPulledHelp = 0.0f;
++			cVector3f vBendHelp = cVector3f(0.0f);
++			float fWantedHelp = VRTearHandWants(apJoint, vHelpHand, vHelpSpot, mvVRTearHelpFrom, mfVRTearHelpAdd, mvVRTearHelpLeanFrom, vBendHelp, fPulledHelp);
++			if (fWantedHelp > fWanted)
++			{
++				fWanted = fWantedHelp;
++				vBend = vBendHelp;
++				fPulled = fPulledHelp;
++			}
++			fOff = cMath_Max(fOff, (vHelpHand - vHelpSpot).Length());
++		}
++
++		// The game's tear speed to it (1: as fast as the game lets the plank
++		// come; below 0: back). A ball joint's plank is turned towards the bend
++		// wanted (VRTearBend).
++		mfTearSpeed = cMath_Clamp((fWanted - afFract) * 4.0f, -1.0f, 1.0f);
++		if (mTearType == eTearType_Ball) VRTearBend(apProp, apJoint, apBody, vBend, afFract);
++		else							 apProp.SetVarFloat("TearSpeed", mfTearSpeed);
++
++		// Its health, while it gives (not pressed against what it is nailed
++		// to, nor coming back), faster for a plank torn by its health alone;
++		// not pulled, back to at least a fifth, as the game has it. At its full
++		// give, a hand pulled well past its spot tears it off.
++		bool bGives = afFract > 0.05f && afFract > mfVRTearFractWas - 0.002f;
++		mfVRTearFractWas = afFract;
++		if (mfTearSpeed > 0.0f && bGives) mfHealth -= mfTearSpeed * afTimeStep * mfHealthLossFactor * (mbHealthTearOnly ? gfVRTearHealthMul : 1.0f);
++		else if (fPulled < gfVRTearSlack) mfHealth = cMath_Max(mfHealth, 0.2f);
++		if (mbCanBeTorn && mfHealth > 0.0f && afFract >= 0.9f && fOff > gfVRTearYankPast && mfTearSpeed > 0.0f)
++		{
++			mfHealth = 0.0f;
++			Log("BunkerVR: the plank " + apProp.GetName() + " is pulled well past its full give (a hand " + int(fOff * 100.0f + 0.5f) + " cm off its spot): it comes off\n");
++		}
++
++		// The ticks in the hand (in both, holding with both).
++		mfVRTearTickWait -= afTimeStep;
++		if (mfTearSpeed > 0.05f && bGives && mfVRTearTickWait <= 0.0f)
++		{
++			mfVRTearTickWait = 0.1f;
++			float fTick = 0.15f + 0.45f * cMath_Clamp(afFract, 0.0f, 1.0f);
++			VRBuzzHand(alHand, 0.02f, fTick);
++			if (bTwoHands) VRBuzzHand(mlVRTearHelp, 0.02f, fTick);
++		}
++
++		// For the log: how far it has given at most, in tenths.
++		if (afFract >= mfVRTearMost + 0.1f && mfVRTearMost < 0.9f)
++		{
++			mfVRTearMost = afFract;
++			Log("BunkerVR: the plank " + apProp.GetName() + " gives: " + int(afFract * 100.0f + 0.5f) + "% of its give (" + int(fWanted * 100.0f + 0.5f) +
++				"% wanted), pulled " + int(fPulled * 100.0f + 0.5f) + " cm" + (bTwoHands ? " (both hands on it)" : "") +
++				(mbHealthTearOnly ? (", its health " + int(mfHealth * 100.0f + 0.5f) + "%") : "") + "\n");
++		}
++
++		BunkerVR_HintOffer(alHand, "tear_pull", vSpot);
++		return true;
++	}
++
++	// The give a hand wants of the plank (a fraction of its give, at most
++	// 1.2): where the plank was when the hand took hold, and as much more as
++	// the hand has pulled the way the plank gives since (afPulled, meters,
++	// from avFrom, where it took hold, to avHand): none for the first
++	// gfVRTearSlack, all of the give gfVRTearReach further. Along a slide's
++	// rail or round a hinge (VRTearPull; afAdd: the pull that gave the plank
++	// its give when the hand took hold, VRTearGiven); for a ball joint (its
++	// nails), any way square to its rest, and avBend is the bend wanted, as a
++	// way square to its rest as long as that fraction (avBendFrom: its bend
++	// when the hand took hold). Held at a ball joint's nailed end (avSpot
++	// within 5 cm of it), a hand has no leverage: it wants the plank kept as
++	// it was.
++	float VRTearHandWants(iPhysicsJoint@ apJoint, const cVector3f &in avHand, const cVector3f &in avSpot, const cVector3f &in avFrom, float afAdd,
++						  const cVector3f &in avBendFrom, cVector3f &out avBend, float &out afPulled)
++	{
++		avBend = avBendFrom;
++		afPulled = 0.0f;
++		if (mTearType != eTearType_Ball)
++		{
++			afPulled = VRTearPull(apJoint, avHand - avFrom, avSpot) + afAdd;
++			return cMath_Clamp((afPulled - gfVRTearSlack) / gfVRTearReach, 0.0f, 1.2f);
++		}
++		if ((avSpot - apJoint.GetPivotPoint()).Length() > 0.05f)
++		{
++			cVector3f vPull = avHand - avFrom;
++			cVector3f vAcross = vPull - mvVRTearRest * cMath_Vector3Dot(vPull, mvVRTearRest);
++			afPulled = vAcross.Length();
++			if (afPulled > gfVRTearSlack) avBend = avBend + vAcross * ((afPulled - gfVRTearSlack) / (afPulled * gfVRTearReach));
++		}
++		float fWanted = avBend.Length();
++		if (fWanted > 1.2f)
++		{
++			avBend = avBend * (1.2f / fWanted);
++			fWanted = 1.2f;
++		}
++		return fWanted;
++	}
++
++	// How far a pull (avPull) goes the way the plank gives: out along a
++	// slide's rail, or round a hinge (the game's hinge is torn turning about
++	// minus its pin: the spot held, avSpot, goes that way, square to its arm
++	// from the pin).
++	float VRTearPull(iPhysicsJoint@ apJoint, const cVector3f &in avPull, const cVector3f &in avSpot)
++	{
++		cVector3f vPin = cMath_Vector3Normalize(apJoint.GetPinDir());
++		if (mTearType == eTearType_Slide) return cMath_Vector3Dot(avPull, vPin);
++		cVector3f vWay = cMath_Vector3Cross(avSpot - apJoint.GetPivotPoint(), vPin);
++		return vWay.Length() > 0.001f ? cMath_Vector3Dot(avPull, cMath_Vector3Normalize(vWay)) : 0.0f;
++	}
++
++	// The pull that would have given a slide's or a hinge's plank as far as
++	// it has given now (afFract): a hold begun on a plank already partly
++	// pulled (by the other hand, or springing back from the last hold) holds
++	// it there, rather than letting it spring back out of the hand.
++	float VRTearGiven(float afFract)
++	{
++		return afFract > 0.02f ? gfVRTearSlack + cMath_Min(afFract, 1.0f) * gfVRTearReach : 0.0f;
++	}
++
++	// Which way a ball joint points to its plank now (from its nails to the
++	// plank's middle, as the game measures its bend).
++	cVector3f VRTearToBody(iPhysicsJoint@ apJoint, iPhysicsBody@ apBody)
++	{
++		return cMath_Vector3Normalize(cMath_MatrixMul(apBody.GetLocalMatrix(), apBody.GetMassCenter()) - apJoint.GetPivotPoint());
++	}
++
++	// A ball joint's plank's bend now (avToBody: VRTearToBody): the way it has
++	// gone from its rest (mvVRTearRest), square to that, as long as its
++	// fraction of its give (afFract); 0 0 0 at its rest.
++	cVector3f VRTearLeanNow(const cVector3f &in avToBody, float afFract)
++	{
++		cVector3f vLean = avToBody - mvVRTearRest * cMath_Vector3Dot(avToBody, mvVRTearRest);
++		return vLean.Length() > 0.0001f ? cMath_Vector3Normalize(vLean) * afFract : cVector3f(0.0f);
++	}
++
++	// A ball joint's plank turned from its bend now towards the bend wanted
++	// (avBend, VRTearHandWants), by the game's tear: about the line square to
++	// the plank and to the change ("TearRotateDir"), as fast as 4 x the change
++	// (at most the game's own pull). Always towards the bend wanted, whichever
++	// way the plank is bent: a turn kept from the hand's way would, with the
++	// hand back past where it took hold, send the plank further out as it was
++	// to come back. Coming back (mfTearSpeed below 0), the game's tear speed is
++	// given below 0 and the line the other way round: the same turn, without
++	// the creak, at the game's own speed back.
++	void VRTearBend(cLuxProp@ apProp, iPhysicsJoint@ apJoint, iPhysicsBody@ apBody, const cVector3f &in avBend, float afFract)
++	{
++		cVector3f vToBody = VRTearToBody(apJoint, apBody);
++		cVector3f vChange = avBend - VRTearLeanNow(vToBody, afFract);
++		cVector3f vAbout = cMath_Vector3Cross(vToBody, vChange);
++		float fSpeed = cMath_Min(vChange.Length() * 4.0f, 1.0f);
++		if (vAbout.Length() < 0.0001f)
++		{
++			vAbout = cVector3f(0.0f);
++			fSpeed = 0.0f;
++		}
++		else vAbout = cMath_Vector3Normalize(vAbout);
++		if (mfTearSpeed < 0.0f)
++		{
++			vAbout = vAbout * -1.0f;
++			fSpeed = -fSpeed;
++		}
++		apProp.SetVarVector3f("TearRotateDir", vAbout);
++		apProp.SetVarFloat("TearSpeed", fSpeed);
++	}
++
++	// The other hand on the plank too, as on a heavy thing pushed
++	// (VRUpdatePushHelp in PlayerState_Interact_Push.hps; the mod leaves the
++	// game's button with the first hand, since the body script's VRTouchKind
++	// reports that this hand touches what that one holds). It takes hold as
++	// its squeeze starts while it touches the plank, where it touches, and is
++	// drawn there ("BunkerVR_DoorHand2"...); it lets go when its squeeze ends
++	// or it is pulled off. If the first hand lets go first, the mod gives the
++	// button to this one and the game takes the plank up again in it (its
++	// health carries over: OnEnterState; and it is held where it is). True
++	// while it holds, with where it is (avHand) and its spot on the plank
++	// (avSpot).
++	bool VRUpdateTearHelp(iPhysicsBody@ apBody, iPhysicsJoint@ apJoint, int alHand, float afFract, cVector3f &out avHand, cVector3f &out avSpot, float afTimeStep)
++	{
++		avHand = cVector3f(0.0f);
++		avSpot = cVector3f(0.0f);
++		cCamera@ pCam = mBaseObj.mpPlayer.GetCamera();
++		if (pCam is null) return false;
++		int lHelp = 1 - alHand;
++		tString sHelp = lHelp == 0 ? "0" : "1";
++
++		// Is that hand squeezing for its own hold (roll 7014: 12345, then 1
++		// left + 2 right)? And where is its palm (7011 left, 7012 right)?
++		float fRealRoll = pCam.GetRoll();
++		pCam.SetRoll(7014.0f);
++		cVector3f vUse = pCam.GetMatrix().GetTranslation();
++		pCam.SetRoll(lHelp == 0 ? 7011.0f : 7012.0f);
++		cVector3f vPalm = pCam.GetMatrix().GetTranslation();
++		pCam.SetRoll(fRealRoll);
++		bool bSqueeze = vUse.x > 12344.0f && vUse.x < 12346.0f && (int(vUse.y + 0.5f) & (lHelp == 0 ? 1 : 2)) != 0;
++		bool bJustSqueezed = bSqueeze && mbVRTearHelpSqueezeWas == false;
++		mbVRTearHelpSqueezeWas = bSqueeze;
++
++		cMatrixf mtxBody = apBody.GetLocalMatrix();
++		if (mlVRTearHelp < 0 && bJustSqueezed)
++		{
++			// Only while it touches the plank (reported just now).
++			float fAge = float(cEngine_GetGameTime()) - cScript_GetGlobalVarFloat("BunkerVR_TouchTime" + sHelp);
++			if (fAge > -0.001f && fAge < 0.25f && cScript_GetGlobalVarID("BunkerVR_TouchBody" + sHelp) == mBodyID)
++			{
++				mvVRTearHelpOnBody = cMath_MatrixMul(cMath_MatrixInverse(mtxBody), vPalm);
++				mvVRTearHelpFrom = vPalm;
++				mfVRTearHelpAdd = VRTearGiven(afFract);
++				mvVRTearHelpLeanFrom = mTearType == eTearType_Ball ? VRTearLeanNow(VRTearToBody(apJoint, apBody), afFract) : cVector3f(0.0f);
++				mfVRTearHelpApart = 0.0f;
++				mlVRTearHelp = lHelp;
++				VRBuzzHand(lHelp, 0.03f, 0.4f);
++				Log("BunkerVR: the other hand takes hold of the plank too\n");
++			}
++		}
++		if (mlVRTearHelp < 0) return false;
++
++		cVector3f vSpot = cMath_MatrixMul(mtxBody, mvVRTearHelpOnBody);
++		if ((vPalm - vSpot).Length() > gfVRInteractLetGoDistance) mfVRTearHelpApart += afTimeStep;
++		else													  mfVRTearHelpApart = 0.0f;
++		if (bSqueeze == false || mfVRTearHelpApart > gfVRInteractLetGoTime)
++		{
++			if (bSqueeze) VRBuzzHand(lHelp, 0.04f, 0.4f);
++			Log("BunkerVR: the other hand lets go of the plank\n");
++			mlVRTearHelp = -1;
++			cScript_SetGlobalVarInt("BunkerVR_DoorHand2", 0);
++			return false;
++		}
++
++		// Drawn on its spot (with the first hand's stamp, set this update).
++		cScript_SetGlobalVarInt("BunkerVR_DoorHand2", lHelp + 1);
++		cScript_SetGlobalVarVector3f("BunkerVR_DoorGrip2", vSpot);
++		cScript_SetGlobalVarVector3f("BunkerVR_DoorGripAxis2", cVector3f(0.0f));
++		cScript_SetGlobalVarVector3f("BunkerVR_DoorGripOut2", cVector3f(0.0f));
++		avHand = vPalm;
++		avSpot = vSpot;
++		return true;
++	}
++
++	// Torn off by a VR hand: a strong buzz (in both, holding with both), and
++	// the hint is learned.
++	void VRTornByHand(int alHand, cLuxProp@ apProp)
++	{
++		VRBuzzHand(alHand, 0.15f, 1.0f);
++		if (mlVRTearHelp >= 0) VRBuzzHand(mlVRTearHelp, 0.15f, 1.0f);
++		cVR_HintUsed("tear_pull");
++		Log("BunkerVR: the plank " + apProp.GetName() + " is torn off by the " + (alHand == 0 ? "left" : "right") + " hand" +
++			(mlVRTearHelp >= 0 ? ", the other one on it too" : "") + "\n");
++	}
+=114
++
++	// BunkerVR: a VR hand's pull (VRTearByHand).
++	[nosave] bool mbVRTearFromSet = false;			// is where the hand took hold known?
++	[nosave] cVector3f mvVRTearFrom = cVector3f(0.0f);	// ...where (world)
++	[nosave] cVector3f mvVRTearRest = cVector3f(0.0f);	// a ball joint's rest: the way it pointed to its plank as the level was loaded (VRTearLeanNow)
++	[nosave] cVector3f mvVRTearLeanFrom = cVector3f(0.0f);	// a ball joint's plank's bend when the hand took hold (VRTearHandWants)
++	[nosave] float mfVRTearTickWait = 0.0f;			// seconds until the next tick in the hand
++	[nosave] float mfVRTearMost = 0.0f;				// how far it has given at most (for the log)
++	[nosave] float mfVRTearPullAdd = 0.0f;			// the pull the plank had already had when the hand took hold (VRTearGiven)
++	[nosave] float mfVRTearFractWas = 0.0f;			// how far it had given at the last update
++	[nosave] int mlVRTearHelp = -1;					// the other hand on it too (0 left, 1 right; -1 none; VRUpdateTearHelp)
++	[nosave] bool mbVRTearHelpSqueezeWas = false;	// was that hand squeezing last update?
++	[nosave] cVector3f mvVRTearHelpOnBody = cVector3f(0.0f);	// its spot, in the body's own frame
++	[nosave] cVector3f mvVRTearHelpFrom = cVector3f(0.0f);	// where it took hold (world)
++	[nosave] float mfVRTearHelpAdd = 0.0f;			// the pull the plank had already had then (VRTearGiven)...
++	[nosave] cVector3f mvVRTearHelpLeanFrom = cVector3f(0.0f);	// ...or its bend then (VRTearHandWants)
++	[nosave] float mfVRTearHelpApart = 0.0f;		// how long it has been pulled off its spot (seconds)
++	[nosave] tID mVRTearLeftProp = tID_Invalid;		// the plank the last VR hand's hold ended on (OnLeaveState)...
++	[nosave] float mfVRTearLeftAt = 0.0f;			// ...when (game seconds)...
++	[nosave] float mfVRTearLeftHealth = 1.0f;		// ...and its health then
+end

@@ -149,6 +149,7 @@ enum VrMenuAction
     kMenuActionHintsReset = 93,    // the Accessibility page: "Show Learned Hints Again" (HintsForget)
     kMenuActionGameMenu = 94,      // the Player page: "Open Game Menu" (SteamVR gives the game no left menu button)
     kMenuActionBodySlot = 95,      // the Holsters page: "Set Chest Item Slot Position"
+    kMenuActionWorldScaleMoved = 96, // the Player page: the calibrated world scale changed by hand
     kMenuActionPlaceFirst = 100,   // 100 to 111: the Places page's places (VrPlaceName, VrPlaceWords)
     kMenuActionPlaceLast = 111,
 };
