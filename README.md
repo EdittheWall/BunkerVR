@@ -101,6 +101,7 @@ Everything else is done with your hands, and small hints show you how the first 
 - Seated and standing modes with height calibration
 - Knockdowns and deaths in first person, on a screen or behind a vignette
 - Cutscenes on a virtual cinema screen
+- The game pauses when you take off the headset or open its menu
 - Adjustable world scale, grab reach, throw assist and haptics
 - A steady spectator view for streaming and recording
 
@@ -108,6 +109,8 @@ Everything else is done with your hands, and small hints show you how the first 
 
 Still being worked on:
 
+- Shotgun ammo checking
+- Fuel barrel polish and sounds
 - Performance in the heaviest areas
 - A few scenes that still play like the flat game
 - Translations of the mod's own texts
@@ -128,7 +131,7 @@ for progress videos.
 
 ## Building from source
 
-You need Visual Studio 2022 with the C++ desktop workload (it includes CMake and Ninja). From a
+You need Visual Studio 2022 or newer with the C++ desktop workload (it includes CMake and Ninja). From a
 **x64 Native Tools Command Prompt**:
 
 ```bat

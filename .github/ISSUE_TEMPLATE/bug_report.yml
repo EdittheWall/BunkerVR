@@ -15,7 +15,7 @@ body:
     attributes:
       label: BunkerVR version
       description: Shown in Windows' Installed apps, and at the top of system.txt in the logs zip.
-      placeholder: "2.08"
+      placeholder: "2.09"
     validations:
       required: true
   - type: dropdown

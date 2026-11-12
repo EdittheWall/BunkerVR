@@ -1,8 +1,9 @@
 # Changelog
 
-## 2.09: the first public version (early access)
+## 2.09 Stand-To (12 November 2026)
 
-BunkerVR's first public release. Everything below is new to anyone who hasn't been part of the private test.
+The first public release. Stand-to was the hour before dawn when every soldier in the trench stood ready on the
+fire-step. Everything below is new to anyone who hasn't been part of the private test.
 
 **The player**
 - Full arms and tracked hands with finger poses, room-scale movement, real crouching and leaning.
@@ -40,7 +41,9 @@ BunkerVR's first public release. Everything below is new to anyone who hasn't be
 - If a Steam update or a check of the game's files puts the game's own files back, BunkerVR says so when the game
   starts and asks you to run Setup again, instead of starting a broken VR session.
 
-**Known issues**
+**Still in progress**
+- Shotgun ammo checking.
+- Fuel barrel polish and sounds.
 - The heaviest areas (No Man's Land, the arena) can drop to half the headset's frame rate.
 - A few scenes are still the flat game's: putting the lockdown wheel on its spindle, climbing the arena's ledge and
   the No Man's Land story scenes.
