@@ -7,6 +7,7 @@
 <a href="https://github.com/EdittheWall/BunkerVR/releases/latest"><img src="https://img.shields.io/github/v/release/EdittheWall/BunkerVR?include_prereleases&style=for-the-badge&label=Download&color=8a1c1c" alt="Download the latest release"></a>
 <a href="#where-its-at"><img src="https://img.shields.io/badge/Status-Early%20Access-d08a1e?style=for-the-badge" alt="Status: Early Access"></a>
 <a href="https://www.youtube.com/@EditTheWallll"><img src="https://img.shields.io/badge/YouTube-Progress%20videos-c4302b?style=for-the-badge&logo=youtube&logoColor=white" alt="Progress videos on YouTube"></a>
+<a href="https://ko-fi.com/editthewall"><img src="https://img.shields.io/badge/Ko--fi-Support-ff5e5b?style=for-the-badge&logo=kofi&logoColor=white" alt="Support on Ko-fi"></a>
 
 <img src="docs/media/hero.webp" width="100%" alt="Firing the shotgun, racking its pump by hand and putting it away over the shoulder">
 
@@ -157,6 +158,11 @@ those: the body, the hands and every item's behavior in VR are script code, patc
 The repository contains no files from the game. The `patches\` folder holds only the mod's own lines and
 instructions on where they go; Setup applies them to the files already on your PC, and only if those files are the
 exact version the patches were made for.
+
+## Support
+
+BunkerVR is free and always will be, and nothing is locked behind a tip. If you'd like to support it, you can buy me a
+coffee on [Ko-fi](https://ko-fi.com/editthewall). It goes into quality updates for BunkerVR and new VR projects.
 
 ## Credits
 
