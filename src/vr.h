@@ -188,6 +188,14 @@ void VrSetMenuOption(int index, int choice);
 // setting is applied.
 void VrScriptBuzz(int hand, float seconds, float strength);
 
+// The game's own rumble (cVR_Rumble from Effect_Rumble_Start), felt in both hands while the player plays normally,
+// never cutting a hand's own buzz short. `amount` 0 to 1, `seconds` as the game asks (at most half a second is felt).
+void VrRumble(float amount, float seconds);
+
+// The body script lets go of an item kept ready in the right hand for half a second (cVR_LetGoOfReady), so the game
+// leaves its state: for the lantern switched with the item in hand, which the game does only in its normal state.
+void VrLetGoOfReadyItem();
+
 // Stereo in one game frame (scene.cpp draws the world twice per frame).
 // VrStereoCanStart: can the headset frame now in progress be drawn that way?
 // VrStereoMidFrame: call after the world has been drawn for the left eye.
@@ -242,6 +250,18 @@ int VrGetFingers(int hand, float curls[3]);
 // and being wound round the left forearm, 2 = done. `turns` receives how many
 // times it has been wound round so far.
 int VrGetBandage(float& turns);
+
+// Is VR running, or being won back after a loss? The scripts then play the VR
+// way. False before VR has started and once it has failed or been given up on:
+// the scripts then play the flat game's way, as without the mod (camera.cpp
+// leaves their head and hand questions unanswered).
+bool VrModRunning();
+
+// Is VR on for this run: being started (the first connection can take seconds,
+// while the game sets itself up), running, or being won back? False once it has
+// failed or been given up on. For what the scripts read once as they set up,
+// such as the game's Accessibility input modes (cVR_Running).
+bool VrModOn();
 
 // The game's own window (a HWND), as last seen drawing; nullptr before
 // that. For the hand poses tool (posetool.cpp): F11, and which screen it
@@ -319,10 +339,26 @@ float VrGetTrigger(int hand);
 // is the fit's own, not the game's interact button. Stale after 0.3 s.
 void VrRightFitted();
 
+// The body script reports, every update while the left hand's squeeze belongs
+// to the item in the right hand's work (cVR_LeftAtWork: the medkit, its case
+// in reach of the left hand or held in it): a left squeeze begun meanwhile is
+// that work's own, not the game's interact button, the lantern at the chest
+// or a pull. Stale after 0.3 s.
+void VrLeftAtWork();
+
 // The shotgun's script reports, every update while the shotgun is held
 // (cVR_LeftAtPump): is the left palm at its fore-end? A left squeeze there
 // takes the pump. Stale after 0.3 s.
 void VrLeftAtPump(bool at);
+
+// The shotgun's script says the real left hand holding the pump has come well off the fore-end
+// (cVR_LeftLetsGoOfGun): the left hand lets go of the gun, and closes on nothing until squeezed afresh.
+void VrLeftLetsGoOfGun();
+
+// The game's input script says which keys an action is bound to, as its key bindings name them ("Forward",
+// "Keyboard.W", ""), each time it binds the keys: at the start and after the player changes them (cVR_KeyBound, from
+// LoadKeyConfig in InputHandler.hps). The keys the controllers press for the game follow (vr.cpp, GameKeyPlace).
+void VrKeyBound(const char* action, const char* primary, const char* secondary);
 
 // The body script reports, every update while a knockdown, a kill or a death
 // plays (cVR_NoTurning): the sticks turn nothing. Stale after 0.3 s.

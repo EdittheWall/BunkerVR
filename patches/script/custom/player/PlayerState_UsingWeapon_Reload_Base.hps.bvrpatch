@@ -1,0 +1,8 @@
+BunkerVR patch 1
+file script/custom/player/PlayerState_UsingWeapon_Reload_Base.hps
+from 63364fffc7c3e095caa9b57737e3fd5f998a838b37423a0ebe41800679c9c884 23317
+to 95a8c1a6917b55ed49a93f8dbf5caa1a3190a75ed03ebf29fb6e582e91acdec4 23429
+=56
+-1
++		mlUseItemMode = (cVR_Running() ? 0 : cLux_GetUserConfig().GetInt("Accessibility", "ReloadWeaponMode", 0)); // BunkerVR: Hold while VR runs (the mod holds the game's buttons as long as a hand does)
+end

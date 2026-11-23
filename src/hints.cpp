@@ -1,5 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -67,6 +68,7 @@ static const HintInfo kHints[] = {
     { "mask_off",     "Grip: Pull it off your face",         kHintUseTold,    0.10f },
     // The mod's own (UpdateHints in vr.cpp): the places on the body, the
     // revolver, the grenade, the lighter, healing.
+    { "stick_jump",   "Stick up: Jump, down to crouch",      kHintUseTold,    0.10f }, // the right stick, which nothing in the world shows: at the empty right hand
     { "holster_draw", "Grip: Draw the revolver",             kHintUseGrip,    0.12f },
     { "holster_put",  "Grip: Holster the revolver",          kHintUseGrip,    0.12f },
     { "pouch_bullet", "Grip: Take a bullet",                 kHintUseSqueeze, 0.075f }, // (just above the pouch's count, 8 cm tall round the spot)
@@ -84,6 +86,14 @@ static const HintInfo kHints[] = {
     { "lighter",      "Trigger: Light",                      kHintUseTrigger, 0.08f },
     { "bandage_open", "Left Grip: Pull it open",             kHintUseTold,    0.08f },
     { "bandage_wind", "Circle your left forearm: Wrap it",   kHintUseTold,    0.10f },
+    // The medkit (the body script: VRUpdateMedkit in Prop_PlayerBody.hps): it stays in the right hand, the left hand works it.
+    { "medkit_flap",  "Left Grip: Lift the flap",            kHintUseTold,    0.06f },
+    { "medkit_bottle", "Left Grip: Take the bottle",         kHintUseTold,    0.06f },
+    { "medkit_cork",  "Left Trigger: Pull out the cork",     kHintUseTold,    0.06f },
+    { "medkit_drink", "Tip it to your lips: Drink",          kHintUseTold,    0.07f },
+    { "medkit_back",  "Let go: Put it back",                 kHintUseTold,    0.06f },
+    { "medkit_dressing", "Left Grip: Take the dressing",     kHintUseTold,    0.06f },
+    { "medkit_wrap",  "Circle your right forearm: Wrap it",  kHintUseTold,    0.10f },
 };
 static const int kHintTotal = (int)(sizeof(kHints) / sizeof(kHints[0]));
 
@@ -209,7 +219,9 @@ void HintUsed(const HintInfo* info, double nowMs)
     if (nowMs - g_usedAtMs[i] < 1500.0) return;
     g_usedAtMs[i] = nowMs;
     if (g_used[i] < 1000) ++g_used[i];
-    SaveUsed();
+    // (Written down only while the count still leads to "learned": past that it changes nothing, and a file written at
+    // every use is a hitch in play. The higher count goes with the next save.)
+    if (g_used[i] <= kHintLearnedAfter) SaveUsed();
     static int logsLeft = 60;
     if (logsLeft > 0)
     {
@@ -268,6 +280,7 @@ static double g_carriedMs = -100000.0;
 void HintFromScript(int hand, const char* key, const float world[3], double nowMs)
 {
     if (hand < 0 || hand > 1) return;
+    if (!isfinite(world[0]) || !isfinite(world[1]) || !isfinite(world[2])) return; // (a script's number that is no number: no label there)
     const HintInfo* info = HintFind(key);
     if (!info)
     {

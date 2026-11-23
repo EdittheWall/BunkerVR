@@ -1,8 +1,10 @@
 BunkerVR patch 1
 file script/custom/modules/SketchbookUIHandler.hps
 from 686c73ff11cef78a208ba8919fef9d145c16376f435f7832b7ca7169191370e2 175289
-to 2ea5666da3691a02978411f33617c2d68fc97b13773bdf095ec6fa15a7cf5f5e 187841
-=95
+to e7bf4fe0f15e02aa075f53b771dbc544e22fefa1907c2f1fd314c1898b317f29 188537
+=18
++#include "custom/helpers/helper_bunkervr_items.hps" // BunkerVR: a medkit drunk from by hand shows half used
+=77
 +// BunkerVR: the storage box's book stands this far above the top of the
 +// box in the headset (in world units; see VRSendStorageBoxAt).
 +const float gfVRStorageBookAbove = 0.35f;
@@ -10,7 +12,12 @@ to 2ea5666da3691a02978411f33617c2d68fc97b13773bdf095ec6fa15a7cf5f5e 187841
 +// distance from the eyes (in world units; see VRUpdateStorageView).
 +const float gfVRStorageSharp = 0.1f;
 +
-=551
+=328
+-3
++		mlUseItemMode = (cVR_Running() ? 0 : pConfig.GetInt("Accessibility", "UseItemMode", 0)); // BunkerVR: Hold while VR runs (the mod holds the game's buttons as long as a hand does)
++		mlChargeFlashlightMode = (cVR_Running() ? 0 : pConfig.GetInt("Accessibility", "ChargeFlashlightMode", 0)); // BunkerVR: Hold while VR runs (the mod holds the game's buttons as long as a hand does)
++		mlReloadWeaponMode = (cVR_Running() ? 0 : pConfig.GetInt("Accessibility", "ReloadWeaponMode", 0)); // BunkerVR: Hold while VR runs (the mod holds the game's buttons as long as a hand does)
+=220
 -1
 +		// BunkerVR: not in the headset: on the flat screen it darkens the
 +		// world around the player's raised hand beside the book; on the
@@ -254,7 +261,12 @@ to 2ea5666da3691a02978411f33617c2d68fc97b13773bdf095ec6fa15a7cf5f5e 187841
 =165
 +		msVRPointedItem = ""; // BunkerVR
 +		mbVRPointedCanDrop = false;
-=249
+=117
++			// BunkerVR: a medkit whose bottle has been drunk by hand (its own health
++			// says so) shows half, its dressing left.
++			else if (pItem.GetTypeID() == "Medkit" && BunkerVR_MedkitDrunk(pItem.GetHealth()))
++				fItemHealth = pItem.GetHealth();
+=132
 +			// BunkerVR: the item under the mouse pointer (in the headset, the
 +			// hand's pointer), for the drop key (see OnInventoryAction).
 +			if (ImGui_PrevMouseOver())

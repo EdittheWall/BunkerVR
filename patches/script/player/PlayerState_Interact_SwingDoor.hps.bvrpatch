@@ -1,7 +1,7 @@
 BunkerVR patch 1
 file script/player/PlayerState_Interact_SwingDoor.hps
 from b3791db7562bc089427e3f593fa9853b453271aa2489333fdc2c4854e357c97c 8472
-to 757cee501bebab1a49d33df054586beee93eb20ba87e7266957979ed38748643 38378
+to 33421a5b889e0e4996e2df33e12827879ea1a8a85d7976d42580d706c9e06424 38488
 =10
 +//------------------------------------------------------------
 +
@@ -325,13 +325,14 @@ to 757cee501bebab1a49d33df054586beee93eb20ba87e7266957979ed38748643 38378
 +				}
 +			}
 +
-+			// Closes a quarter of the gap to the hand each update, no faster
++			// Closes a quarter of the gap to the hand each update at 90 a second (the
++			// same pace in time at any rate: VRHoldCatchUpShare), no faster
 +			// than gfVRDoorMaxSpeed, which gives the door a little weight. A
 +			// slower catch-up pushed with a limited force makes the door creep
 +			// after the hand as if on a string; full strength (up to 14
 +			// radians a second) can fling it so fast it leaves its hinges for
 +			// a moment.
-+			fWantedSpeed = fError * (0.25f / cMath_Max(afTimeStep, 0.004f));
++			fWantedSpeed = fError * (VRHoldCatchUpShare(0.25f, afTimeStep) / cMath_Max(afTimeStep, 0.004f));
 +			if(fWantedSpeed > gfVRDoorMaxSpeed)		fWantedSpeed = gfVRDoorMaxSpeed;
 +			if(fWantedSpeed < -gfVRDoorMaxSpeed)	fWantedSpeed = -gfVRDoorMaxSpeed;
 +		}

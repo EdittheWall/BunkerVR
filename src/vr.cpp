@@ -54,11 +54,18 @@
 // ---------------------------------------------------------------------------
 
 static int g_glErrorsTakenTimes = 0;
+static double NowMs();
+static double g_statGlErrorChecksMs = 0.0;           // the time these checks took since the last timing lines
+static unsigned long long g_statGlErrorChecks = 0;   // and how many there were
+static double g_statGlGuardMs = 0.0;                 // the game's OpenGL settings kept and put back (RunProtected), likewise
 
 static void TakeGlErrorsBefore(const char* what)
 {
     unsigned first = 0;
+    double startMs = NowMs();
     int count = GlTakeErrors(first);
+    g_statGlErrorChecksMs += NowMs() - startMs;
+    ++g_statGlErrorChecks;
     if (count == 0) return;
     ++g_glErrorsTakenTimes;
     if (g_glErrorsTakenTimes <= 30 || g_glErrorsTakenTimes % 1000 == 0)
@@ -332,11 +339,15 @@ static XrResult XrEndFrameGl(XrSession session, const XrFrameEndInfo* info)
 enum class VrState
 {
     NotStarted, // nothing done yet
+    Starting,   // connecting to the headset software, on a thread of its own (see ConnectThread)
     Ready,      // connected to the headset software
+    Lost,       // the connection was lost while playing: let go of, and tried again shortly (see LoseVr)
     Failed,     // something went wrong; leave the game alone from now on
 };
 
 static VrState g_state = VrState::NotStarted;
+static bool g_everReady = false;       // VR has been running this run (a connection now is a reconnection)
+static double g_lostSinceMs = -1.0;    // when the connection was lost (NowMs), while it is being won back; else below 0
 
 static XrInstance g_instance = XR_NULL_HANDLE; // our connection to the VR software
 static XrSystemId g_systemId = XR_NULL_SYSTEM_ID; // the headset
@@ -501,7 +512,7 @@ static const float kIndexOpenMost = 0.5f;               // cap on a closed hand'
 // How far each hand's thumb, first finger and other three fingers are closed
 // (0 to 1), worked out from the sensors and squeezes for posing empty hands.
 static float g_fingerCurl[2][3] = { { 0, 0, 0 }, { 0, 0, 0 } };
-static XrAction g_inventoryAction = XR_NULL_HANDLE; // right stick click: the flashlight (despite the name)
+static XrAction g_inventoryAction = XR_NULL_HANDLE; // right stick click: a mark with the left stick held in (despite the name)
 static bool g_inventoryReady = false;
 static bool g_gunButtonsReady = false;
 static bool g_rightMouseDown = false;
@@ -522,6 +533,11 @@ static XrPosef g_aimRoom[2] = {};
 static bool g_pointerActive = false; // is a hand steering the mouse pointer on the panel right now?
 static int g_pointerHand = 1;
 static float g_pointerLength = 0.0f; // meters from that hand to the panel
+// Where that hand's press lands, in the room: the steadied spot the game's mouse (or the mod's menu) is given, which
+// the cursor and the beam's end are drawn at (PlacePointerPieces), not where the raw ray meets the panel (the
+// steadying holds back small moves, so the two can be apart for a moment). Set each frame the pointer steers.
+static float g_pointerSpot[3] = { 0, 0, 0 };
+static double g_pointerSpotMs = -1000.0;
 // Both hands can point at the panel. Each one that does gets a beam; the mouse
 // follows the hand that pressed last (g_menuHand), or the only one pointing.
 static bool g_pointerHit[2] = { false, false };
@@ -540,6 +556,7 @@ static bool g_panelShown = false;   // was it shown in the last frame?
 static bool g_dedicationHolding = false; // the dedication comes first: the game's panel and controls wait (see UpdateDedication)
 static bool g_dedicationSqueezed = false; // a fresh squeeze while it waits: the headset is on (UpdateGrabInput)
 static float DedicationDark();           // how dark the eyes are for it, 0 to 1 (DrawFade)
+static float EyesDark();                 // how dark the eyes are made now, for all reasons, 0 to 1
 static bool g_panelMoving = false;  // is it gliding back in front of the player?
 static bool g_panelSnapRequested = false;
 static unsigned long long g_panelLastShownSerial = 0;
@@ -1605,13 +1622,18 @@ float VrGetHandCurl(int hand)
     return g_handCurl[hand];
 }
 
+static bool RightFittedNow();
+
 int VrGetFingers(int hand, float curls[3])
 {
     curls[0] = curls[1] = curls[2] = 0.0f;
     if (hand != 0 && hand != 1) return 0;
 
-    // A hand that holds one of the game's things keeps the game's fingers.
-    if ((hand == 0 ? CameraLeftItemKind() : CameraRightItemKind()) != kItemNone) return 2;
+    // A hand that holds one of the game's things keeps the game's fingers. Not the right hand once the medkit's bag has
+    // dropped from it and the left hand winds its dressing round the right forearm (the body script says so,
+    // cVR_RightFitted): it holds nothing then, its fingers posed as the real hand's.
+    int kind = hand == 0 ? CameraLeftItemKind() : CameraRightItemKind();
+    if (kind != kItemNone && !(hand == 1 && kind == kItemMedkit && RightFittedNow())) return 2;
 
     for (int i = 0; i < 3; ++i) curls[i] = g_fingerCurl[hand][i];
     return 1;
@@ -1684,6 +1706,13 @@ void VrLogTimings()
             g_sendPartMs[kSendPartMonitor] / frames, (g_statEndMs - parts) / frames);
         for (int i = 0; i < kSendParts; ++i) g_sendPartMs[i] = 0.0;
         g_statPanelCopies = 0;
+        // (Inside those parts: the OpenGL errors taken before the headset software's calls, TakeGlErrorsBefore.)
+        Log("VR: the OpenGL error checks before the headset software's calls: %.3f ms a frame (%.1f checks a frame); the game's "
+            "OpenGL settings kept and put back: %.3f ms a frame.",
+            g_statGlErrorChecksMs / frames, (double)g_statGlErrorChecks / frames, g_statGlGuardMs / frames);
+        g_statGlErrorChecksMs = 0.0;
+        g_statGlErrorChecks = 0;
+        g_statGlGuardMs = 0.0;
     }
     g_statEndMs = g_statBeginMs = g_statWaitMs = 0;
     g_statFrames = 0;
@@ -1856,7 +1885,7 @@ static bool SetupHands()
     g_vrMenuReady = g_gunButtonsReady &&
         Check(xrCreateAction(g_actionSet, &vrMenuInfo, &g_vrMenuAction), "Creating the BunkerVR menu input");
 
-    // And the right stick's click. Named "inventory", it takes out or puts away the flashlight.
+    // And the right stick's click. Named "inventory" (from an earlier layout), it makes a mark with the left stick held in.
     XrActionCreateInfo inventoryInfo = { XR_TYPE_ACTION_CREATE_INFO };
     inventoryInfo.actionType = XR_ACTION_TYPE_BOOLEAN_INPUT;
     lstrcpynA(inventoryInfo.actionName, "inventory", XR_MAX_ACTION_NAME_SIZE);
@@ -2294,6 +2323,32 @@ static void Buzz(int hand, float seconds, float strength)
     g_buzzEndsMs[hand] = NowMs() + seconds * 1000.0;
 }
 
+// The game's own rumble (Effect_Rumble_Start: shells landing, the Beast, a trap, a hard landing), which a gamepad
+// would feel: felt in both hands as the world's, while the player plays normally. Not while an item is in use or a
+// gun is held ready (the game's states for those; the mod's own buzzes cover what the hands do), nor in a hand whose
+// own buzz is still going, which it never cuts short. At most half a second, a little softer than the game asks.
+void VrRumble(float amount, float seconds)
+{
+    if (!VrModRunning() || !CameraPlayerStateNormal() || CameraGunHeld()) return;
+    if (!(amount > 0.01f) || !(seconds > 0.0f)) return; // (also leaves out a number that is not one)
+    if (amount > 1.0f) amount = 1.0f;
+    if (seconds > 0.5f) seconds = 0.5f;
+    double now = NowMs();
+    int felt = 0;
+    for (int hand = 0; hand < 2; ++hand)
+    {
+        if (now < g_buzzEndsMs[hand]) continue;
+        Buzz(hand, seconds, amount * 0.6f);
+        ++felt;
+    }
+    static int logsLeft = 10;
+    if (logsLeft > 0)
+    {
+        --logsLeft;
+        Log("VR: the game's rumble (%.2f for %.2f s) felt in %d hand(s).", amount, seconds, felt);
+    }
+}
+
 // Moves a recenter along (see VrRecenter); once per headset frame, before
 // the head is published. Once the eyes are black the view is centered (by
 // PublishHeadPose, with this frame's head) and both controllers buzz.
@@ -2343,6 +2398,7 @@ static unsigned g_menuRoomRecentres = 0;
 
 void VrSetMenuRoom(float cameraAboveFloor)
 {
+    if (!isfinite(cameraAboveFloor)) return; // (a script's number that is no number)
     g_menuRoomAbove = cameraAboveFloor;
     g_menuRoomMs = NowMs();
 }
@@ -2935,6 +2991,7 @@ static bool HurtHoldsBuzz(int hand, float seconds, float strength); // (the hit 
 
 void VrScriptBuzz(int hand, float seconds, float strength)
 {
+    if (!isfinite(seconds) || !isfinite(strength)) return; // (a script's number that is no number)
     if (hand == 2) hand = g_grabHand; // "the hand that holds"
     if (seconds < 0.005f) seconds = 0.005f;
     if (seconds > 1.0f) seconds = 1.0f;
@@ -3211,6 +3268,12 @@ static bool g_rightAtShoulder = false; // is the right palm behind the right sho
 // is let go of for the shotgun's put-away behind the shoulder, as X's put-away
 // does: held, the game takes the gun up again at once.
 static double g_shoulderQuietUntilMs = 0.0;
+
+void VrLetGoOfReadyItem()
+{
+    g_shoulderQuietUntilMs = NowMs() + 500.0;
+}
+
 // Until when it is let go of for the inventory: the game opens its inventory
 // only in its normal state, and with the aim held it is in its aiming state, so
 // B's Tab would do nothing while a gun is out. B lets go of the aim (and of an
@@ -3349,6 +3412,9 @@ static double g_reachUntilMs[2] = { 0.0, 0.0 };
 // touches something (farther off, within kHandOnGun's reach, it takes what
 // it touches; meters, from a point a little in front of the right palm).
 static const float kOnGunTouching = 0.10f;
+// The revolver's steadying left hand lets go when the hands are this far apart (the game's meters, as the 0.22 it is
+// taken within).
+static const float kSteadyLetGoApart = 0.40f;
 static bool g_fireHeld = false;   // the right trigger is holding the interact button down (firing)
 static bool g_bulletTap = false;  // the interact button is down for a moment to load a bullet
 static double g_bulletTapUntil = 0;
@@ -3393,6 +3459,66 @@ static void HoverBuzz(int hand)
     if (now - lastMs < 60.0) return;
     lastMs = now;
     Buzz(hand, 0.015f, 0.35f);
+}
+
+// A firmer tick as a press lands on a menu (the game's or the mod's), as the click
+// of a real button: the hover's tick alone left a press unfelt.
+static void PressBuzz(int hand)
+{
+    Buzz(hand, 0.025f, 0.6f);
+}
+
+// A place on the body (the hip, behind the shoulder, the chest's flashlight and item slot) answering a squeeze: a
+// firm buzz when it acts, a soft tap when it has no use for it (nothing to take out there), so a squeeze is never
+// met with nothing. (The light tick as the hand arrives is each place's own.)
+static void SlotFeel(int hand, bool acts)
+{
+    if (acts) Buzz(hand, 0.05f, 0.6f);
+    else Buzz(hand, 0.03f, 0.3f);
+}
+
+// Which way the torso faces, for the places on the body (the hip, behind the shoulder, the chest's slot and the
+// lantern's place, the pouch): given the head's level right (rx, rz, normalised), it is turned to the torso's. The
+// torso is taken to follow the head's turn only past kTorsoLagRad: a head turned to look aside (up to some 80 degrees
+// without the shoulders) leaves the places where they are, as real holsters and slots stay on the body. Placed by
+// the head, looking left with the shotgun at the right shoulder swung the shoulder's place onto the gun hand, which
+// put it away. Turned with the head again at each re-centre. (As body slots follow a torso that lags the head in VR
+// games built on them: H3VR's quickbelt, Bonelab's body.)
+static const float kTorsoLagRad = 0.52f; // 30 degrees: the drawn body's own dead zone (gfVRBodyTurnSlack, PlayerBodyHandler.hps), so the places and the body agree
+static void TorsoRight(float& rx, float& rz)
+{
+    static bool known = false;
+    static float torso = 0.0f;
+    static unsigned centredAt = 0;
+    float head = atan2f(rz, rx);
+    if (!known || centredAt != g_recentreCount)
+    {
+        known = true;
+        centredAt = g_recentreCount;
+        torso = head;
+    }
+    float diff = head - torso;
+    while (diff > 3.14159265f) diff -= 6.2831853f;
+    while (diff < -3.14159265f) diff += 6.2831853f;
+    if (diff > kTorsoLagRad) torso = head - kTorsoLagRad;
+    else if (diff < -kTorsoLagRad) torso = head + kTorsoLagRad;
+    rx = cosf(torso);
+    rz = sinf(torso);
+}
+
+// The light tick as a hand comes to a place on the body that can act (`ready` now, `wasReady` the frame before): at
+// most once in kPlaceTickGapMs for each place (`lastTickMs`), so a hand resting at a place's edge, in and out of it
+// with the tracking's tremble, does not rattle.
+static const double kPlaceTickGapMs = 300.0;
+static void PlaceTick(int hand, bool ready, bool& wasReady, double& lastTickMs)
+{
+    double now = NowMs();
+    if (ready && !wasReady && now - lastTickMs >= kPlaceTickGapMs)
+    {
+        Buzz(hand, 0.015f, 0.25f);
+        lastTickMs = now;
+    }
+    wasReady = ready;
 }
 
 void VrMenuFocus()
@@ -3490,9 +3616,49 @@ void VrLeftAtPump(bool at)
     g_leftAtPumpMs = at ? NowMs() : 0.0;
 }
 
+// The left hand on the gun lets go of it (the shotgun's script: the real hand well off the fore-end,
+// cVR_LeftLetsGoOfGun; or the revolver's steadying hand pulled away, in UpdateGrabInput): drawn on the gun wherever
+// the real hand went, it would not be the player's hand. Still squeezed, it closes on nothing until squeezed afresh,
+// as a hand pulled off a gun must take hold again. A soft tick says so.
+static void LeftLetsGoOfGun(const char* why)
+{
+    if (g_handUse[0] != kHandOnGun) return;
+    g_handUse[0] = g_handDown[0] ? kHandNothing : kHandFree;
+    Buzz(0, 0.02f, 0.3f);
+    static int logsLeft = 12;
+    if (logsLeft > 0)
+    {
+        --logsLeft;
+        Log("VR: the left hand lets go of the gun: %s.", why);
+    }
+}
+
+void VrLeftLetsGoOfGun()
+{
+    // (Not while the mod's menu or the hand poses tool is open: the pump is held there on purpose, the real hand
+    // anywhere, while its grip is set on the Grips page.)
+    if (VrMenuIsOpen() || PoseToolIsOpen()) return;
+    LeftLetsGoOfGun("the real hand came well off the shotgun's fore-end");
+}
+
 static bool LeftAtPumpNow()
 {
     return g_leftAtPumpMs > 0.0 && NowMs() - g_leftAtPumpMs < kRightFittedMs;
+}
+
+// When the body script last said the left hand's squeeze belongs to the item
+// in the right hand's work (cVR_LeftAtWork: the medkit), as cVR_RightFitted
+// for the right hand.
+static double g_leftAtWorkMs = 0.0;
+
+void VrLeftAtWork()
+{
+    g_leftAtWorkMs = NowMs();
+}
+
+static bool LeftAtWorkNow()
+{
+    return g_leftAtWorkMs > 0.0 && NowMs() - g_leftAtWorkMs < kRightFittedMs;
 }
 
 // When the body script last said a knockdown, a kill or a death is playing
@@ -3594,7 +3760,9 @@ static void UpdatePull(const float grip[2], float press, float release, bool gun
             g_pullState[hand] = kPullIdle;
             continue;
         }
-        bool empty = hand == 1 ? (rightKind == kItemNone && !gunMode) : (leftKind == kItemNone);
+        // (Not a right hand whose item is fitted into something, or that holds the gas mask on its way to the face,
+        // its item put away meanwhile so that the hand reads empty: RightFittedNow.)
+        bool empty = hand == 1 ? (rightKind == kItemNone && !gunMode && !RightFittedNow()) : (leftKind == kItemNone && !LeftAtWorkNow());
         const char* name = hand == 0 ? "left" : "right";
         switch (g_pullState[hand])
         {
@@ -3640,9 +3808,39 @@ static void UpdatePull(const float grip[2], float press, float release, bool gun
     }
 }
 
+static bool GameWindowIsInUse();
+static bool GameMouseIsInLookMode(int* pointerX, int* pointerY);
+
 static void UpdateGrabInput()
 {
     if (!g_grabButtonsReady) return;
+
+    // Unfocused (the headset's own menu or dashboard up, a controller switched off), every action reads inactive,
+    // which would read as both hands opening at once: an armed grenade thrown at the feet, held things let go, before
+    // the game is even paused (VrHeadsetAway). The same with the game's window out of use or Steam's overlay open,
+    // where the controls are let go of every frame (ReleaseMoveKeys) and a held squeeze would read as a new press each
+    // frame. The hands are left as they are until all is back; then a hand that opened meanwhile lets go quietly:
+    // nothing thrown nor put down (below, once the grips are read).
+    // (The squeezes are still read while the game's window is out of use or Steam's overlay is open, the headset
+    // having the game in focus: the mod's own menu, the start-up page's measuring and the drawn fingers use them, and
+    // none of those reaches the game. Unfocused they read inactive: kept as they were.)
+    static bool handsWaited = false;
+    bool handsWait = !g_sessionFocused || !GameWindowIsInUse() || g_steamOverlayOpen;
+    if (handsWait && !handsWaited)
+    {
+        static int logsLeft = 10;
+        if (logsLeft > 0)
+        {
+            --logsLeft;
+            Log("VR: the hands wait (%s): no squeeze or let-go is taken until it is back.",
+                !g_sessionFocused ? "the headset does not have the game in focus" : (g_steamOverlayOpen ? "Steam's overlay is open" : "the game's window is out of use"));
+        }
+    }
+    if (!g_sessionFocused)
+    {
+        handsWaited = true;
+        return;
+    }
 
     bool gunMode = CameraGunHeld();
     const float kPress = 0.6f, kRelease = 0.35f;
@@ -3683,16 +3881,62 @@ static void UpdateGrabInput()
     }
 
     // The game's fingers close as the hand squeezes. They follow the squeeze a
-    // little behind (a fixed share of the way each frame) so they never snap.
+    // little behind (at most kHandCurlRate a second: a full close in 80 ms) so
+    // they never snap. (By the clock: a fixed step each frame closed them half
+    // as fast at 45 frames a second.)
+    static const float kHandCurlRate = 12.6f;
+    static double curlWasMs = 0.0;
+    double curlNowMs = NowMs();
+    float curlSeconds = curlWasMs > 0.0 ? (float)((curlNowMs - curlWasMs) / 1000.0) : 0.011f;
+    if (curlSeconds < 0.0f) curlSeconds = 0.0f;
+    if (curlSeconds > 0.1f) curlSeconds = 0.1f;
+    curlWasMs = curlNowMs;
     for (int hand = 0; hand < 2; ++hand)
     {
         float squeezed = grip[hand] > trigger[hand] ? grip[hand] : trigger[hand];
-        float step = 0.14f;
+        float step = kHandCurlRate * curlSeconds;
         float curl = g_handCurl[hand];
         if (squeezed > curl + step) curl += step;
         else if (squeezed < curl - step) curl -= step;
         else curl = squeezed;
         g_handCurl[hand] = curl;
+    }
+
+    if (handsWait)
+    {
+        handsWaited = true;
+        return;
+    }
+
+    // The hands back after waiting (above): a hand that opened meanwhile lets go quietly, as a hand opened in a menu
+    // does: the game's button let go of, no throw, no put-down; an armed grenade stays armed in the hand.
+    if (handsWaited)
+    {
+        handsWaited = false;
+        int quiet = 0;
+        for (int hand = 0; hand < 2; ++hand)
+        {
+            float squeezed = grip[hand] > trigger[hand] ? grip[hand] : trigger[hand];
+            if (!g_handDown[hand] || squeezed >= kRelease) continue;
+            if (g_handUse[hand] == kHandGame) SetInteractHeld(false);
+            g_handUse[hand] = kHandFree;
+            g_handDown[hand] = false;
+            if (hand == 1) g_throwHeld = false;
+            ++quiet;
+        }
+        // (An item thrown by hand is held by its grip alone, the hand's squeeze above being its trigger: its grip
+        // opened meanwhile is let go of quietly too, never a throw or a put-down.)
+        if (g_throwHeld && grip[1] < kRelease)
+        {
+            g_throwHeld = false;
+            ++quiet;
+        }
+        static int logsLeft = 10;
+        if (logsLeft > 0)
+        {
+            --logsLeft;
+            Log("VR: the hands are back (%d opened meanwhile: let go of quietly).", quiet);
+        }
     }
 
     // The same per finger, for posing empty hands:
@@ -3737,7 +3981,8 @@ static void UpdateGrabInput()
 
         for (int i = 0; i < 3; ++i)
         {
-            const float step = 0.16f;
+            static const float kFingerCurlRate = 14.4f; // (a second: a finger closes in 70 ms; by the clock, as the hand's curl above)
+            const float step = kFingerCurlRate * curlSeconds;
             float curl = g_fingerCurl[hand][i];
             if (wanted[i] > curl + step) curl += step;
             else if (wanted[i] < curl - step) curl -= step;
@@ -3751,7 +3996,12 @@ static void UpdateGrabInput()
     // start, with the game's menu held back.)
     if (VrMenuIsOpen() || g_dedicationHolding)
     {
-        if (g_grabHeld) SetInteractHeld(false);
+        // A hand carrying a thing, by the game's grab or its own hold, keeps it while its grip stays squeezed:
+        // opening the menu must not drop what a hand holds (the other hand works the menu, and a squeeze held from
+        // before it opened presses nothing there).
+        bool keepGame[2];
+        for (int hand = 0; hand < 2; ++hand) keepGame[hand] = g_grabHeld && g_handUse[hand] == kHandGame && grip[hand] > kRelease;
+        if (g_grabHeld && !keepGame[0] && !keepGame[1]) SetInteractHeld(false);
         for (int hand = 0; hand < 2; ++hand)
         {
             float squeezed = grip[hand] > trigger[hand] ? grip[hand] : trigger[hand];
@@ -3768,13 +4018,15 @@ static void UpdateGrabInput()
             // the menu is shut, so it doesn't keep coming off the gun while
             // the grip is being set.
             bool keepOnGun = hand == 0 && g_handUse[0] == kHandOnGun && (g_handDown[0] || CameraShotgunHeld() || LeftPumpKeptForPoseTool());
-            g_handUse[hand] = keepOnGun ? kHandOnGun : (g_handDown[hand] ? kHandNothing : kHandFree);
+            bool keepOwn = g_handUse[hand] == kHandScript && squeezed > kRelease; // (its own hold may be by the trigger)
+            g_handUse[hand] = keepOnGun ? kHandOnGun : (keepGame[hand] ? kHandGame : (keepOwn ? kHandScript : (g_handDown[hand] ? kHandNothing : kHandFree)));
         }
         g_rightGripDown = grip[1] > kRelease;
         g_pendingHand = -1;
         g_fireHeld = false;
         g_bulletTap = false;
         g_aimPaused = false;
+        g_throwHeld = false; // (a grip let go of in the menu is not a throw or a put-down as it closes)
         return;
     }
 
@@ -3797,6 +4049,12 @@ static void UpdateGrabInput()
     // --- In one of the game's menus: the trigger clicks, the grip holds.
     static bool menuMode = false, menuHold = false, menuHoldFromBefore = false, menuClick = false;
     static double menuClickUntil = 0;
+    // (A press by the hand not steering the pointer waits a moment for the pointer to move to it: see below.)
+    static int waitingHand = -1;
+    static bool waitingGrip = false;
+    static double waitingUntil = 0;
+    // (The hand holding a thing by the game's own grab as the menu came, or -1: see below.)
+    static int menuGameHand = -1;
     if (g_pointerActive)
     {
         bool anyGrip = gripDown[0] || gripDown[1];
@@ -3811,6 +4069,12 @@ static void UpdateGrabInput()
             menuClick = false;
             menuHold = g_grabHeld;
             menuHoldFromBefore = g_grabHeld;
+            // (A thing held by the game's grab, by that hand: the game drops it the moment its button is up when it
+            // goes on, so the button stays held through the menu and after it while that hand still squeezes.)
+            menuGameHand = -1;
+            if (g_grabHeld)
+                for (int hand = 0; hand < 2; ++hand)
+                    if (g_handUse[hand] == kHandGame) menuGameHand = hand;
         }
 
         if (menuClick && now > menuClickUntil)
@@ -3818,18 +4082,19 @@ static void UpdateGrabInput()
             SetInteractHeld(false);
             menuClick = false;
         }
-        if (menuHold && !anyGrip && !(menuHoldFromBefore && anyTrigger))
+        // (The game's grab: let go of only as its own hand opens.)
+        bool holdLetGo = menuGameHand >= 0 && menuHoldFromBefore ? !gripDown[menuGameHand]
+                                                                  : !anyGrip && !(menuHoldFromBefore && anyTrigger);
+        if (menuHold && holdLetGo)
         {
             SetInteractHeld(false);
             menuHold = false;
             menuHoldFromBefore = false;
+            menuGameHand = -1;
         }
         // A press by the hand that is not steering the pointer: the pointer
         // goes to that hand first, and the press follows a moment later, once
         // the game has seen the pointer move.
-        static int waitingHand = -1;
-        static bool waitingGrip = false;
-        static double waitingUntil = 0;
         if (pressHand >= 0 && pressHand != g_pointerHand && g_pointerHit[pressHand] && !menuHold && !menuClick && !g_grabHeld)
         {
             g_menuHand = pressHand;
@@ -3858,6 +4123,7 @@ static void UpdateGrabInput()
                 SetInteractHeld(true);
                 menuHold = g_grabHeld;
                 if (g_grabHeld) g_gameMenuPressMs = now; // (the cursor's pulse)
+                if (g_grabHeld && g_pointerActive) PressBuzz(g_pointerHand);
             }
             else if (triggerPressed)
             {
@@ -3867,29 +4133,51 @@ static void UpdateGrabInput()
                 menuClickUntil = now + 90.0;
                 g_pointerFrozenUntil = now + 170.0;
                 if (g_grabHeld) g_gameMenuPressMs = now;
+                if (g_grabHeld && g_pointerActive) PressBuzz(g_pointerHand);
             }
         }
 
         for (int hand = 0; hand < 2; ++hand)
         {
             g_handDown[hand] = gripDown[hand] || triggerDown[hand]; // not a new squeeze when the menu closes
-            g_handUse[hand] = g_handDown[hand] ? kHandNothing : kHandFree;
+            // (A hand carrying a thing, by its own hold or the game's grab, keeps it while its grip stays squeezed,
+            // whichever hand points at the menu: pausing and going on must not drop what a hand holds. Its own hold
+            // can be taken with the trigger too, so either keeps that.)
+            bool keepOwn = g_handUse[hand] == kHandScript && (gripDown[hand] || triggerDown[hand]);
+            bool keepGame = hand == menuGameHand && menuHold && gripDown[hand];
+            g_handUse[hand] = keepOwn ? kHandScript : (keepGame ? kHandGame : (g_handDown[hand] ? kHandNothing : kHandFree));
         }
         g_rightGripDown = gripDown[1];
         g_pendingHand = -1;
         g_fireHeld = false;
         g_bulletTap = false;
         g_aimPaused = false;
+        g_throwHeld = false; // (a grip let go of in the menu is not a throw or a put-down as it closes)
         return;
     }
     if (menuMode)
     {
-        // Left the menu (or stopped pointing at it): let go of the button.
+        // Left the menu (or stopped pointing at it): let go of the button, and forget a press still waiting to
+        // move to the other hand (it would click on the next menu at once). (Not while the hand holding a thing by
+        // the game's grab since before the menu still squeezes: it goes on holding it.)
         menuMode = false;
-        if (menuHold || menuClick) SetInteractHeld(false);
+        bool gameHoldGoesOn = menuHold && menuHoldFromBefore && !menuClick && menuGameHand >= 0 && gripDown[menuGameHand];
+        if ((menuHold || menuClick) && !gameHoldGoesOn) SetInteractHeld(false);
         menuHold = false;
         menuHoldFromBefore = false;
         menuClick = false;
+        menuGameHand = -1;
+        waitingHand = -1;
+    }
+    // A game menu or the inventory up (its cursor shown: the game's mouse not in its look mode) with no hand on the
+    // panel: a squeeze presses nothing, nor does the trigger fire, or it would click wherever the cursor was left (a
+    // menu button pointed at before, Exit say). A hint card that pauses the game keeps the mouse in its look mode,
+    // and a squeeze still closes it; so does the loading screen's "press a button".
+    bool cursorUp = CameraScriptsSeen() && !CameraLoadingScreen() && !GameMouseIsInLookMode(nullptr, nullptr);
+    if (cursorUp && g_pendingHand >= 0) // (and a press waiting to reach the game is dropped, not sent once the menu is gone)
+    {
+        g_handUse[g_pendingHand] = kHandNothing;
+        g_pendingHand = -1;
     }
 
     // --- Setting an item's grip by hand (the Grips page's "Move it with the
@@ -3928,7 +4216,22 @@ static void UpdateGrabInput()
     // --- The holster: squeezing the right grip at the right hip draws the gun
     // --- or puts it away (the only way to do either: UpdateGunButton).
     bool rightGripNow = grip[1] > (g_rightGripDown ? kRelease : kPress);
-    bool holsterGrab = rightGripNow && !g_rightGripDown && g_rightInHolster && !g_reloadKeyDown;
+    // (The places on the body all feel the same way, as the chest's item slot below: a light tick as the hand comes
+    // to one that can act, a firm buzz as it acts, a soft tap for a squeeze it has no use for. SlotFeel; the
+    // take-outs' outcome is buzzed by the body script, which knows whether the game took it (VRSlotFeel).)
+    int carriedNow = HintCarriedFlags(NowMs());
+    bool hipCanAct = (gunMode && !CameraShotgunHeld()) || (carriedNow & kCarryRevolver) != 0; // (the revolver put away, or drawn)
+    // (Only where it can act, and not a hand touching a thing it could take, a box of ammo by the right foot or on a
+    // low shelf, say: that squeeze is the hand's own. Nor with the right hand's item fitted into something, the wrench
+    // on a bolt or the gas mask on its way to the face: its squeeze is the fit's.)
+    bool hipFree = hipCanAct && !RightFittedNow() && (gunMode || CameraTouchKind(1) == kTouchNothing);
+    bool holsterGrab = rightGripNow && !g_rightGripDown && g_rightInHolster && !g_reloadKeyDown && hipFree;
+    {
+        static bool hipWasReady = false;
+        static double hipTickMs = 0.0;
+        bool hipReady = g_rightInHolster && !g_reloadKeyDown && hipFree;
+        PlaceTick(1, hipReady, hipWasReady, hipTickMs);
+    }
 
     // --- Behind the right shoulder: the shotgun. Out, the hand
     // --- held there a quarter of a second puts it away; carried, a right
@@ -3941,8 +4244,17 @@ static void UpdateGrabInput()
         double now = NowMs();
         bool shotgunOut = gunMode && CameraShotgunHeld();
         // (Not while the right hand's item is fitted into something, the wrench
-        // on a bolt say: its squeeze is the fit's own.)
-        shoulderGrab = rightGripNow && !g_rightGripDown && g_rightAtShoulder && !shotgunOut && !g_reloadKeyDown && !shoulderDone && !RightFittedNow();
+        // on a bolt say: its squeeze is the fit's own. As at the hip: only with a
+        // shotgun carried, and not a hand touching a thing it could take.)
+        bool shoulderCanAct = shotgunOut || (carriedNow & kCarryShotgun) != 0;
+        bool shoulderFree = shoulderCanAct && !RightFittedNow() && (shotgunOut || CameraTouchKind(1) == kTouchNothing);
+        shoulderGrab = rightGripNow && !g_rightGripDown && g_rightAtShoulder && !shotgunOut && !g_reloadKeyDown && !shoulderDone && shoulderFree;
+        {
+            static bool shoulderWasReady = false;
+            static double shoulderTickMs = 0.0;
+            bool shoulderReady = g_rightAtShoulder && !g_reloadKeyDown && !shoulderDone && shoulderFree;
+            PlaceTick(1, shoulderReady, shoulderWasReady, shoulderTickMs);
+        }
         const char* shoulderWhat = nullptr;
         if (!g_rightAtShoulder)
         {
@@ -3963,8 +4275,7 @@ static void UpdateGrabInput()
             // game takes the shotgun only from its normal state, which the held ready button keeps it out of. The
             // body script waits for that up to a second: VRDoBodySlotWait.
             else if (!gunMode && (HintCarriedFlags(now) & kCarryShotgun) != 0) g_shoulderQuietUntilMs = now + 500.0;
-            shoulderDone = true;
-            Buzz(1, 0.05f, 0.6f);
+            shoulderDone = true; // (the body script buzzes the outcome: VRShoulderShotgun)
             static int logsLeft = 6;
             if (logsLeft > 0)
             {
@@ -4006,9 +4317,9 @@ static void UpdateGrabInput()
         slotTakes = here && kind != kItemNone && (carried & kCarryChestTakes) != 0 && !(kind == kItemGrenade && g_grenadeArmed) &&
                     !(kind == kItemHealth && g_bandagePhase == 1);
         static bool wasReady = false;
+        static double slotTickMs = 0.0;
         bool ready = takeOut || slotTakes;
-        if (ready && !wasReady) Buzz(1, 0.015f, 0.25f);
-        wasReady = ready;
+        PlaceTick(1, ready, wasReady, slotTickMs);
         const char* slotWhat = nullptr;
         if (freshSqueeze && takeOut)
         {
@@ -4027,7 +4338,7 @@ static void UpdateGrabInput()
         {
             slotGrab = true;
             g_slotDone = true;
-            Buzz(1, 0.05f, 0.6f);
+            if (!(freshSqueeze && takeOut)) SlotFeel(1, true); // (a take-out's outcome is the body script's: VRChestSlotTake)
             static int logsLeft = 20;
             if (logsLeft > 0)
             {
@@ -4039,6 +4350,8 @@ static void UpdateGrabInput()
     g_rightGripDown = rightGripNow;
     if (holsterGrab)
     {
+        // (The outcome's buzz: the revolver put away, as UpdateGunButton sends it (a tap in its settling time is
+        // nothing); taken out (command 78), by the body script, as the game can refuse it: VRHipRevolver.)
         // The hip is the revolver's. The gun button's tap draws the gun used last, which can be
         // the shotgun, so for the hip UpdateGunButton sends command 78 (the revolver's own) instead.
         g_virtualGunTapUntil = NowMs() + 120.0;
@@ -4072,11 +4385,44 @@ static void UpdateGrabInput()
             }
             handsApart = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
             leftToGun = sqrtf(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
+            // The revolver's steadying hand, taken within 0.22 of the gun hand, lets go once the real hand is pulled
+            // well away (kSteadyLetGoApart). (The shotgun's pump hand is let go by its script, which knows where the
+            // fore-end is; a two-handled tool's hands open apart with its handles.)
+            if (gunMode && !CameraShotgunHeld() && g_handUse[0] == kHandOnGun && handsApart > kSteadyLetGoApart)
+                LeftLetsGoOfGun("the real hand was pulled away from the revolver");
         }
     }
 
-    // What the game says is in each hand (bandage, grenade, flashlight).
-    int rightKind = CameraRightItemKind(), leftKind = CameraLeftItemKind();
+    // What the game says is in each hand (bandage, grenade, flashlight). While the game is paused its body script is
+    // silent and this news goes stale (empty hands after 0.4 s): the hands keep what they held, so a pause does not
+    // disarm a grenade, reset a bandage's winding or send a lighter's or torch's change (those wait, below).
+    static int rightKindKept = kItemNone, leftKindKept = kItemNone;
+    bool pausedNews = CameraGamePaused();
+    // The left hand's hold on the gun (the shotgun's pump, the revolver steadied) ends as the gun changes: drawn,
+    // swapped at the hip or the shoulder, or put away. Kept, the hand would jump onto the new gun from wherever it is,
+    // or the pump would be taken at once with the barrel aimed at the hand. (Only on fresh news: stale news, as in a
+    // pause, says no gun for want of news.)
+    {
+        static int gunWas = 0;
+        if (CameraGunNewsFresh() && !pausedNews)
+        {
+            int gunNow = !gunMode ? 0 : (CameraShotgunHeld() ? 2 : 1);
+            if (gunNow != gunWas && g_handUse[0] == kHandOnGun)
+            {
+                g_handUse[0] = g_handDown[0] ? kHandNothing : kHandFree;
+                static int logsLeft = 6;
+                if (logsLeft > 0)
+                {
+                    --logsLeft;
+                    Log("VR: the gun changed (%d -> %d: 0 none, 1 revolver, 2 shotgun): the left hand lets go of it.", gunWas, gunNow);
+                }
+            }
+            gunWas = gunNow;
+        }
+    }
+    int rightKind = pausedNews ? rightKindKept : CameraRightItemKind(), leftKind = pausedNews ? leftKindKept : CameraLeftItemKind();
+    rightKindKept = rightKind;
+    leftKindKept = leftKind;
     if (rightKind != kItemGrenade) g_grenadeArmed = false;
     static double grenadeArmedAt = 0;
     static bool cordPulled = false;
@@ -4095,13 +4441,40 @@ static void UpdateGrabInput()
     // right hand (the bolt cutters, often held up by the chest): that squeeze
     // takes the handle.
     bool atToolHandle = !gunMode && rightKind == kItemOther && leftKind == kItemNone && LeftAtPumpNow();
-    bool lightGrab = leftGripNow && !leftGripWasDown && g_leftAtChestLight && NowMs() - lastLightGrabMs > 500.0 && !atToolHandle;
+    // Nor where the ammo pouch takes the squeeze: an empty left hand at it with the shotgun out or the revolver open
+    // (seated, the chest's place and the pouch's top can overlap; the shells and bullets win there).
+    bool atPouchForAmmo = gunMode && leftKind == kItemNone && g_leftAtLightHolster && (CameraShotgunHeld() || g_reloadKeyDown) &&
+                          !LeftTakesThingNotBullet();
+    // Nor where the medkit's work takes the left hand's squeeze (its case in reach, or held: cVR_LeftAtWork).
+    bool leftAtWork = LeftAtWorkNow();
+    bool lightGrab = leftGripNow && !leftGripWasDown && g_leftAtChestLight && NowMs() - lastLightGrabMs > 500.0 && !atToolHandle &&
+                     !atPouchForAmmo && !leftAtWork;
     (void)revolverOpen;
     leftGripWasDown = leftGripNow;
+    // (As the other places on the body: SlotFeel. Not with the shotgun aimed, whose state refuses the lantern. With an
+    // item kept ready in the right hand (the game in that item's state), the body script decides and buzzes the
+    // outcome itself: it has the ready button let go of for a moment (cVR_LetGoOfReady) and switches the lantern once
+    // the game is back in its normal state, or refuses when the item's use takes the left hand (VRStateTakesLeftHand).)
+    // (A gun is news kind 9 too, kItemOther: not an item kept ready. With the revolver out the mod buzzes, and the gun's
+    // own state switches the lantern.)
+    bool itemReadyNow = !gunMode && (rightKind == kItemOther || rightKind == kItemBottle);
+    bool lightCanAct = (leftKind == kItemFlashlight || (leftKind == kItemNone && (carriedNow & kCarryFlashlight) != 0)) &&
+                       !(gunMode && CameraShotgunHeld());
+    {
+        static bool lightWasReady = false;
+        static double lightTickMs = 0.0;
+        bool lightReady = g_leftAtChestLight && !atToolHandle && !atPouchForAmmo && !leftAtWork && lightCanAct && !itemReadyNow;
+        PlaceTick(0, lightReady, lightWasReady, lightTickMs);
+    }
     if (lightGrab)
     {
         lastLightGrabMs = NowMs();
-        SendScriptCommand(5);
+        if (itemReadyNow && lightCanAct) SendScriptCommand(5); // (the script decides and buzzes)
+        else
+        {
+            SlotFeel(0, lightCanAct);
+            if (!itemReadyNow) SendScriptCommand(5);
+        }
         static int logsLeft = 4;
         if (logsLeft > 0)
         {
@@ -4116,7 +4489,7 @@ static void UpdateGrabInput()
     {
         static bool lighterLit = false;
         bool litWanted = rightKind == kItemLighter && trigger[1] > (lighterLit ? kRelease : kPress);
-        if (litWanted != lighterLit)
+        if (litWanted != lighterLit && !pausedNews) // (paused: it waits; a command sent now would expire unheard)
         {
             lighterLit = litWanted;
             SendScriptCommand(litWanted ? 13 : 14);
@@ -4138,7 +4511,7 @@ static void UpdateGrabInput()
     {
         static bool lighterLit = false;
         bool litWanted = leftKind == kItemLighter && trigger[0] > (lighterLit ? kRelease : kPress);
-        if (litWanted != lighterLit)
+        if (litWanted != lighterLit && !pausedNews) // (the same)
         {
             lighterLit = litWanted;
             SendScriptCommand(litWanted ? 16 : 17);
@@ -4179,7 +4552,7 @@ static void UpdateGrabInput()
                 out = heldOut; // (not known for a moment: as it was)
             }
         }
-        if (out != heldOut)
+        if (out != heldOut && !pausedNews) // (the same)
         {
             heldOut = out;
             SendScriptCommand(out ? 18 : 19);
@@ -4300,7 +4673,7 @@ static void UpdateGrabInput()
             // Only a fresh press of the grip takes hold: not one still held as
             // the item came into the hand (from the inventory, say), and not
             // one at the holster (that draws the gun).
-            if (gripPressed && !holsterGrab && !slotGrab && !CameraInventoryOpen()) // (nor one at the chest's item slot, which stores it)
+            if (gripPressed && !holsterGrab && !shoulderGrab && !slotGrab && !CameraInventoryOpen()) // (nor one at the chest's item slot, which stores it, nor behind the shoulder)
             {
                 g_throwHeld = true;
                 Buzz(1, 0.02f, 0.3f);
@@ -4450,6 +4823,12 @@ static void UpdateGrabInput()
             // to twist it) or take hold of the thing beside it.
             g_handUse[hand] = kHandNothing;
         }
+        else if (hand == 0 && LeftAtWorkNow())
+        {
+            // The left hand at the medkit in the right hand, or holding its case open: its squeeze is the medkit's own
+            // (the body script takes the case with it, held open while it is squeezed), never the game's interact button.
+            g_handUse[hand] = kHandNothing;
+        }
         else if (hand == 1 && (holsterGrab || shoulderGrab || slotGrab || NowMs() < g_virtualGunTapUntil))
         {
             g_handUse[hand] = kHandNothing; // this squeeze was for the holster (or the shotgun behind the shoulder, or the chest's item slot)
@@ -4458,7 +4837,9 @@ static void UpdateGrabInput()
         {
             g_handUse[hand] = kHandNothing; // this squeeze was for the flashlight
         }
-        else if (hand == 1 && leftKind == kItemFlashlight && handsApart < 0.22f)
+        // (The lantern's cord only for an empty right hand, or the gun hand, whose grip has nothing else to do: with a
+        // grenade, say, the squeeze near the lantern is the grenade's, or letting go would not throw it.)
+        else if (hand == 1 && leftKind == kItemFlashlight && handsApart < 0.22f && (rightKind == kItemNone || gunMode))
         {
             g_handUse[hand] = kHandCord;
             cordPulled = false;
@@ -4651,8 +5032,22 @@ static void UpdateGrabInput()
         }
         else if (g_bandagePhase == 0)
         {
-            // The pull that opens it.
-            if (g_handUse[0] == kHandTin && handsApart > 0.30f)
+            // The pull that opens it. Not while the game would not use it (the player not hurt, or with the hardcore
+            // health system not bleeding: the scripts say so, kCarryHealRefused): the roll stays in, the left hand
+            // closes on nothing, a soft tap, and the game's own words say why (script command 95).
+            if (g_handUse[0] == kHandTin && handsApart > 0.30f && (HintCarriedFlags(NowMs()) & kCarryHealRefused) != 0)
+            {
+                g_handUse[0] = kHandNothing;
+                SendScriptCommand(95);
+                SlotFeel(0, false);
+                static int logsLeft = 10;
+                if (logsLeft > 0)
+                {
+                    --logsLeft;
+                    Log("VR: bandage pulled, but the game would not use it now (not hurt): the roll stays in.");
+                }
+            }
+            else if (g_handUse[0] == kHandTin && handsApart > 0.30f)
             {
                 g_bandagePhase = 1;
                 g_bandageTurns = 0.0f;
@@ -4874,7 +5269,7 @@ static void UpdateGrabInput()
         // (The same after the hands swapped the game's button.)
         bool waitForNormal = ((gunMode || itemReady) && g_pendingHand == 0) || g_pendingNeedNormal;
         if (!waitForNormal || CameraPlayerStateNormal()) ++g_pendingFrames;
-        if (g_pendingFrames > 3)
+        if (g_pendingFrames > 3 && !cursorUp)
         {
             SetInteractHeld(true);
             if (g_grabHeld)
@@ -4897,7 +5292,10 @@ static void UpdateGrabInput()
     }
 
     // --- Firing.
-    bool mayFire = gunMode && !g_reloadKeyDown && !g_bulletTap && g_handUse[0] != kHandGame;
+    // (Only while the game has the gun aimed (its aim state: not the normal one). Out but not aimed, sprinting, the
+    // face near a wall, a moment after a draw, the game's button would be its interact: the trigger would grab or
+    // open what the pointing hand touches instead of firing. A trigger still held as the aim comes up fires then.)
+    bool mayFire = gunMode && !CameraPlayerStateNormal() && !g_reloadKeyDown && !g_bulletTap && g_handUse[0] != kHandGame && !cursorUp;
     bool wantFire = mayFire && trigger[1] > (g_fireHeld ? kRelease : kPress);
     if (wantFire != g_fireHeld)
     {
@@ -5056,43 +5454,257 @@ static bool StandInWindowIsElsewhere()
     return g_standIn && GetForegroundWindow() != WindowFromDC(wglGetCurrentDC());
 }
 
-// Presses or releases a key, named by its position on the keyboard (which is
-// what the game reads).
-static void SendScanCode(WORD scanCode, bool down)
+// Presses or releases a key, named by its place on the keyboard (its scan
+// code; `extended` for the keys Windows marks so, such as the arrows and the
+// right Ctrl).
+static void SendScanCode(WORD scanCode, bool down, bool extended = false)
 {
     if (down && StandInWindowIsElsewhere()) return;
 
     INPUT input = {};
     input.type = INPUT_KEYBOARD;
     input.ki.wScan = scanCode;
-    input.ki.dwFlags = KEYEVENTF_SCANCODE | (down ? 0 : KEYEVENTF_KEYUP);
+    input.ki.dwFlags = KEYEVENTF_SCANCODE | (extended ? KEYEVENTF_EXTENDEDKEY : 0) | (down ? 0 : KEYEVENTF_KEYUP);
     SendModInput(input);
 
-    if (scanCode == 0x2A)
+    if (!extended && (scanCode == 0x2A || scanCode == 0x36)) // (either Shift: Steam's shortcut takes both)
     {
         g_shiftChangedMs = NowMs();
         g_shiftChangedFrame = g_inputUpdates;
     }
-    else if (scanCode == 0x0F)
+    else if (!extended && scanCode == 0x0F)
     {
         g_tabChangedMs = NowMs();
         g_tabChangedFrame = g_inputUpdates;
     }
 }
 
-// Presses or releases one of the four walking keys (0 = W, 1 = A, 2 = S, 3 = D).
+// ---------------------------------------------------------------------------
+// The keys the controllers press for the game
+// ---------------------------------------------------------------------------
+// The game takes a key by the character it types, not by its place on the
+// keyboard: its key table gives each of its keys ("Keyboard.W") SDL's code for
+// the character, and SDL gives a pressed place the character it types on the
+// keyboard's layout. And the player can bind the game's actions to other keys.
+// So each key the controllers press goes down at the place that types the key
+// its action is bound to, on the layout the game's window has at that moment:
+// on a French (AZERTY) layout the US places of W and A type Z and Q (the
+// game's lean), and forward is pressed where W is. The bindings come from the
+// game's input script (cVR_KeyBound) each time it binds the keys; until then,
+// and for an action bound to nothing the mod can press (a mouse button), the
+// game's own default key.
+//
+// The mod's keys: the four walking keys (in the order of g_moveKeyDown), then
+// the others (kKeyCrouch and on, below).
+enum { kGameKeyWalk = 0, kGameKeyExtra = 4, kGameKeyCount = 12 };
+struct KeyPlace
+{
+    WORD scan;     // the scan code
+    bool extended; // with Windows' extended mark
+};
+struct GameKey
+{
+    const char* action;   // the game's action, as its key bindings name it (null: not rebindable)
+    const char* given;    // its default key, as the bindings name it
+    const char* what;     // for the log
+    char bound[2][32];    // the keys it is bound to (primary, secondary), as the input script last said; "" none said
+    KeyPlace downAt;      // where it last went down (let go at the same place)
+};
+static GameKey g_gameKeys[kGameKeyCount] = {
+    { "Forward", "Keyboard.W", "walk forward", {}, { 0x11, false } },
+    { "Left", "Keyboard.A", "walk left", {}, { 0x1E, false } },
+    { "Backward", "Keyboard.S", "walk back", {}, { 0x1F, false } },
+    { "Right", "Keyboard.D", "walk right", {}, { 0x20, false } },
+    { "Crouch", "Keyboard.LeftControl", "crouch", {}, { 0x1D, false } },
+    { "Run", "Keyboard.LeftShift", "sprint", {}, { 0x2A, false } },
+    { nullptr, "Keyboard.Escape", "menu", {}, { 0x01, false } },
+    { "CheckAmmo", "Keyboard.R", "gun", {}, { 0x13, false } },
+    { "OpenInventory", "Keyboard.Tab", "inventory", {}, { 0x0F, false } },
+    { "Jump", "Keyboard.Space", "jump", {}, { 0x39, false } },
+    { "InventoryCombine", "Keyboard.Space", "combine in the inventory", {}, { 0x39, false } },
+    { "InventoryDrop", "Keyboard.X", "drop from the inventory", {}, { 0x2D, false } },
+};
+
+// The keys whose place is the same on every layout, by the names the game's
+// key bindings use (the keypad's keys too: Windows and SDL take them by place).
+struct FixedKey
+{
+    const char* name;
+    WORD scan;
+    bool extended;
+};
+static const FixedKey kFixedKeys[] = {
+    { "Space", 0x39, false }, { "Tab", 0x0F, false }, { "Return", 0x1C, false }, { "Escape", 0x01, false },
+    { "BackSpace", 0x0E, false }, { "LeftShift", 0x2A, false }, { "RightShift", 0x36, false },
+    { "LeftControl", 0x1D, false }, { "RightControl", 0x1D, true }, { "LeftAlt", 0x38, false }, { "RightAlt", 0x38, true },
+    { "Up", 0x48, true }, { "Down", 0x50, true }, { "Left", 0x4B, true }, { "Right", 0x4D, true },
+    { "Insert", 0x52, true }, { "Delete", 0x53, true }, { "Home", 0x47, true }, { "End", 0x4F, true },
+    { "PageUp", 0x49, true }, { "PageDown", 0x51, true },
+    { "KP_0", 0x52, false }, { "KP_1", 0x4F, false }, { "KP_2", 0x50, false }, { "KP_3", 0x51, false },
+    { "KP_4", 0x4B, false }, { "KP_5", 0x4C, false }, { "KP_6", 0x4D, false }, { "KP_7", 0x47, false },
+    { "KP_8", 0x48, false }, { "KP_9", 0x49, false }, { "KP_Period", 0x53, false }, { "KP_Divide", 0x35, true },
+    { "KP_Multiply", 0x37, false }, { "KP_Minus", 0x4A, false }, { "KP_Plus", 0x4E, false }, { "KP_Enter", 0x1C, true },
+    { "F1", 0x3B, false }, { "F2", 0x3C, false }, { "F3", 0x3D, false }, { "F4", 0x3E, false }, { "F5", 0x3F, false },
+    { "F6", 0x40, false }, { "F7", 0x41, false }, { "F8", 0x42, false }, { "F9", 0x43, false }, { "F10", 0x44, false },
+    { "F11", 0x57, false }, { "F12", 0x58, false }, { "F13", 0x64, false }, { "F14", 0x65, false }, { "F15", 0x66, false },
+    { "CapsLock", 0x3A, false },
+};
+
+// The keys that type a character, whose place depends on the layout, by the
+// names the game's key bindings use, its spellings kept (a letter or a digit
+// names itself).
+struct TypedKey
+{
+    const char* name;
+    wchar_t typed;
+};
+static const TypedKey kTypedKeys[] = {
+    { "Comma", L',' }, { "Period", L'.' }, { "Minus", L'-' }, { "Plus", L'+' }, { "Slash", L'/' },
+    { "SemiColon", L';' }, { "Colon", L':' }, { "Equals", L'=' }, { "Quote", L'\'' }, { "LeftBracket", L'[' },
+    { "RightBracket", L']' }, { "BackSlash", L'\\' }, { "BackQuote", L'`' }, { "Less", L'<' },
+    { "Exclaim", L'!' }, { "DblQoute", L'"' }, { "Hash", L'#' }, { "Dollar", L'$' }, { "Ampersand", L'&' },
+    { "LeftParent", L'(' }, { "RightParent", L')' }, { "Asterisk", L'*' }, { "Question", L'?' }, { "At", L'@' },
+    { "Caret", L'^' }, { "Underscore", L'_' },
+};
+
+// The place whose key types this character on the layout, as SDL works it
+// out (its Windows keymap, WIN_UpdateKeymap: each place's key on the layout,
+// and the character that key types without Shift, A to Z made a to z; the
+// game reads that character): looked for among the places of the keyboard's
+// character keys (not the keypad's). 0 if none types it.
+static UINT PlaceTyping(wchar_t typed, HKL layout)
+{
+    static const UINT kRanges[][2] = { { 0x02, 0x0D }, { 0x10, 0x1B }, { 0x1E, 0x29 }, { 0x2B, 0x35 }, { 0x56, 0x56 } };
+    for (const auto& range : kRanges)
+    {
+        for (UINT scan = range[0]; scan <= range[1]; ++scan)
+        {
+            UINT virtualKey = MapVirtualKeyExW(scan, MAPVK_VSC_TO_VK, layout);
+            if (virtualKey == 0) continue;
+            UINT character = MapVirtualKeyExW(virtualKey, MAPVK_VK_TO_CHAR, layout) & 0x7FFF; // (dead keys carry a mark)
+            if (character >= 'A' && character <= 'Z') character += 'a' - 'A';
+            if (character != 0 && character == (UINT)typed) return scan;
+        }
+    }
+    return 0;
+}
+
+// The layout the game's window takes its keys with now.
+static HKL GameKeyboardLayout()
+{
+    HWND window = WindowFromDC(wglGetCurrentDC());
+    DWORD thread = window ? GetWindowThreadProcessId(window, nullptr) : 0;
+    return GetKeyboardLayout(thread);
+}
+
+// Where a key, as the game's key bindings name it ("Keyboard.W"), is pressed
+// on this layout. False for what is no keyboard key the mod can press (a mouse
+// button, nothing, a key not in the lists above).
+static bool KeyNamePlace(const char* binding, HKL layout, KeyPlace& place)
+{
+    static const char kKeyboard[] = "Keyboard.";
+    if (binding == nullptr || strncmp(binding, kKeyboard, sizeof(kKeyboard) - 1) != 0) return false;
+    const char* name = binding + sizeof(kKeyboard) - 1;
+
+    for (const FixedKey& key : kFixedKeys)
+    {
+        if (strcmp(name, key.name) != 0) continue;
+        place.scan = key.scan;
+        place.extended = key.extended;
+        return true;
+    }
+
+    wchar_t typed = 0;
+    UINT virtualKey = 0; // (a letter's or a digit's own key, where the layout types no such character)
+    if (name[0] != '\0' && name[1] == '\0' && isalnum((unsigned char)name[0]))
+    {
+        typed = (wchar_t)tolower((unsigned char)name[0]);
+        virtualKey = (UINT)toupper((unsigned char)name[0]); // (Windows' codes for A to Z and 0 to 9 are their characters)
+    }
+    else
+    {
+        for (const TypedKey& key : kTypedKeys)
+            if (strcmp(name, key.name) == 0) typed = key.typed;
+    }
+    if (typed == 0) return false;
+
+    UINT scan = PlaceTyping(typed, layout);
+    if (scan == 0 && virtualKey != 0) scan = MapVirtualKeyExW(virtualKey, MAPVK_VK_TO_VSC, layout);
+    if (scan == 0 || scan > 0x7F) return false;
+    place.scan = (WORD)scan;
+    place.extended = false;
+    return true;
+}
+
+void VrKeyBound(const char* action, const char* primary, const char* secondary)
+{
+    if (action == nullptr) return;
+    for (GameKey& key : g_gameKeys)
+    {
+        if (key.action == nullptr || strcmp(key.action, action) != 0) continue;
+        const char* said[2] = { primary ? primary : "", secondary ? secondary : "" };
+        bool same = true;
+        for (int i = 0; i < 2; ++i)
+        {
+            if (strcmp(key.bound[i], said[i]) == 0) continue;
+            same = false;
+            snprintf(key.bound[i], sizeof(key.bound[i]), "%s", said[i]);
+        }
+        if (!same && (strcmp(said[0], key.given) != 0 || said[1][0] != '\0'))
+            Log("VR: the game's %s (%s) is bound to \"%s\"%s%s%s: the controllers press that.", action, key.what, said[0],
+                said[1][0] ? " and \"" : "", said[1], said[1][0] ? "\"" : "");
+    }
+}
+
+// Where one of the mod's keys goes down now: at the place that types the key
+// its action is bound to (the first of the two the mod can press), else its
+// default key's.
+static KeyPlace GameKeyPlace(int index)
+{
+    GameKey& key = g_gameKeys[index];
+    HKL layout = GameKeyboardLayout();
+    KeyPlace place = key.downAt;
+    const char* used = nullptr;
+    for (int i = 0; i < 2 && used == nullptr; ++i)
+        if (key.bound[i][0] != '\0' && KeyNamePlace(key.bound[i], layout, place)) used = key.bound[i];
+    if (used == nullptr && KeyNamePlace(key.given, layout, place)) used = key.given;
+
+    // Said once in the log for each place that is not the default key's on a US keyboard.
+    static KeyPlace logged[kGameKeyCount] = {};
+    static const WORD usPlace[kGameKeyCount] = { 0x11, 0x1E, 0x1F, 0x20, 0x1D, 0x2A, 0x01, 0x13, 0x0F, 0x39, 0x39, 0x2D };
+    bool usual = place.scan == usPlace[index] && !place.extended;
+    if (!usual && (place.scan != logged[index].scan || place.extended != logged[index].extended))
+    {
+        logged[index] = place;
+        Log("VR: the game's %s key is %s; on this keyboard's layout (%08llX) it is pressed at place %s%02X.", key.what,
+            used ? used : "not one the mod can press (its last place kept)", (unsigned long long)(ULONG_PTR)layout,
+            place.extended ? "E0 " : "", place.scan);
+    }
+    return place;
+}
+
+// Presses or releases one of the mod's keys (above), going up where it went down.
+static void SendGameKey(int index, bool down)
+{
+    GameKey& key = g_gameKeys[index];
+    if (down) key.downAt = GameKeyPlace(index);
+    SendScanCode(key.downAt.scan, down, key.downAt.extended);
+}
+
+// Presses or releases one of the four walking keys (0 = forward, 1 = left,
+// 2 = back, 3 = right: W, A, S and D by the game's default bindings).
 static void SetMoveKey(int key, bool down)
 {
     if (g_moveKeyDown[key] == down) return;
     if (down && g_steamOverlayOpen) return; // (nothing pressed into Steam's overlay; releases always go through)
 
-    static const WORD scanCodes[4] = { 0x11, 0x1E, 0x1F, 0x20 };
-    SendScanCode(scanCodes[key], down);
+    SendGameKey(kGameKeyWalk + key, down);
     g_moveKeyDown[key] = down;
 }
 
 // Presses or releases one of the other keys the controllers stand in for.
 enum { kKeyCrouch = 0, kKeySprint = 1, kKeyMenu = 2, kKeyHolster = 3, kKeyInventory = 4, kKeyJump = 5, kKeyCombine = 6, kKeyDrop = 7, kExtraKeyCount = 8 };
+static_assert(kGameKeyExtra + kExtraKeyCount == kGameKeyCount, "the mod's keys: four walking keys, then the others");
 static bool g_extraKeyDown[kExtraKeyCount] = { false, false, false, false, false, false, false, false };
 
 static void SetExtraKey(int key, bool down)
@@ -5100,18 +5712,16 @@ static void SetExtraKey(int key, bool down)
     if (g_extraKeyDown[key] == down) return;
     if (down && g_steamOverlayOpen) return; // (nothing pressed into Steam's overlay; releases always go through)
 
-    static const WORD scanCodes[kExtraKeyCount] = { 0x1D, 0x2A, 0x01, 0x13, 0x0F, 0x39, 0x39, 0x2D }; // left Ctrl, left Shift, Escape, R, Tab, Space, Space, X
-    static const char* const names[kExtraKeyCount] = { "crouch (left Ctrl)", "sprint (left Shift)", "menu (Escape)",
-                                                       "gun (R)", "inventory (Tab)", "jump (Space)",
-                                                       "combine in the inventory (Space)", "drop from the inventory (X)" };
-    SendScanCode(scanCodes[key], down);
+    SendGameKey(kGameKeyExtra + key, down);
     g_extraKeyDown[key] = down;
 
     static bool logged[kExtraKeyCount] = { false, false, false, false, false, false, false, false };
     if (down && !logged[key])
     {
         logged[key] = true;
-        Log("VR: controller button pressed -> the game's %s key was sent.", names[key]);
+        const KeyPlace& at = g_gameKeys[kGameKeyExtra + key].downAt;
+        Log("VR: controller button pressed -> the game's %s key was sent (place %s%02X).", g_gameKeys[kGameKeyExtra + key].what,
+            at.extended ? "E0 " : "", at.scan);
     }
 }
 
@@ -5141,18 +5751,21 @@ static bool KeyUpLongEnough(double changedMs, unsigned long long changedFrame)
     return NowMs() - changedMs >= kShiftTabApartMs && g_inputUpdates >= changedFrame + 3;
 }
 
-// May the sprint's left Shift go down now? Not while Tab is down or waits to
-// go down, nor until Tab has been up long enough.
+// May the sprint's Shift go down now? Not while Tab is down (the inventory's,
+// or a key bound to Tab) or waits to go down, nor until Tab has been up long
+// enough.
 static bool ShiftMayGoDown()
 {
-    return !g_extraKeyDown[kKeyInventory] && g_inventoryWaitingMs < 0.0 && KeyUpLongEnough(g_tabChangedMs, g_tabChangedFrame);
+    return !g_extraKeyDown[kKeyInventory] && !g_modKeyHeld[0x0F] && g_inventoryWaitingMs < 0.0 &&
+           KeyUpLongEnough(g_tabChangedMs, g_tabChangedFrame);
 }
 
-// May the inventory's Tab go down now? Not while the sprint's Shift is down,
-// nor until it has been up long enough.
+// May the inventory's Tab go down now? Not while a Shift is down (the
+// sprint's, or a key bound to a Shift), nor until it has been up long enough.
 static bool TabMayGoDown()
 {
-    return !g_extraKeyDown[kKeySprint] && KeyUpLongEnough(g_shiftChangedMs, g_shiftChangedFrame);
+    return !g_extraKeyDown[kKeySprint] && !g_modKeyHeld[0x2A] && !g_modKeyHeld[0x36] &&
+           KeyUpLongEnough(g_shiftChangedMs, g_shiftChangedFrame);
 }
 
 // Closing Steam's overlay with B: Steam's own Shift+Tab, pressed as a person
@@ -5216,10 +5829,10 @@ static void SetRightMouse(bool down)
 
 static bool ReadButton(XrAction action);
 
-// The A button on the right controller and the gun (see UpdateGunButton):
-//   no gun out:  a tap draws it (with "A button" chosen for drawing).
-//   gun out:     a tap puts it away (the same); A held and the gun swung opens
-//                the revolver, which stays open until it is swung shut.
+// The A button on the right controller and the gun (see UpdateGunButton): it
+// never draws or puts away the gun (the right hip and behind the right shoulder
+// do). With the revolver out, A held and the gun swung opens it, and it stays
+// open until it is swung shut; with the shotgun out, A held is its press-check.
 // While the gun is out this mod keeps the game in its "aiming" state so the
 // trigger fires at once. The game only listens to the gun key (R) outside that
 // state, so while the revolver is open the aim is let go of and R is held down.
@@ -5381,6 +5994,7 @@ static void UpdateGunButton(bool gunMode)
             // (At the hip with the shotgun out, the revolver is taken out in its place,
             // as behind the shoulder the shotgun takes the revolver's.)
             SendScriptCommand(g_virtualGunTapHip && CameraShotgunHeld() ? 78 : 2); // put away
+            if (g_virtualGunTapHip && !CameraShotgunHeld()) SlotFeel(1, true); // (the revolver put away at the hip)
             g_virtualGunTapUntil = 0;
             g_virtualGunTapHip = false;
             doneAt = now;
@@ -5390,6 +6004,22 @@ static void UpdateGunButton(bool gunMode)
 
     case kOpen: // the revolver is open: the key stays down until it is swung shut
     {
+        // The key let go of meanwhile (a pause or the inventory, where it is let go; the game's window out of use;
+        // VR lost: ReleaseMoveKeys): the game has left its reload state and shut the revolver itself, so the mod does
+        // too; otherwise it would stay "open" here, the trigger dead and the body places refused, until a flick shut
+        // a revolver that already looks shut.
+        if (!g_extraKeyDown[kKeyHolster])
+        {
+            doneAt = now;
+            phase = kSettling;
+            static int logsLeft = 6;
+            if (logsLeft > 0)
+            {
+                --logsLeft;
+                Log("VR: the open revolver's key was let go of meanwhile (a pause, the inventory or the like): the game has shut it, and so has the mod.");
+            }
+            break;
+        }
         if (gunMode) gunGoneSince = 0;
         else if (gunGoneSince == 0) gunGoneSince = now;
         bool gunGone = gunGoneSince != 0 && now - gunGoneSince > 800;
@@ -5454,7 +6084,11 @@ static void UpdateGunButton(bool gunMode)
     g_reloadKeyDown = phase == kOpen;
 }
 
-static void ReleaseMoveKeys()
+// `keepHands`: the game's window out of use or Steam's overlay open, where the hands wait (UpdateGrabInput): what
+// each hand holds by itself (a loose thing, a shell, the pump, an armed grenade) stays, and a hand opened meanwhile
+// lets go quietly once all is back. Only the game's own grab ends, its button let go of here: that hand closes on
+// nothing. Otherwise (VR lost, the headset taken off, the controllers not read) both hands are freed.
+static void ReleaseMoveKeys(bool keepHands = false)
 {
     for (int key = 0; key < 4; ++key) SetMoveKey(key, false);
     for (int key = 0; key < kExtraKeyCount; ++key) SetExtraKey(key, false);
@@ -5464,23 +6098,31 @@ static void ReleaseMoveKeys()
     g_gunButtonBusy = false;
     g_reloadKeyDown = false;
     g_turnRemainder = 0.0f;
-    // (The left hand on the shotgun's pump stays while the hand poses tool is
-    // open: its window takes the PC's focus from the game's.)
-    bool keepPump = LeftPumpKeptForPoseTool();
-    if (keepPump)
+    if (keepHands)
     {
-        static int logsLeft = 4;
-        static double loggedAt = 0;
-        if (logsLeft > 0 && NowMs() - loggedAt > 5000.0)
-        {
-            --logsLeft;
-            loggedAt = NowMs();
-            Log("VR: the controls are let go of (the game's window out of use, or the like), but the left hand stays on the shotgun's pump: the hand poses tool is open.");
-        }
+        for (int hand = 0; hand < 2; ++hand)
+            if (g_handUse[hand] == kHandGame) g_handUse[hand] = g_handDown[hand] ? kHandNothing : kHandFree;
     }
-    g_handUse[0] = keepPump ? kHandOnGun : kHandFree;
-    g_handUse[1] = kHandFree;
-    g_handDown[0] = g_handDown[1] = false;
+    else
+    {
+        // (The left hand on the shotgun's pump stays while the hand poses tool is
+        // open: its window takes the PC's focus from the game's.)
+        bool keepPump = LeftPumpKeptForPoseTool();
+        if (keepPump)
+        {
+            static int logsLeft = 4;
+            static double loggedAt = 0;
+            if (logsLeft > 0 && NowMs() - loggedAt > 5000.0)
+            {
+                --logsLeft;
+                loggedAt = NowMs();
+                Log("VR: the controls are let go of (the game's window out of use, or the like), but the left hand stays on the shotgun's pump: the hand poses tool is open.");
+            }
+        }
+        g_handUse[0] = keepPump ? kHandOnGun : kHandFree;
+        g_handUse[1] = kHandFree;
+        g_handDown[0] = g_handDown[1] = false;
+    }
     g_pendingHand = -1;
     g_fireHeld = false;
     g_bulletTap = false;
@@ -5910,6 +6552,34 @@ static void UpdateDuck(const XrPosef& head)
             g_ducked ? "ducked -> crouch" : "back up -> stand", drop * 100.0f, depth * 100.0f,
             settings.seated ? "seated" : "standing");
     }
+
+    // The first few ducks of a run are watched, for the log: for kDuckWatchMs from each, ten times a second, how far
+    // the neck is down and where the eyes and the game's camera are in the game, and whether the game has the player
+    // crouched. The eyes should go down with the neck (in the game, by the world scale); a view that does not shows.
+    const double kDuckWatchMs = 1500.0;
+    static int watchesLeft = 6;
+    static double watchStartMs = -1.0, watchNextMs = 0.0;
+    double now = NowMs();
+    if (g_ducked && !was && watchesLeft > 0)
+    {
+        --watchesLeft;
+        watchStartMs = now;
+        watchNextMs = now;
+    }
+    if (watchStartMs >= 0.0 && now >= watchNextMs)
+    {
+        if (now - watchStartMs > kDuckWatchMs) watchStartMs = -1.0;
+        else
+        {
+            watchNextMs += 100.0;
+            float game[3], eye[3], yaw = 0.0f;
+            unsigned long long serial = 0;
+            if (CameraLastViewNumbers(game, eye, yaw, serial))
+                Log("DUCK WATCH: +%.1f s: the neck %.0f cm below the centre's; the eyes in the game at %.3f m, the game's camera at %.3f m "
+                    "(%+.0f cm); %s.", (now - watchStartMs) / 1000.0, drop * 100.0f, eye[1], game[1], (eye[1] - game[1]) * 100.0f,
+                    CameraGameCrouched() ? "the game has the player crouched" : "not crouched");
+        }
+    }
 }
 
 // Call after the controller readings were fetched. `menuPointer` is true
@@ -5921,7 +6591,8 @@ static void UpdateMoveInput(bool menuPointer)
     UpdateOverlayClose(); // (before the window check: a Shift+Tab under way is always let go)
     if (!GameWindowIsInUse() || g_dedicationHolding) // (nothing reaches the game while the dedication is shown at the start)
     {
-        ReleaseMoveKeys();
+        ReleaseMoveKeys(!GameWindowIsInUse()); // (the hands wait while the window is out of use: UpdateGrabInput)
+        SetInteractHeld(false); // (the left mouse button too, as for Steam's overlay below: else it stays down for the whole PC)
         g_stickMove[0] = g_stickMove[1] = 0.0f;
         return;
     }
@@ -5934,7 +6605,7 @@ static void UpdateMoveInput(bool menuPointer)
     static bool overlayB = true;
     if (g_steamOverlayOpen || g_overlayCloseStep != 0)
     {
-        ReleaseMoveKeys();
+        ReleaseMoveKeys(true); // (the hands wait: UpdateGrabInput)
         SetInteractHeld(false);
         g_stickMove[0] = g_stickMove[1] = 0.0f;
         g_inventoryButtonWas = true; // (B must be let go before it opens the inventory again)
@@ -6075,6 +6746,9 @@ static void UpdateMoveInput(bool menuPointer)
         if (!pushed) g_sprinting = false;
         else if (clicked && g_sprinting) g_sprinting = false;
         else if ((clicked || (click && !walkWas)) && !ReadButton(g_crouchAction)) g_sprinting = true;
+        // (A real duck ends a sprint, as the crouch stick's pull does below: the game's hold sprint stands a crouched
+        // runner up again, at once for a duck, which sends no crouch key, or a second after the crouch key.)
+        if (g_ducked) g_sprinting = false;
         clickWas = click;
         walkWas = pushed;
     }
@@ -6327,6 +7001,16 @@ static void UpdateMoveInput(bool menuPointer)
         g_moveRingMs = now;
     }
 
+    // Jumping and crouching take the stick pushed straight up or down: not
+    // while it is pushed sideways (a turn), nor for a moment after it was (a
+    // stick let go after a turn can spring past the middle). Neither is sent
+    // while paused or in the inventory: there Space combines items, and a push
+    // made there is used up, so it does not jump the moment the game goes on.
+    static double stickSidewaysMs = -1000.0;
+    if (haveTurn && fabsf(turnX) >= 0.3f) stickSidewaysMs = NowMs();
+    bool stickStraight = haveTurn && fabsf(turnX) < 0.3f && NowMs() - stickSidewaysMs > 150.0;
+    bool stickInPlay = !CameraGamePausedNow() && !CameraInventoryOpen();
+
     // --- Jumping: push the right stick up (it has to come back down before
     // --- the next jump). A short press of the game's Space key.
     {
@@ -6334,12 +7018,14 @@ static void UpdateMoveInput(bool menuPointer)
         static double releaseAt = 0;
         // While the game has you crouched (by the stick or by ducking), up
         // stands you up instead: the body script does it (command 9).
-        bool pushedUp = haveTurn && turnY > 0.75f && fabsf(turnX) < 0.5f;
+        bool pushedUp = stickStraight && turnY > 0.75f;
         if (!haveTurn || turnY < 0.4f) armed = true;
+        if (pushedUp && armed && !stickInPlay) armed = false;
         if (pushedUp && armed && CameraGameCrouched())
         {
             armed = false;
             SendScriptCommand(9);
+            HintUsed("stick_jump", NowMs());
             static int logsLeft = 3;
             if (logsLeft > 0)
             {
@@ -6351,6 +7037,7 @@ static void UpdateMoveInput(bool menuPointer)
         {
             armed = false;
             SetExtraKey(kKeyJump, true);
+            HintUsed("stick_jump", NowMs());
             releaseAt = NowMs() + 120.0;
         }
         if (g_extraKeyDown[kKeyJump] && NowMs() > releaseAt) SetExtraKey(kKeyJump, false);
@@ -6362,12 +7049,15 @@ static void UpdateMoveInput(bool menuPointer)
     {
         static bool armed = true;
         static double releaseAt = 0;
-        bool down = haveTurn && turnY < -0.75f && fabsf(turnX) < 0.5f;
+        bool down = stickStraight && turnY < -0.75f;
         if (!haveTurn || turnY > -0.4f) armed = true;
+        if (down && armed && !stickInPlay) armed = false;
         if (down && armed)
         {
             armed = false;
             SetExtraKey(kKeyCrouch, true);
+            g_sprinting = false; // (a crouch ends a sprint: see the sprint above)
+            HintUsed("stick_jump", NowMs());
             releaseAt = NowMs() + 120.0;
         }
         if (g_extraKeyDown[kKeyCrouch] && NowMs() > releaseAt) SetExtraKey(kKeyCrouch, false);
@@ -6471,31 +7161,24 @@ static void UpdateMoveInput(bool menuPointer)
         }
     }
 
-    // --- Flashlight: click the right stick in to take it out or put it away
-    // --- (the action is named "inventory" from an earlier button layout).
-    // --- With the left stick held in, the click is a mark instead (see MakeMark).
+    // --- A mark: the left stick held in and the right stick clicked (see MakeMark; the action is named "inventory"
+    // --- from an earlier button layout). The click alone does nothing: the flashlight is taken out and put away at
+    // --- the left chest only.
     {
         static bool wasDown = false;
         bool down = g_inventoryReady && ReadButton(g_inventoryAction);
-        if (down && !wasDown && !menuPointer)
+        if (down && !wasDown && !menuPointer && ReadButton(g_sprintAction))
         {
-            if (ReadButton(g_sprintAction))
-            {
-                char prefix[128];
-                int mark = MakeMark("the left stick held in, the right stick clicked", prefix, sizeof(prefix));
-                CaptureRequestNamed(prefix);
-                TestListNoteMark(mark, prefix);
-            }
-            else
-            {
-                SendScriptCommand(5);
-            }
+            char prefix[128];
+            int mark = MakeMark("the left stick held in, the right stick clicked", prefix, sizeof(prefix));
+            CaptureRequestNamed(prefix);
+            TestListNoteMark(mark, prefix);
         }
         wasDown = down;
     }
 
-    // --- The gun: A on the right controller draws it, puts it away, or (held)
-    // --- opens the ammo check. While the gun is out and you are not sprinting,
+    // --- The gun: A on the right controller held (and the revolver swung) opens
+    // --- the ammo check. While the gun is out and you are not sprinting,
     // --- the game is kept in its aiming state (right mouse button held), so the
     // --- trigger fires straight away. (X on the left controller puts away what
     // --- is held, see below.)
@@ -6506,14 +7189,28 @@ static void UpdateMoveInput(bool menuPointer)
     // left alone meanwhile. (X is the gas mask's key during play, so it is only
     // sent while paused.) The inventory pauses the game only with the
     // difficulty's "game paused in inventory", so the same is done while the
-    // game reports its inventory open.
-    bool gamePaused = CameraGamePaused();
+    // game reports its inventory open. (The pause is taken as over the moment
+    // the game runs again: A is the game's Space then, which is also its jump,
+    // and a press in the pause's last moments would jump.)
+    bool gamePaused = CameraGamePausedNow();
     bool inventoryKeys = gamePaused || CameraInventoryOpen();
+    // (Only a press begun there counts: X still held from putting an item away as B opened the inventory would drop
+    // the chosen item, A held for the shotgun's press-check would combine.)
+    static bool inventoryWas = false, aHeldBefore = false, xHeldBefore = false;
+    bool aNow = ReadButton(g_gunAction), xNow = ReadButton(g_aimAction2);
+    if (inventoryKeys && !inventoryWas)
+    {
+        aHeldBefore = aNow;
+        xHeldBefore = xNow;
+    }
+    if (!aNow) aHeldBefore = false;
+    if (!xNow) xHeldBefore = false;
+    inventoryWas = inventoryKeys;
     if (inventoryKeys)
     {
         SetExtraKey(kKeyHolster, false);
-        SetExtraKey(kKeyCombine, ReadButton(g_gunAction));
-        SetExtraKey(kKeyDrop, ReadButton(g_aimAction2));
+        SetExtraKey(kKeyCombine, aNow && !aHeldBefore);
+        SetExtraKey(kKeyDrop, xNow && !xHeldBefore);
     }
     else
     {
@@ -6548,7 +7245,10 @@ static void UpdateMoveInput(bool menuPointer)
             double now = NowMs();
             const char* what = nullptr;
             // (Not the shotgun: it goes behind the right shoulder.)
+            // (Not an armed grenade either, as the chest's item slot refuses it: a soft tap. It is thrown, or held.)
+            bool armedGrenade = CameraRightItemKind() == kItemGrenade && g_grenadeArmed;
             if (gunMode && CameraShotgunHeld())                    { what = nullptr; }
+            else if (armedGrenade)                                 { what = nullptr; Buzz(1, 0.03f, 0.3f); }
             else if (gunMode)                                      { g_virtualGunTapUntil = now + 120.0; g_virtualGunTapHip = false; what = "the gun"; }
             else if (CameraRightItemKind() != kItemNone)           { SendScriptCommand(12); what = "the item in the right hand"; }
             else if (CameraLeftItemKind() == kItemFlashlight)      { SendScriptCommand(5);  what = "the flashlight"; }
@@ -6556,13 +7256,14 @@ static void UpdateMoveInput(bool menuPointer)
             {
                 putAwayQuietUntil = now + 500.0;
                 xHeldAfterPutAway = true;
+                g_throwHeld = false; // (the grip holding it to throw: letting go now must not throw or put down what is going away)
             }
             static int logsLeft = 8;
             if (logsLeft > 0)
             {
                 --logsLeft;
                 if (what) Log("VR: X pressed -> %s put away.", what);
-                else Log("VR: X pressed -> nothing to put away (%s).", gunMode ? "the shotgun goes behind the right shoulder" : "both hands empty");
+                else Log("VR: X pressed -> nothing to put away (%s).", armedGrenade ? "an armed grenade is thrown or held, not put away" : (gunMode ? "the shotgun goes behind the right shoulder" : "both hands empty"));
             }
         }
         xWasDown = xDown;
@@ -6581,7 +7282,9 @@ static void UpdateMoveInput(bool menuPointer)
     // (Not the lighter: it is lit by its trigger, by hand. A bottle is, for
     // the game's uses of it on things; it is thrown by hand.)
     int readyKind = CameraRightItemKind();
-    bool keepReady = !gunMode && (readyKind == kItemOther || readyKind == kItemBottle) && !g_sprinting && !g_aimPaused && !putAwayQuiet;
+    // (Kept through a sprint: in VR the item's state lets the player run, so a run no longer leaves it, which put the
+    // other hand's lantern back and took it away again with every sprint.)
+    bool keepReady = !gunMode && (readyKind == kItemOther || readyKind == kItemBottle) && !g_aimPaused && !putAwayQuiet;
     static bool loggedReady = false;
     if (keepReady && !loggedReady)
     {
@@ -6816,8 +7519,16 @@ static bool UpdateMenuPointer()
     // panel; otherwise the other one.
     int hand = g_pointerHit[g_menuHand] ? g_menuHand : 1 - g_menuHand;
 
-    // During a trigger click the pointer holds still (see UpdateGrabInput).
-    if (NowMs() >= g_pointerFrozenUntil) MoveGamePointer(hitU[hand], hitV[hand], lookMode, pointerX, pointerY);
+    // During a trigger click the pointer holds still (see UpdateGrabInput), and so does the drawn cursor.
+    if (NowMs() >= g_pointerFrozenUntil)
+    {
+        MoveGamePointer(hitU[hand], hitV[hand], lookMode, pointerX, pointerY);
+        float sideways = (hitU[hand] - 0.5f) * g_panelWidth, up = (0.5f - hitV[hand]) * g_panelHeight;
+        g_pointerSpot[0] = g_panelPosition[0] + across[0] * sideways;
+        g_pointerSpot[1] = g_panelPosition[1] + up;
+        g_pointerSpot[2] = g_panelPosition[2] + across[2] * sideways;
+    }
+    g_pointerSpotMs = NowMs();
     g_pointerActive = true;
     g_pointerHand = hand;
     g_pointerLength = g_pointerHitLength[hand];
@@ -7627,6 +8338,28 @@ static void OnVrMenuAction(int action)
     {
         PoseToolSetOpen(GripsView().onPc); // (the hand poses tool on the PC's screen)
     }
+    else if (!kPlayerBuild && action >= kMenuActionTrailerSpawn && action <= kMenuActionTrailerHunt)
+    {
+        // The Trailer page (the developer build only): the body script's
+        // commands of its own, from kScriptTrailerFirst (VRTrailerCommand in
+        // PlayerBodyHandler.hps), sent from nowhere else. The menu closes for a
+        // scene (out of the shot, and out of the way of looking at a spot), not
+        // for the two switches of the Beast's notice.
+        static const int kScriptTrailerFirst = 200;
+        SendScriptCommand(kScriptTrailerFirst + action - kMenuActionTrailerSpawn);
+        Log("VR: Trailer page button pressed; script command %d sent.", kScriptTrailerFirst + action - kMenuActionTrailerSpawn);
+        if (action != kMenuActionTrailerCalm && action != kMenuActionTrailerNotice && VrMenuIsOpen()) VrToggleMenu();
+    }
+    else if (!kPlayerBuild && (action == kMenuActionTrailerPowerFull || action == kMenuActionTrailerPowerNone))
+    {
+        // The Trailer page's power (the developer build only): the body
+        // script's commands 208 and 209, after the scenes' (VRTrailerPower in
+        // PlayerBodyHandler.hps). The menu closes, out of the shot.
+        int command = action == kMenuActionTrailerPowerFull ? 208 : 209;
+        SendScriptCommand(command);
+        Log("VR: Trailer page button pressed; script command %d sent.", command);
+        if (VrMenuIsOpen()) VrToggleMenu();
+    }
     else if (action >= kMenuActionTestFirst && action <= kMenuActionTestLast)
     {
         // The Testing page: the body script does these (see VRDoTestCommand
@@ -7698,8 +8431,11 @@ static bool UpdateVrMenu()
     if (!buttonDown) pressCounts = false;
     buttonWasDown = buttonDown;
 
+    // (Whether the pointer was on the menu at the last frame: see heldOver below.)
+    static bool pointerWasOn = false;
     if (!VrMenuIsOpen() || !g_menuPlaced)
     {
+        pointerWasOn = false;
         return false;
     }
 
@@ -7746,18 +8482,28 @@ static bool UpdateVrMenu()
         hitDistance[hand] = distance;
     }
 
-    int hand = g_grabHand;
+    int hand = g_pointerHand;
     bool taken = false; // (the other hand took the pointer with a squeeze)
     if (hits[1 - hand] && (!hits[hand] || squeezeBegan[1 - hand]))
     {
         taken = hits[hand];
         hand = 1 - hand;
     }
+    // A squeeze a hand was already making as the pointer came to it (from the other hand, or back onto the menu),
+    // not one that took the pointer, presses nothing until it is let go: that hand may be carrying something through
+    // the menu.
+    static bool heldOver[2] = { false, false };
+    for (int h = 0; h < 2; ++h)
+        if (!squeezing[h]) heldOver[h] = false;
+    if (taken) heldOver[hand] = false;
+    else if (hits[hand] && (!pointerWasOn || hand != g_pointerHand)) heldOver[hand] = squeezing[hand];
     if (!hits[hand])
     {
         VrMenuPointer(false, 0, 0, false, NowMs());
+        pointerWasOn = false;
         return false;
     }
+    pointerWasOn = true;
     float u = hitU[hand], v = hitV[hand];
 
     // Steadied against the hand's tremble (started afresh when another
@@ -7771,14 +8517,36 @@ static bool UpdateVrMenu()
     SteadyPointer(u, v, steady);
 
     if (taken) VrMenuPointer(false, 0, 0, false, NowMs()); // (so that the squeeze that took it counts as a new press)
-    VrMenuPointer(true, u, v, squeezing[hand], NowMs());
+    VrMenuPointer(true, u, v, squeezing[hand] && !heldOver[hand], NowMs());
     static int hoverCountSeen = 0; // (a light tick as it comes onto something to press)
     if (VrMenuHoverCount() != hoverCountSeen)
     {
         hoverCountSeen = VrMenuHoverCount();
         if (VrMenuPointerOnButton()) HoverBuzz(hand);
     }
-    g_grabHand = hand; // the hand that points stays the pointing hand
+    // (A firmer one as a press lands. The first look only takes the time of the last press, which is the menu's
+    // "never" until the first press of the run.)
+    static bool pressSeenKnown = false;
+    static double pressSeenMs = 0.0;
+    if (!pressSeenKnown)
+    {
+        pressSeenKnown = true;
+        pressSeenMs = VrMenuLastPressMs();
+    }
+    else if (VrMenuLastPressMs() != pressSeenMs)
+    {
+        PressBuzz(hand);
+        pressSeenMs = VrMenuLastPressMs();
+    }
+    // (Where the press lands, for the cursor: PlacePointerPieces.)
+    float sideways = (u - 0.5f) * kMenuWidthMetres, up = (0.5f - v) * g_menuHeightMetres;
+    g_pointerSpot[0] = g_menuPosition[0] + across[0] * sideways;
+    g_pointerSpot[1] = g_menuPosition[1] + up;
+    g_pointerSpot[2] = g_menuPosition[2] + across[2] * sideways;
+    g_pointerSpotMs = NowMs();
+    // (The pointing hand becomes the one the game's grab follows, but not while the game holds a thing in the other
+    // hand: that thing stays with the hand that carries it.)
+    if (!(g_grabHeld && g_handUse[g_grabHand] == kHandGame && g_grabHand != hand)) g_grabHand = hand;
     g_pointerHand = hand;
     g_pointerLength = hitDistance[hand];
     return true;
@@ -8253,6 +9021,26 @@ static bool HintAtBody(int hand, int carried, const HintInfo*& info, float room[
     return info != nullptr;
 }
 
+// Jumping and crouching by the right stick are shown nowhere in the world, so
+// their hint comes at the empty right hand by itself: once a run, after 20 s in
+// the game's normal state, for 10 s, until learned (a jump, a crouch or a
+// stand-up by the stick counts: UpdateMoveInput).
+static bool StickHintNow()
+{
+    static double playedMs = 0.0, lastMs = 0.0, shownFromMs = -1.0;
+    double now = NowMs();
+    double step = lastMs > 0.0 && now - lastMs < 100.0 ? now - lastMs : 0.0;
+    lastMs = now;
+    if (shownFromMs >= 0.0) return now - shownFromMs < 10000.0;
+    // (Only in play: without the body script's news, as in the main menu, the state reads normal so that nothing waits
+    // for ever, and the hint would come and go there, never to show in play.)
+    if (!CameraGunNewsFresh() || !CameraPlayerStateNormal()) return false;
+    playedMs += step;
+    if (playedMs < 20000.0) return false;
+    shownFromMs = now;
+    return true;
+}
+
 // The hint the mod finds itself for what a hand holds (true), with the hand's
 // place in the room (or the left forearm's, for the bandage's wrapping).
 static bool HintForHeld(int hand, const HintInfo*& info, float room[3])
@@ -8289,7 +9077,8 @@ static bool HintForHeld(int hand, const HintInfo*& info, float room[3])
     }
     if (rightKind == kItemHealth)
     {
-        if (g_bandagePhase == 0) info = HintFind("bandage_open");
+        // (Not while the game would not use it: pulled, it would only be refused.)
+        if (g_bandagePhase == 0 && (HintCarriedFlags(NowMs()) & kCarryHealRefused) == 0) info = HintFind("bandage_open");
         else if (g_bandagePhase == 1 && g_hintGripKnown[0])
         {
             // At the left forearm: 14 cm back from the left palm along the
@@ -8317,6 +9106,11 @@ static bool HintForHeld(int hand, const HintInfo*& info, float room[3])
     if ((CameraRightItemMoves(nullptr) & kMoveThrow) != 0)
     {
         info = HintFind("throw");
+        return true;
+    }
+    if (rightKind == kItemNone && !g_grabHeld && StickHintNow())
+    {
+        info = HintFind("stick_jump");
         return true;
     }
     return false;
@@ -8449,8 +9243,10 @@ static void UpdateHints(bool shown, double nowMs)
     if (step < 0.0f || step > 0.1f) step = 0.0f;
     lastMs = nowMs;
 
+    // (Nor while the eyes are more than half darkened: the labels are layers of their own, and would float bright in
+    // the black of the game's fades and a re-center.)
     bool allowed = shown && GetSettings().interactionHints != 2 && !VrMenuIsOpen() && !CameraGamePaused() && !CameraInventoryOpen() &&
-                   !CameraTheatre() && !StartupRunning() && g_framePoseValid;
+                   !CameraTheatre() && !StartupRunning() && g_framePoseValid && EyesDark() < 0.5f;
     int carried = HintCarriedFlags(nowMs);
     double toldMs = 0.0;
     const HintInfo* told = HintLastUsed(toldMs);
@@ -8782,6 +9578,13 @@ static void PlacePointerPieces()
         if (pointing && length > 0.05f)
         {
             float hit[3] = { o[0] + d[0] * length, o[1] + d[1] * length, o[2] + d[2] * length };
+            // The steering hand's cursor where its press lands (g_pointerSpot, the steadied spot), the beam bending
+            // to it by the little the steadying holds back.
+            if (steering && now - g_pointerSpotMs < 100.0)
+            {
+                for (int i = 0; i < 3; ++i) hit[i] = g_pointerSpot[i];
+                length = sqrtf((hit[0] - o[0]) * (hit[0] - o[0]) + (hit[1] - o[1]) * (hit[1] - o[1]) + (hit[2] - o[2]) * (hit[2] - o[2]));
+            }
 
             // The beam: from just past the orb's core to the panel, its first rows
             // at the hand, turned about its own line to face the head.
@@ -8948,7 +9751,9 @@ void VrToggleBothEyes()
 //     <number> menu <a menu action's number, as if its button was pressed>
 //     <number> page <a menu page's number: the menu opens on it>
 //     <number> front <1 or 0: the game's window kept in front, as with a player in the headset>
-//     <number> set <a drawing switch for this run, "right_eye_shadows=0", or "beast_away=1">
+//     <number> set <a drawing switch for this run, "right_eye_shadows=0", "beast_away=1", or a setting for the
+//                   run: "move_vignette=", "hint_size=", "knockdown_view=", "seated=", "interaction_hints=";
+//                   or "grips=reload": BunkerVR_grips.txt read again>
 //     <number> timings <words for the log: the timing lines now and every 10 s for a minute>
 //     <number> sample <an engine mark> <eye: 0 any, 1 left, 2 right> <seconds: the sampling profiler>
 //     <number> startup (the start-up page, as an ordinary run brings it up)
@@ -9029,6 +9834,26 @@ static void UpdateStandInCommands()
             else if (strncmp(rest, "hint_size=", 10) == 0 && rest[10] >= '0' && rest[10] <= '3' && rest[11] == '\0')
             {
                 GetSettings().hintSize = rest[10] - '0'; // (the same)
+                done = true;
+            }
+            else if (strncmp(rest, "knockdown_view=", 15) == 0 && rest[15] >= '0' && rest[15] <= '2' && rest[16] == '\0')
+            {
+                GetSettings().roughView = rest[15] - '0'; // (the same; read as each knockdown, kill or death begins)
+                done = true;
+            }
+            else if (strncmp(rest, "seated=", 7) == 0 && (rest[7] == '0' || rest[7] == '1') && rest[8] == '\0')
+            {
+                GetSettings().seated = rest[7] == '1'; // (the same; the next re-centre takes the head as standing or seated)
+                done = true;
+            }
+            else if (strncmp(rest, "interaction_hints=", 18) == 0 && rest[18] >= '0' && rest[18] <= '2' && rest[19] == '\0')
+            {
+                GetSettings().interactionHints = rest[18] - '0'; // (the same)
+                done = true;
+            }
+            else if (strcmp(rest, "grips=reload") == 0)
+            {
+                GripsDeskRevert(); // (BunkerVR_grips.txt read again on the next frame, as the hand poses tool's Revert does)
                 done = true;
             }
             else done = SetDrawingSwitchForRun(rest);
@@ -9140,6 +9965,10 @@ static void RecordMotionFrame(const XrPosef grip[2], const XrPosef aim[2], unsig
     MotionAdd(frame);
 }
 
+// Is the pose shared for each hand the controller's own, live (tracked, not held for a loss nor gliding back
+// after one, not frozen)? Only such a hand is located again as the next frame begins (RelocateSharedHands).
+static bool g_handSharedLive[2] = { false, false };
+
 static void DrawHands(float tanHalfWidth, float tanHalfHeight, int width, int height, bool draw)
 {
     if (!g_handsReady) return;
@@ -9229,6 +10058,7 @@ static void DrawHands(float tanHalfWidth, float tanHalfHeight, int width, int he
             bool trackedNow = givenNow && ((gripTracked && aimTracked) || !g_trackBitSeen[hand]);
             if (!frozenNow)
                 share = LostHandPoses(hand, trackedNow, aimTurn ? &aim[hand].orientation : nullptr, shareAim, shareGrip);
+            g_handSharedLive[hand] = share && !frozenNow && trackedNow && !g_lostHand[hand].held && g_lostHand[hand].glideStartMs < 0.0;
             HeadPose relativeAim = {}, relativeGrip = {};
             if (share)
             {
@@ -9292,6 +10122,7 @@ static void DrawHands(float tanHalfWidth, float tanHalfHeight, int width, int he
         {
             rx /= length;
             rz /= length;
+            TorsoRight(rx, rz); // (the places face as the torso does, not the head: see there)
             float fx = rz, fz = -rx; // level "forwards"
             XrVector3f neck = NeckPoint(g_frameHeadPose);
             holsterRoom[0] = neck.x + rx * settings.holsterRight + fx * settings.holsterForward;
@@ -9423,17 +10254,24 @@ static void DrawHands(float tanHalfWidth, float tanHalfHeight, int width, int he
     }
 
     // How fast the right hand is moving, for throwing a grenade: the fastest
-    // of the last dozen frames, because people let go a little late, when the
-    // hand is already slowing.
+    // of the last kRecentMs, because people let go a little late, when the
+    // hand is already slowing. (By the clock, not a count of frames, which
+    // spans twice as long at 45 frames a second as at 90. Only from tracked
+    // places: a controller found again after a wind-up out of the cameras'
+    // sight jumps from where it was guessed, which read as a throw.)
     {
+        static const int kRecent = 32;
+        static const double kRecentMs = 140.0;
         static XrVector3f was = {};
         static bool haveWas = false;
         static double wasMs = 0;
-        static float recent[12] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+        static float recent[kRecent] = {};
+        static double recentMs[kRecent] = {};
         static int next = 0;
         double nowMs = NowMs();
         float speed = 0.0f;
-        if (haveGrip[1])
+        bool rightTracked = haveGrip[1] && (g_gripTrackedNow[1] || !g_trackBitSeen[1]);
+        if (rightTracked)
         {
             const XrVector3f& p = grip[1].position;
             if (haveWas && nowMs - wasMs > 1.0 && nowMs - wasMs < 100.0)
@@ -9451,10 +10289,11 @@ static void DrawHands(float tanHalfWidth, float tanHalfHeight, int width, int he
         }
         g_rightHandSpeedNow = speed;
         recent[next] = speed;
-        next = (next + 1) % 12;
+        recentMs[next] = nowMs;
+        next = (next + 1) % kRecent;
         g_rightHandSpeed = 0.0f;
-        for (int i = 0; i < 12; ++i)
-            if (recent[i] > g_rightHandSpeed) g_rightHandSpeed = recent[i];
+        for (int i = 0; i < kRecent; ++i)
+            if (nowMs - recentMs[i] <= kRecentMs && recent[i] > g_rightHandSpeed) g_rightHandSpeed = recent[i];
     }
 
     // How fast the right wrist is turning, for the "swing the revolver open" move.
@@ -9574,6 +10413,7 @@ static void DrawHands(float tanHalfWidth, float tanHalfHeight, int width, int he
             ++boxCount;
         }
     }
+
     // The flashlight's cord, while the right hand has hold of it: a thin line
     // from the flashlight (in the left hand) to the right hand.
     // (Off: the game's scripts move the flashlight's own string to the hand,
@@ -9704,6 +10544,45 @@ static void DrawHands(float tanHalfWidth, float tanHalfHeight, int width, int he
     };
 
     GlDrawBoxes(g_gamePicture, width, height, projection, sortedBoxes, sortedColours, boxCount);
+}
+
+// As a frame begins (BeginFrameWork, once its time is known): each hand whose shared pose is live
+// (g_handSharedLive) is located again at the time this frame will be shown, and shared again, before the game's
+// update poses the arms and moves held things with it. DrawHands, at the end of the frame, reads the buttons and
+// shares the hands too, but its poses would otherwise reach the game only in the next frame's update: the arms
+// and what they hold a frame behind the head (11 ms at 90 frames a second, 22 at 45). Hands lost or gliding back
+// keep what DrawHands gave them.
+static void RelocateSharedHands(XrTime time)
+{
+    if (!g_handsReady || !g_haveReference || g_handsFrozen) return;
+    for (int hand = 0; hand < 2; ++hand)
+    {
+        if (!g_handSharedLive[hand]) continue;
+        XrPosef grip, aim;
+        bool gripPosition = false, gripTurn = false, gripTracked = false, aimPosition = false, aimTurn = false, aimTracked = false;
+        if (!LocateHandParts(g_gripSpaces[hand], time, grip, gripPosition, gripTurn, gripTracked) || !gripTracked) continue;
+        if (!LocateHandParts(g_aimSpaces[hand], time, aim, aimPosition, aimTurn, aimTracked) || !aimTracked) continue;
+        XrPosef shareGrip = grip;
+        shareGrip.orientation = aim.orientation; // (as DrawHands gives the arms: the palm's place, the pointing turn)
+        HeadPose relativeAim = {}, relativeGrip = {};
+        ToRelativePose(aim, relativeAim);
+        ToRelativePose(shareGrip, relativeGrip);
+        unsigned long long now = GetTickCount64();
+        AcquireSRWLockExclusive(&g_poseLock);
+        g_sharedHandPose[hand] = relativeAim;
+        g_sharedHandRoom[hand] = aim;
+        g_sharedHandTime[hand] = now;
+        g_sharedGripPose[hand] = relativeGrip;
+        g_sharedGripRoom[hand] = shareGrip;
+        g_sharedGripTime[hand] = now;
+        ReleaseSRWLockExclusive(&g_poseLock);
+    }
+    static bool logged = false;
+    if (!logged && (g_handSharedLive[0] || g_handSharedLive[1]))
+    {
+        logged = true;
+        Log("VR: the hands are located again as each frame begins, at the time it will be shown (the arms in step with the head).");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -9917,7 +10796,8 @@ static float HurtStrengthAt(double now)
 
 void VrHurt(float amount, int kind, float x, float y, float z)
 {
-    if (amount <= 0.0f) return;
+    if (!(amount > 0.0f) || !isfinite(amount)) return; // (also a script's number that is no number)
+    if (!isfinite(x) || !isfinite(y) || !isfinite(z)) x = y = z = 0.0f; // (no direction then: all round)
     double now = NowMs();
     float hard = amount > 1.0f ? 1.0f : amount;
     float strength = 0.45f + 0.9f * hard;
@@ -10190,18 +11070,26 @@ static void UpdateTheatreChange()
 // world would stay in view. The body script reports how far the fade has gone
 // and the eyes' pictures are darkened to match, as is the cutscene screen's
 // own picture.
-static void DrawFade(int width, int height)
+// How dark the eyes' pictures are made now, 0 to 1: the game's own fade, the
+// mod's darkening for a re-center (see VrRecenter) and for a change to or from
+// the cutscene screen (see UpdateTheatreChange), behind the start-up page, and
+// behind the studio's card (then the room fading in after it).
+static float EyesDark()
 {
     float fade = CameraFadeAlpha();
-    // (And the mod's own darkening for a re-center: see VrRecenter. And for a
-    // change to or from the cutscene screen: see UpdateTheatreChange.)
     float recentre = RecentreFade();
     if (recentre > fade) fade = recentre;
     if (g_theatreDark > fade) fade = g_theatreDark;
-    float startup = StartupDim(); // (and behind the start-up page)
+    float startup = StartupDim();
     if (startup > fade) fade = startup;
-    float card = DedicationDark(); // (and behind the studio's card, then the room fading in after it)
+    float card = DedicationDark();
     if (card > fade) fade = card;
+    return fade;
+}
+
+static void DrawFade(int width, int height)
+{
+    float fade = EyesDark();
     if (fade < 0.004f) return;
 
     static bool logged = false;
@@ -10215,15 +11103,19 @@ static void DrawFade(int width, int height)
 }
 
 // ---------------------------------------------------------------------------
-// Setup (runs once)
+// Setup (runs once, and again after a lost connection: see LoseVr)
 // ---------------------------------------------------------------------------
 
-static bool OpenGlIsSupported()
+// `softwareFound`: the VR software answered at all (if not, no OpenXR runtime
+// is set up or running).
+static bool OpenGlIsSupported(bool& softwareFound)
 {
+    softwareFound = false;
     uint32_t count = 0;
     if (!Check(xrEnumerateInstanceExtensionProperties(nullptr, 0, &count, nullptr),
                "Asking the VR software what it supports"))
         return false;
+    softwareFound = true;
 
     XrExtensionProperties* extensions = new XrExtensionProperties[count];
     for (uint32_t i = 0; i < count; ++i)
@@ -10249,80 +11141,184 @@ static bool OpenGlIsSupported()
 
 static bool TestMapNoteIsNew(const wchar_t* noteName, bool& seen);
 
-static bool Setup()
+// Connecting to the VR software and finding the headset run on a thread of
+// their own (ConnectThread), while the game goes on: a VR software that is not
+// running yet (SteamVR starting with the game) can take many seconds to
+// answer, and the game's window would stop responding meanwhile. The rest of
+// the setup needs the game's OpenGL context, and runs on the game's thread once
+// that is done (FinishSetup).
+enum class ConnectFailure
 {
-    Log("VR: starting setup.");
+    None,
+    NoSoftware,   // no VR software answered (no OpenXR runtime set up, or it is not running)
+    NoOpenGl,     // the VR software does not take OpenGL games
+    NotConnected, // it refused the connection
+    NoHeadset,    // connected, but no headset was ready within kHeadsetWaitMs
+    NoAnswer,     // the VR software never answered (see UpdateConnecting)
+};
+struct ConnectResult
+{
+    XrInstance instance;
+    XrSystemId system;
+    ConnectFailure failure;
+    XrResult result; // the failed call's own answer
+    char runtimeName[XR_MAX_RUNTIME_NAME_SIZE];
+    XrVersion runtimeVersion;
+    double tookMs;
+};
+static ConnectResult g_connect = {};
+// 0 nothing under way, 1 connecting, 2 done (g_connect filled in), 3 given up on by the game's thread (the
+// connecting thread lets go of what it made).
+static volatile LONG g_connectStep = 0;
+static double g_connectStartedMs = -1.0;
+// XR_ERROR_FORM_FACTOR_UNAVAILABLE is the VR software's "not yet" (a Quest before
+// Link or Air Link is on, a headset asleep): asked again this often, this long.
+static const double kHeadsetAskEveryMs = 2000.0, kHeadsetWaitMs = 60000.0;
 
-    // A test run with a stand-in OpenXR runtime instead of a headset? (See g_standIn.) The OpenXR
-    // loader reads XR_RUNTIME_JSON the first time it is called, just below; only this process sees it.
-    bool standInSeen = false;
-    if (TestMapNoteIsNew(L"BunkerVR_start_fake_headset.txt", standInSeen))
+static DWORD WINAPI ConnectThread(LPVOID)
+{
+    ConnectResult r = {};
+    double started = NowMs();
+
+    // 1. Check the VR software can work with OpenGL, which is what the game draws with.
+    bool softwareFound = false;
+    if (!OpenGlIsSupported(softwareFound))
     {
-        wchar_t path[MAX_PATH];
-        DWORD length = GetModuleFileNameW(nullptr, path, MAX_PATH);
-        while (length > 0 && path[length - 1] != L'\\') --length;
-        path[length] = L'\0';
-        if (length > 0 && length + 40 < MAX_PATH)
+        r.failure = softwareFound ? ConnectFailure::NoOpenGl : ConnectFailure::NoSoftware;
+        Log(softwareFound ? "VR ERROR: the active VR software does not support OpenGL games."
+                          : "VR ERROR: no VR software answered (no active OpenXR runtime, or it is not running).");
+    }
+    else
+    {
+        // 2. Connect to the VR software.
+        XrInstanceCreateInfo instanceInfo = { XR_TYPE_INSTANCE_CREATE_INFO };
+        lstrcpynA(instanceInfo.applicationInfo.applicationName, "BunkerVR", XR_MAX_APPLICATION_NAME_SIZE);
+        instanceInfo.applicationInfo.applicationVersion = 1;
+        lstrcpynA(instanceInfo.applicationInfo.engineName, "HPL3", XR_MAX_ENGINE_NAME_SIZE);
+        instanceInfo.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+        const char* extensions[] = { XR_KHR_OPENGL_ENABLE_EXTENSION_NAME };
+        instanceInfo.enabledExtensionCount = 1;
+        instanceInfo.enabledExtensionNames = extensions;
+        r.result = xrCreateInstance(&instanceInfo, &r.instance);
+        if (XR_FAILED(r.result))
         {
-            lstrcatW(path, L"BunkerVR\\tools\\fakexr\\fakexr.json");
-            if (GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES && SetEnvironmentVariableW(L"XR_RUNTIME_JSON", path))
+            r.instance = XR_NULL_HANDLE;
+            r.failure = ConnectFailure::NotConnected;
+            Log("VR ERROR: Connecting to the VR software failed (code %d).", (int)r.result);
+        }
+        else
+        {
+            XrInstanceProperties properties = { XR_TYPE_INSTANCE_PROPERTIES };
+            if (XR_SUCCEEDED(xrGetInstanceProperties(r.instance, &properties)))
             {
-                g_standIn = true;
-                Log("VR: a run with the pretend headset: no dedication.");
-                CameraWatchSoundListener();
-                StandInWatchStart();
+                lstrcpynA(r.runtimeName, properties.runtimeName, (int)sizeof(r.runtimeName));
+                r.runtimeVersion = properties.runtimeVersion;
+            }
+
+            // 3. Find the headset.
+            XrSystemGetInfo systemInfo = { XR_TYPE_SYSTEM_GET_INFO };
+            systemInfo.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
+            bool said = false;
+            for (;;)
+            {
+                r.result = xrGetSystem(r.instance, &systemInfo, &r.system);
+                if (r.result != XR_ERROR_FORM_FACTOR_UNAVAILABLE || NowMs() - started >= kHeadsetWaitMs || g_connectStep == 3) break;
+                if (!said)
+                {
+                    said = true;
+                    Log("VR: \"%s\" has no headset ready yet (connected, on, awake?): asked again every %.0f s for up to %.0f s.",
+                        r.runtimeName, kHeadsetAskEveryMs / 1000.0, kHeadsetWaitMs / 1000.0);
+                }
+                Sleep((DWORD)kHeadsetAskEveryMs);
+            }
+            if (XR_FAILED(r.result))
+            {
+                r.failure = r.result == XR_ERROR_FORM_FACTOR_UNAVAILABLE ? ConnectFailure::NoHeadset : ConnectFailure::NotConnected;
+                Log("VR ERROR: Finding the headset failed (code %d)%s.", (int)r.result,
+                    r.failure == ConnectFailure::NoHeadset ? ": no headset was ready in time" : "");
+                xrDestroyInstance(r.instance);
+                r.instance = XR_NULL_HANDLE;
+                r.system = XR_NULL_SYSTEM_ID;
+            }
+            else if (said)
+            {
+                Log("VR: the headset is ready now (after %.0f s).", (NowMs() - started) / 1000.0);
             }
         }
     }
+    r.tookMs = NowMs() - started;
+    g_connect = r;
+    // (Given up on meanwhile: what was made is let go here, as nobody takes it.)
+    if (InterlockedCompareExchange(&g_connectStep, 2, 1) == 3 && r.instance != XR_NULL_HANDLE) xrDestroyInstance(r.instance);
+    return 0;
+}
 
-    // 1. Check the VR software can work with OpenGL, which is what the game draws with.
-    if (!OpenGlIsSupported())
+// Starts connecting (on the game's thread). The first time it also looks for a
+// test run's stand-in runtime. False if the thread could not be started.
+static bool StartConnecting()
+{
+    static bool first = true;
+    if (first)
     {
-        Log("VR ERROR: the active VR software does not support OpenGL games (or no VR software was found).");
+        first = false;
+        Log("VR: starting setup.");
+        // A test run with a stand-in OpenXR runtime instead of a headset? (See g_standIn.) The OpenXR
+        // loader reads XR_RUNTIME_JSON the first time it is called; only this process sees it.
+        bool standInSeen = false;
+        if (TestMapNoteIsNew(L"BunkerVR_start_fake_headset.txt", standInSeen))
+        {
+            wchar_t path[MAX_PATH];
+            DWORD length = GetModuleFileNameW(nullptr, path, MAX_PATH);
+            while (length > 0 && path[length - 1] != L'\\') --length;
+            path[length] = L'\0';
+            if (length > 0 && length + 40 < MAX_PATH)
+            {
+                lstrcatW(path, L"BunkerVR\\tools\\fakexr\\fakexr.json");
+                if (GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES && SetEnvironmentVariableW(L"XR_RUNTIME_JSON", path))
+                {
+                    g_standIn = true;
+                    Log("VR: a run with the pretend headset: no dedication.");
+                    CameraWatchSoundListener();
+                    StandInWatchStart();
+                }
+            }
+        }
+    }
+    else Log("VR: connecting to the VR software again.");
+
+    g_connect = {};
+    g_connectStep = 1;
+    g_connectStartedMs = NowMs();
+    HANDLE thread = CreateThread(nullptr, 0, ConnectThread, nullptr, 0, nullptr);
+    if (!thread)
+    {
+        g_connectStep = 0;
+        Log("VR ERROR: the thread that connects to the VR software could not be started (error %lu).", GetLastError());
         return false;
     }
+    CloseHandle(thread);
+    return true;
+}
 
-    // 2. Connect to the VR software.
-    XrInstanceCreateInfo instanceInfo = { XR_TYPE_INSTANCE_CREATE_INFO };
-    lstrcpynA(instanceInfo.applicationInfo.applicationName, "BunkerVR", XR_MAX_APPLICATION_NAME_SIZE);
-    instanceInfo.applicationInfo.applicationVersion = 1;
-    lstrcpynA(instanceInfo.applicationInfo.engineName, "HPL3", XR_MAX_ENGINE_NAME_SIZE);
-    instanceInfo.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
-
-    const char* extensions[] = { XR_KHR_OPENGL_ENABLE_EXTENSION_NAME };
-    instanceInfo.enabledExtensionCount = 1;
-    instanceInfo.enabledExtensionNames = extensions;
-
-    if (!Check(xrCreateInstance(&instanceInfo, &g_instance), "Connecting to the VR software"))
-        return false;
-
-    XrInstanceProperties instanceProperties = { XR_TYPE_INSTANCE_PROPERTIES };
-    if (Check(xrGetInstanceProperties(g_instance, &instanceProperties), "Reading the VR software's name"))
-    {
-        Log("VR: connected to \"%s\" version %u.%u.%u", instanceProperties.runtimeName,
-            (unsigned)XR_VERSION_MAJOR(instanceProperties.runtimeVersion),
-            (unsigned)XR_VERSION_MINOR(instanceProperties.runtimeVersion),
-            (unsigned)XR_VERSION_PATCH(instanceProperties.runtimeVersion));
-        // (SteamVR shows panels in overlays it hands out by their place in each frame's list, and
-        // mixes up their pictures: the mod draws them into the eyes' pictures itself.)
-        g_runtimeSteamVr = strncmp(instanceProperties.runtimeName, "SteamVR", 7) == 0;
-        g_panelsInEyes = g_runtimeSteamVr;
-        if (g_panelsInEyes)
-            Log("VR: SteamVR: the panels (the game's interface, the menus, the pointer, the labels) are drawn into the eyes' "
-                "pictures by the mod, and SteamVR is sent those alone.");
-    }
-
-    // 3. Find the headset.
-    XrSystemGetInfo systemInfo = { XR_TYPE_SYSTEM_GET_INFO };
-    systemInfo.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
-    if (!Check(xrGetSystem(g_instance, &systemInfo, &g_systemId), "Finding the headset (is it plugged in?)"))
-        return false;
+// The rest of the setup, on the game's thread with its OpenGL context, once
+// ConnectThread has found the headset (g_instance and g_systemId set).
+static bool FinishSetup(const char* runtimeName, XrVersion runtimeVersion)
+{
+    Log("VR: connected to \"%s\" version %u.%u.%u", runtimeName, (unsigned)XR_VERSION_MAJOR(runtimeVersion),
+        (unsigned)XR_VERSION_MINOR(runtimeVersion), (unsigned)XR_VERSION_PATCH(runtimeVersion));
+    // (SteamVR shows panels in overlays it hands out by their place in each frame's list, and
+    // mixes up their pictures: the mod draws them into the eyes' pictures itself.)
+    g_runtimeSteamVr = strncmp(runtimeName, "SteamVR", 7) == 0;
+    g_panelsInEyes = g_runtimeSteamVr;
+    if (g_panelsInEyes)
+        Log("VR: SteamVR: the panels (the game's interface, the menus, the pointer, the labels) are drawn into the eyes' "
+            "pictures by the mod, and SteamVR is sent those alone.");
 
     XrSystemProperties systemProperties = { XR_TYPE_SYSTEM_PROPERTIES };
     if (Check(xrGetSystemProperties(g_instance, g_systemId, &systemProperties), "Reading the headset's name"))
         Log("VR: headset found: \"%s\"", systemProperties.systemName);
     // (Before the view is first centered, so that the saved floor used is this headset's.)
-    ChooseHeadsetFloor(instanceProperties.runtimeName[0] ? instanceProperties.runtimeName : "unknown software",
+    ChooseHeadsetFloor(runtimeName[0] ? runtimeName : "unknown software",
                        systemProperties.systemName[0] ? systemProperties.systemName : "unknown headset");
 
     // 4. Ask how big each eye's picture should be (used with the panels drawn into the
@@ -10476,7 +11472,7 @@ static void LogUnboundControls()
         { g_gunAction, "A (the revolver)" },
         { g_crouchAction, "B (the inventory)" },
         { g_sprintAction, "the left stick's click (sprint)" },
-        { g_inventoryAction, "the right stick's click (the flashlight)" },
+        { g_inventoryAction, "the right stick's click (a mark, with the left stick held in)" },
         { g_squeezeAction, "the grips" },
         { g_triggerAction, "the triggers" },
         { g_moveAction, "the left stick (walk)" },
@@ -10499,12 +11495,15 @@ static void LogUnboundControls()
     else Log("VR: no button for %d control%s on these controllers: %s.", count, count == 1 ? "" : "s", missing);
 }
 
+static void LoseVr(const char* why);
+
 // The VR software sends messages, for example "the headset is ready" or "the
 // headset was taken off". This reads and reacts to them.
 static void HandleEvents()
 {
+    const char* lost = nullptr; // (the connection is going: let go of after the messages, see LoseVr)
     XrEventDataBuffer event = { XR_TYPE_EVENT_DATA_BUFFER };
-    while (xrPollEvent(g_instance, &event) == XR_SUCCESS)
+    while (!lost && xrPollEvent(g_instance, &event) == XR_SUCCESS)
     {
         if (event.type == XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED && g_session != XR_NULL_HANDLE)
         {
@@ -10537,7 +11536,17 @@ static void HandleEvents()
                 if (Check(xrBeginSession(g_session, &beginInfo), "Starting the headset session"))
                 {
                     g_sessionRunning = true;
-                    if (g_headsetOff) Log("VR: the headset is back on.");
+                    if (g_lostSinceMs >= 0.0)
+                    {
+                        // Connected again after a loss (LoseVr): the room the head is measured in is the new
+                        // connection's, so the view is centered again behind a moment of black, as for the
+                        // headset's own "Reset view".
+                        Log("VR: VR is back, %.0f s after the connection was lost: the view is centred again.", (NowMs() - g_lostSinceMs) / 1000.0);
+                        g_lostSinceMs = -1.0;
+                        RecenterBlackNow();
+                        MeasureRoomMoved();
+                    }
+                    else if (g_headsetOff) Log("VR: the headset is back on.");
                     g_headsetOff = false;
                     SetMonitorSync(false);
                     ResetLogicHalf();
@@ -10556,19 +11565,19 @@ static void HandleEvents()
                 SetMonitorSync(true);
                 ResetLogicHalf();
             }
-            else if (change->state == XR_SESSION_STATE_EXITING || change->state == XR_SESSION_STATE_LOSS_PENDING)
+            else if (change->state == XR_SESSION_STATE_EXITING)
             {
+                // (The headset software's own Quit, or the software closing: the game
+                // closes too, by its own exit, as VR games do (cVR_QuitAsked, asked by
+                // the menu script each frame).)
                 g_sessionRunning = false;
                 g_state = VrState::Failed;
-                if (change->state == XR_SESSION_STATE_EXITING)
-                {
-                    // (The headset software's own Quit, or the software closing: the game
-                    // closes too, by its own exit, as VR games do (cVR_QuitAsked, asked by
-                    // the menu script each frame).)
-                    g_quitAsked = true;
-                    Log("VR: the headset software asks the game to close (its own Quit, or it is closing): the game closes.");
-                }
-                else Log("VR: the headset software closed the session. VR is off until the game restarts.");
+                g_quitAsked = true;
+                Log("VR: the headset software asks the game to close (its own Quit, or it is closing): the game closes.");
+            }
+            else if (change->state == XR_SESSION_STATE_LOSS_PENDING)
+            {
+                lost = "the headset software is ending the session (LOSS_PENDING)";
             }
         }
         else if (event.type == XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING)
@@ -10587,14 +11596,12 @@ static void HandleEvents()
         }
         else if (event.type == XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING)
         {
-            g_sessionRunning = false;
-            g_sessionFocused = false;
-            g_state = VrState::Failed;
-            Log("VR: the headset software is shutting down. VR is off until the game restarts.");
+            lost = "the headset software is shutting down (INSTANCE_LOSS_PENDING)";
         }
 
         event = { XR_TYPE_EVENT_DATA_BUFFER };
     }
+    if (lost) LoseVr(lost);
 }
 
 // Logs the field of view of each eye, once.
@@ -10758,25 +11765,22 @@ static void CopyGamePicture(const int source[4], GLuint targetFramebuffer, int w
     GlCopy(g_gamePicture, source[0], source[1], source[2], source[3], targetFramebuffer, 0, 0, width, height);
 }
 
-static void CopyGamePictureToTexture(const int source[4], GLuint texture, int width, int height)
-{
-    float gamma = 1.0f, brightness = 1.0f, contrast = 1.0f;
-    if (g_gamePicture != 0 && CameraPictureCorrection(gamma, brightness, contrast) &&
-        GlCopyToTextureCorrected(g_gamePicture, source[0], source[1], source[2], source[3], texture, width, height, gamma,
-                                 brightness, contrast))
-        return;
-    GlCopyToTexture(g_gamePicture, source[0], source[1], source[2], source[3], texture, width, height);
-}
-
 // Copies part of the game's finished picture into the next shared picture of
 // one eye. `source` is left, bottom, right, top in window pixels. (On SteamVR
 // into the eye's kept picture instead: PanelsIntoEyes hands it on.)
+//
+// Both eyes reach the headset's pictures the same way: first into a plain
+// picture of the mod's own (the left eye's held picture, HoldLeftPicture; here
+// the eye's kept picture), then copied across. Some graphics drivers can
+// convert colours when drawing straight into the headset's standard-colour
+// (sRGB) pictures even with that conversion switched off, and two eyes
+// copied in different ways then differ in brightness.
 static bool CopyGameImageToHeadset(int eye, const int source[4])
 {
+    if (!EnsureEyeKeep()) return false;
+    CopyGamePicture(source, g_eyeKeepFramebuffer[eye], g_eyeKeepWidth, g_eyeKeepHeight);
     if (g_panelsInEyes)
     {
-        if (!EnsureEyeKeep()) return false;
-        CopyGamePicture(source, g_eyeKeepFramebuffer[eye], g_eyeKeepWidth, g_eyeKeepHeight);
         g_eyeKeepSerial[eye] = g_frameSerialAtBegin;
         return true;
     }
@@ -10790,7 +11794,8 @@ static bool CopyGameImageToHeadset(int eye, const int source[4])
     bool ready = Check(XrWaitSwapchainImageGl(g_swapchains[eye], &waitInfo), "Waiting for the headset picture");
 
     if (ready && index < g_swapchainImageCounts[eye])
-        CopyGamePictureToTexture(source, g_swapchainImages[eye][index].image, g_swapchainWidth, g_swapchainHeight);
+        GlCopyToTexture(g_eyeKeepFramebuffer[eye], 0, 0, g_eyeKeepWidth, g_eyeKeepHeight, g_swapchainImages[eye][index].image,
+                        g_swapchainWidth, g_swapchainHeight);
 
     return Check(XrReleaseSwapchainImageGl(g_swapchains[eye], nullptr), "Handing the headset picture back") && ready;
 }
@@ -10866,6 +11871,7 @@ static double g_panelFocusMs = -100000.0;
 void VrSetPanelFocus(float across, float down)
 {
     (void)down; // (the photo stands near enough the middle up and down: only across is used)
+    if (!isfinite(across)) return; // (a script's number that is no number)
     g_panelFocusX = across < 0.0f ? 0.0f : (across > 1.0f ? 1.0f : across);
     g_panelFocusMs = NowMs();
 }
@@ -11116,6 +12122,7 @@ void VrSetInterfaceInPieces(bool inPlay)
 
 void VrSetInterfaceRoom(float distance)
 {
+    if (!isfinite(distance)) return; // (a script's number that is no number: the last one stands, then the usual distance)
     g_piecesRoom = distance;
     g_piecesRoomMs = NowMs();
 }
@@ -11141,6 +12148,7 @@ static const float kStorageBigger = 1.35f;
 
 void VrSetStorageBoxAt(float angle, float distance, float height)
 {
+    if (!isfinite(angle) || !isfinite(distance) || !isfinite(height)) return; // (a script's number that is no number)
     g_storageAngle = angle;
     g_storageDistance = distance;
     g_storageHeight = height;
@@ -11658,6 +12666,74 @@ static XrQuaternionf SteadyMonitorView(const XrQuaternionf& eye, float followSec
     return view;
 }
 
+// The turn a share `t` of the way from `a` to `b` (along the shorter way round).
+static XrQuaternionf SlerpTurn(const XrQuaternionf& a, XrQuaternionf b, float t)
+{
+    float dot = a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
+    if (dot < 0.0f)
+    {
+        b.x = -b.x; b.y = -b.y; b.z = -b.z; b.w = -b.w;
+        dot = -dot;
+    }
+    float wa = 1.0f - t, wb = t;
+    if (dot < 0.9995f)
+    {
+        float angle = acosf(dot), s = sinf(angle);
+        wa = sinf((1.0f - t) * angle) / s;
+        wb = sinf(t * angle) / s;
+    }
+    XrQuaternionf q = { a.x * wa + b.x * wb, a.y * wa + b.y * wb, a.z * wa + b.z * wb, a.w * wa + b.w * wb };
+    float n = sqrtf(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+    if (n > 0.0f)
+    {
+        q.x /= n; q.y /= n; q.z /= n; q.w /= n;
+    }
+    return q;
+}
+
+// Does a view looking along `view`, reaching `viewHalf` (tangents: across, up)
+// to each side, lie wholly on a picture taken looking along `eye` that reaches
+// `pictureHalf`? A straight line in one camera's view is straight in the
+// other's, so its four corners lying on the picture are enough.
+static bool ViewOnPicture(const XrQuaternionf& view, const XrQuaternionf& eye, const float viewHalf[2], const float pictureHalf[2])
+{
+    float eyeTurn[9], viewTurn[9];
+    TurnToMatrix(eye, eyeTurn);
+    TurnToMatrix(view, viewTurn);
+    for (int corner = 0; corner < 4; ++corner)
+    {
+        float d[3] = { (corner & 1) ? viewHalf[0] : -viewHalf[0], (corner & 2) ? viewHalf[1] : -viewHalf[1], -1.0f };
+        float room[3], seen[3];
+        for (int i = 0; i < 3; ++i) room[i] = viewTurn[i * 3 + 0] * d[0] + viewTurn[i * 3 + 1] * d[1] + viewTurn[i * 3 + 2] * d[2];
+        for (int i = 0; i < 3; ++i) seen[i] = eyeTurn[0 * 3 + i] * room[0] + eyeTurn[1 * 3 + i] * room[1] + eyeTurn[2 * 3 + i] * room[2];
+        if (seen[2] > -0.0001f) return false;
+        if (fabsf(seen[0] / -seen[2]) > pictureHalf[0] || fabsf(seen[1] / -seen[2]) > pictureHalf[1]) return false;
+    }
+    return true;
+}
+
+// The steady view kept wholly on the eye's picture: whatever the picture does
+// not cover would show as black. Its rooms (SteadyMonitorView) keep its heading
+// and its tip each within reach of the picture, but a quick turn together with
+// a nod or a tilt of the head can still take a corner off it. Then the view is
+// eased towards the eye's own turn (which, being narrower than the picture, it
+// always fits) just as far as it takes.
+static XrQuaternionf KeepViewOnPicture(const XrQuaternionf& view, const XrQuaternionf& eye, float viewHalfWidth, float viewHalfHeight,
+                                       float pictureHalfWidth, float pictureHalfHeight)
+{
+    const float viewHalf[2] = { viewHalfWidth, viewHalfHeight };
+    const float pictureHalf[2] = { pictureHalfWidth * 0.995f, pictureHalfHeight * 0.995f }; // (inside its last pixels)
+    if (ViewOnPicture(view, eye, viewHalf, pictureHalf)) return view;
+    float off = 0.0f, on = 1.0f;
+    for (int i = 0; i < 12; ++i)
+    {
+        float middle = (off + on) * 0.5f;
+        if (ViewOnPicture(SlerpTurn(view, eye, middle), eye, viewHalf, pictureHalf)) on = middle;
+        else off = middle;
+    }
+    return SlerpTurn(view, eye, on);
+}
+
 // ---------------------------------------------------------------------------
 // The dedication: the studio's card, "Mina STUDIO" with Mina in the Mongolian
 // script beside it (dedication.cpp), at the very start of the game, before any
@@ -11817,9 +12893,15 @@ static float DedicationDark()
     return 1.0f - shown;
 }
 
+// While connecting to the headset at the start (StartConnecting), the game's
+// own start waits as for the card, at most this long; then not at all once VR
+// is not running (failed, or lost), as the card is only shown while it runs.
+static const double kStartHoldMs = 90000.0;
+
 bool VrStudioCardHolds()
 {
-    return g_dedicationHolding;
+    if (g_state == VrState::Starting && !g_everReady) return NowMs() - g_connectStartedMs < kStartHoldMs;
+    return g_dedicationHolding && g_state == VrState::Ready;
 }
 
 // For a test run's "card" command: the card as at an ordinary start, from
@@ -12310,6 +13392,10 @@ static void ComposeMonitorPicture(bool newLeftEyePicture, bool haveGui, GLuint g
         if (yawRoom < 0.0f) yawRoom = 0.0f;
         if (pitchRoom < 0.0f) pitchRoom = 0.0f;
         windowTurn = SteadyMonitorView(monitorEye.orientation, settings.monitorSmooth, yawRoom, pitchRoom);
+        // (The corners kept on the eye's picture in the developer build only;
+        // the player build keeps the steady view as it was.)
+        if (!kPlayerBuild)
+            windowTurn = KeepViewOnPicture(windowTurn, monitorEye.orientation, viewHalfWidth, viewHalfHeight, tanHalfWidth, tanHalfHeight);
 
         // From the steady view's way of looking to the picture's: the eye's
         // turn undone after the view's.
@@ -12708,10 +13794,72 @@ static GLuint WindowInterfacePicture(GLuint guiTexture, GLuint guiFramebuffer, i
     return g_windowGuiTexture;
 }
 
+static void FrameCallFailed(XrResult result, const char* what);
+static void FrameCallsWork();
+static void DrawLostNote();
+
+// A layer whose place, size or angles are not finite numbers (or whose turn
+// is no turn at all) would make the headset software refuse the whole frame
+// (XR_ERROR_POSE_INVALID): such a layer is left out of the frame, and logged
+// the first few times. A turn a little off unit length is set right.
+static bool PoseIsSendable(XrPosef& pose)
+{
+    XrQuaternionf& q = pose.orientation;
+    const XrVector3f& p = pose.position;
+    if (!isfinite(p.x) || !isfinite(p.y) || !isfinite(p.z)) return false;
+    if (!isfinite(q.x) || !isfinite(q.y) || !isfinite(q.z) || !isfinite(q.w)) return false;
+    float length = sqrtf(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+    if (!(length > 0.5f)) return false;
+    if (fabsf(length - 1.0f) > 0.001f)
+    {
+        q.x /= length;
+        q.y /= length;
+        q.z /= length;
+        q.w /= length;
+    }
+    return true;
+}
+
+static uint32_t KeepSendableLayers(const XrCompositionLayerBaseHeader** layers, uint32_t count)
+{
+    static int logsLeft = 10;
+    uint32_t kept = 0;
+    for (uint32_t i = 0; i < count; ++i)
+    {
+        bool sendable = true;
+        if (layers[i]->type == XR_TYPE_COMPOSITION_LAYER_QUAD)
+        {
+            XrCompositionLayerQuad* quad = (XrCompositionLayerQuad*)layers[i];
+            sendable = PoseIsSendable(quad->pose) && isfinite(quad->size.width) && isfinite(quad->size.height) &&
+                       quad->size.width > 0.0f && quad->size.height > 0.0f;
+        }
+        else if (layers[i]->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION)
+        {
+            XrCompositionLayerProjection* projection = (XrCompositionLayerProjection*)layers[i];
+            for (uint32_t v = 0; v < projection->viewCount && sendable; ++v)
+            {
+                XrCompositionLayerProjectionView* view = (XrCompositionLayerProjectionView*)&projection->views[v];
+                const XrFovf& fov = view->fov;
+                sendable = PoseIsSendable(view->pose) && isfinite(fov.angleLeft) && isfinite(fov.angleRight) &&
+                           isfinite(fov.angleUp) && isfinite(fov.angleDown);
+            }
+        }
+        if (sendable) layers[kept++] = layers[i];
+        else if (logsLeft > 0)
+        {
+            --logsLeft;
+            Log("VR: a %s layer with a place, size or angle that is not a number was left out of a frame (the headset software would refuse the whole frame).",
+                layers[i]->type == XR_TYPE_COMPOSITION_LAYER_QUAD ? "panel" : "eyes'");
+        }
+    }
+    return kept;
+}
+
 // Second half of a headset frame: the game has finished drawing, so send the
 // picture to the headset.
 static void EndFrameWork()
 {
+    if (g_state != VrState::Ready) DrawLostNote(); // (on the monitor while VR is lost)
     if (!g_frameOpen) return;
     g_frameOpen = false;
     UpdateHurtFeel(); // (the heartbeat after a hard hit)
@@ -13398,9 +14546,11 @@ static void EndFrameWork()
         layers[layerCount++] = (const XrCompositionLayerBaseHeader*)&menuPanel;
     }
 
-    // The bullet counter, a small tag of its own.
+    // The bullet counter, a small tag of its own. (Not behind the studio's card, nor while the eyes are more than half
+    // darkened: a layer of its own, it would float bright in the black. The pointer below needs no such care: it only
+    // shows with a menu, which is not darkened.)
     g_counterShownNow = false;
-    if (GlLoadFunctions() && !g_dedicationHolding && PrepareAmmoCounter() && eyesShown && g_counterSwapchain != XR_NULL_HANDLE) // (not behind the studio's card)
+    if (GlLoadFunctions() && !g_dedicationHolding && EyesDark() < 0.5f && PrepareAmmoCounter() && eyesShown && g_counterSwapchain != XR_NULL_HANDLE)
     {
         counterPanel.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
         counterPanel.space = g_floorSpace;
@@ -13465,14 +14615,18 @@ static void EndFrameWork()
         // SteamVR: the panels drawn into the eyes' pictures, and those alone sent.
         if (g_panelsInEyes)
             layerCount = GlLoadFunctions() ? PanelsIntoEyes(layers, layerCount, eyesShown, layer, eyeViews) : 0;
+        layerCount = KeepSendableLayers(layers, layerCount);
 
         XrFrameEndInfo endInfo = { XR_TYPE_FRAME_END_INFO };
         endInfo.displayTime = g_frameDisplayTime;
         endInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
         endInfo.layerCount = layerCount;
         endInfo.layers = layerCount ? layers : nullptr;
-        if (!Check(XrEndFrameGl(g_session, &endInfo), "Sending the frame to the headset"))
-            g_state = VrState::Failed;
+        // (A refused frame is a dropped frame; the next one begins as usual, the headset software discarding
+        // this one if it is still open. Refused again and again, or with the connection gone: FrameCallFailed.)
+        XrResult ended = XrEndFrameGl(g_session, &endInfo);
+        if (XR_FAILED(ended)) FrameCallFailed(ended, "Sending the frame to the headset");
+        else FrameCallsWork();
     }
 
     // Last of all, tidy up what the monitor will show.
@@ -13867,6 +15021,16 @@ bool VrHeadsetIsOff()
     return g_headsetOff;
 }
 
+bool VrModRunning()
+{
+    return g_state == VrState::Ready || g_state == VrState::Lost || (g_state == VrState::Starting && g_everReady);
+}
+
+bool VrModOn()
+{
+    return g_state != VrState::Failed;
+}
+
 // Is the headset away from the game for more than a moment: taken off (its
 // session stopped), or showing the headset software's own menu (SteamVR's
 // dashboard, the Meta menu: the game still shown, without its input)? The menu
@@ -13878,7 +15042,9 @@ bool VrHeadsetAway()
     static double awaySinceMs = -1.0;
     static bool everFocused = false, said = false;
     if (g_sessionFocused) everFocused = true;
-    bool away = everFocused && g_state == VrState::Ready && (g_headsetOff || !g_sessionFocused);
+    // (The connection lost, and being won back: away too, see LoseVr.)
+    bool lost = g_lostSinceMs >= 0.0;
+    bool away = everFocused && ((g_state == VrState::Ready && (g_headsetOff || !g_sessionFocused)) || lost);
     if (!away)
     {
         if (said) Log("VR: the headset is back in use, with its input.");
@@ -13893,7 +15059,7 @@ bool VrHeadsetAway()
     {
         said = true;
         Log("VR: the headset is away (%s): the game's menu is asked for.",
-            g_headsetOff ? "taken off" : "its own menu is open, the game has no input");
+            lost ? "the connection to the headset software is lost" : (g_headsetOff ? "taken off" : "its own menu is open, the game has no input"));
     }
     return true;
 }
@@ -14030,6 +15196,368 @@ static DWORD WINAPI ScriptsNotTheModsMessage(LPVOID)
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// VR not starting, and VR lost while playing
+// ---------------------------------------------------------------------------
+// Not starting: the player is told why in a message box, and the game runs
+// without VR. Lost while playing (the headset software crashed, restarted or
+// ended the session, or its frame calls keep failing): as when the headset is
+// taken off, the head and hands are held where they were, every button and
+// key the mod holds is let go, and the game pauses (VrHeadsetAway); everything
+// made with the headset software is let go (TearDownVr), and connecting is
+// tried again every few seconds. Once a new session begins, the view is
+// centered again and the game goes on from its menu. If that does not work
+// within kLostGiveUpMs, or the connection is lost too often, the game goes on
+// without VR and the player is told.
+
+// A message box, on a thread of its own so that the game goes on.
+static DWORD WINAPI MessageLater(LPVOID text)
+{
+    MessageBoxW(nullptr, (const wchar_t*)text, L"BunkerVR", MB_OK | MB_ICONWARNING | MB_TOPMOST | MB_SETFOREGROUND);
+    free(text);
+    return 0;
+}
+
+static void ShowMessageLater(const wchar_t* text)
+{
+    wchar_t* copy = _wcsdup(text);
+    if (!copy) return;
+    HANDLE thread = CreateThread(nullptr, 0, MessageLater, copy, 0, nullptr);
+    if (thread) CloseHandle(thread);
+    else free(copy);
+}
+
+// Why VR did not start, for the player.
+static void TellNotStarted(ConnectFailure failure, XrResult result, const char* runtimeName)
+{
+    wchar_t text[1200];
+    wchar_t software[XR_MAX_RUNTIME_NAME_SIZE];
+    MultiByteToWideChar(CP_UTF8, 0, runtimeName && runtimeName[0] ? runtimeName : "the VR software", -1, software, XR_MAX_RUNTIME_NAME_SIZE);
+    software[XR_MAX_RUNTIME_NAME_SIZE - 1] = L'\0';
+    switch (failure)
+    {
+    case ConnectFailure::NoSoftware:
+        swprintf(text, 1200, L"BunkerVR couldn't find any VR software, so the game starts without VR.\n\n"
+                             L"Start SteamVR or the Meta Quest Link app, and make sure it is set as the active OpenXR runtime in its "
+                             L"settings. On a Quest, turn on Link or Air Link first. Then start the game again.");
+        break;
+    case ConnectFailure::NoOpenGl:
+        swprintf(text, 1200, L"The active VR software doesn't support OpenGL games like this one, so the game starts without VR.\n\n"
+                             L"Set SteamVR or the Meta Quest Link app as the active OpenXR runtime in its settings, then start the "
+                             L"game again.");
+        break;
+    case ConnectFailure::NoHeadset:
+        swprintf(text, 1200, L"%ls found no headset ready for a minute, so the game starts without VR.\n\n"
+                             L"Check that the headset is connected and awake (on a Quest, Link or Air Link turned on) and shows its "
+                             L"VR home, then start the game again.", software);
+        break;
+    case ConnectFailure::NoAnswer:
+        swprintf(text, 1200, L"The VR software didn't answer for three minutes, so the game goes on without VR.\n\n"
+                             L"Restart SteamVR or the Meta Quest Link app (or the PC), then start the game again.");
+        break;
+    default:
+        swprintf(text, 1200, L"BunkerVR couldn't start VR with %ls (code %d), so the game starts without VR.\n\n"
+                             L"Restart the VR software, then start the game again. BunkerVR.log in the game's folder has the "
+                             L"details.", software, (int)result);
+        break;
+    }
+    ShowMessageLater(text);
+}
+
+// After a loss: tried again until this long after it, and at most this many losses a run.
+static const double kLostRetryMs = 3000.0, kLostGiveUpMs = 180000.0;
+static const int kMostLosses = 5;
+static int g_lossCount = 0;
+static double g_lostRetryAtMs = -1.0;
+
+// The frame calls (xrWaitFrame, xrBeginFrame, xrEndFrame) failing: each such
+// frame is a dropped frame, logged at first and then now and then; failing
+// for kFailingLostFrames frames in a row over kFailingLostMs, or with the
+// session or the connection itself gone, the connection is lost (LoseVr).
+// One good frame starts the count again.
+static const int kFailingLostFrames = 90;
+static const double kFailingLostMs = 2000.0;
+static int g_failingFrames = 0;
+static double g_failingSinceMs = -1.0;
+static unsigned long long g_frameCallFailures = 0;
+
+static void FrameCallsWork()
+{
+    if (g_failingFrames > 0) Log("VR: the frame calls work again after %d failed frame%s.", g_failingFrames, g_failingFrames == 1 ? "" : "s");
+    g_failingFrames = 0;
+    g_failingSinceMs = -1.0;
+}
+
+static void FrameCallFailed(XrResult result, const char* what)
+{
+    ++g_frameCallFailures;
+    if (g_frameCallFailures <= 20 || g_frameCallFailures % 500 == 0)
+    {
+        char name[XR_MAX_RESULT_STRING_SIZE] = "";
+        if (g_instance != XR_NULL_HANDLE) xrResultToString(g_instance, result, name);
+        Log("VR ERROR: %s failed: %s (code %d): the frame is dropped (%llu frame calls failed this run).", what, name, (int)result,
+            g_frameCallFailures);
+    }
+    double now = NowMs();
+    if (g_failingFrames == 0) g_failingSinceMs = now;
+    ++g_failingFrames;
+    if (result == XR_ERROR_SESSION_LOST || result == XR_ERROR_INSTANCE_LOST)
+        LoseVr(result == XR_ERROR_SESSION_LOST ? "the session is lost (XR_ERROR_SESSION_LOST)" : "the connection is lost (XR_ERROR_INSTANCE_LOST)");
+    else if (g_failingFrames >= kFailingLostFrames && now - g_failingSinceMs >= kFailingLostMs)
+        LoseVr("the frame calls keep failing");
+}
+
+// Lets go of everything made with the headset software, and of the
+// connection itself (on the game's thread, with its OpenGL context, between
+// frames). Every set of pictures goes through its wrapper, so that the mod's
+// own sets (SteamVR's panels) free their textures; on a lost connection the
+// headset software may refuse each call, which is fine: everything goes with
+// the connection anyway. The sets are made again as they are next needed.
+static void TearDownVr()
+{
+    auto letGo = [](XrSwapchain& set)
+    {
+        if (set != XR_NULL_HANDLE) XrDestroySwapchainGl(set);
+        set = XR_NULL_HANDLE;
+    };
+    DestroySwapchains(); // the eyes'
+    letGo(g_guiSwapchain);
+    g_guiSwapchainImageCount = 0;
+    g_guiSwapchainWidth = g_guiSwapchainHeight = 0;
+    g_guiLastSentSerial = 0;
+    g_guiPanelCopiedSerial = 0;
+    letGo(g_menuSwapchain);
+    g_menuSwapchainImageCount = 0;
+    g_menuSwapchainWidth = g_menuSwapchainHeight = 0;
+    g_menuHasPicture = false;
+    letGo(g_counterSwapchain);
+    g_counterSwapchainImageCount = 0;
+    g_counterSwapchainWidth = g_counterSwapchainHeight = 0;
+    g_counterShownText[0] = 0;
+    letGo(g_dedicationSwapchain);
+    g_dedicationImageCount = 0;
+    g_dedicationSentFade = g_dedicationSentRest = -1.0f;
+    for (HintLabel& label : g_hintLabels)
+    {
+        letGo(label.swapchain);
+        label.imageCount = 0;
+        label.failed = false;
+        label.pictureOf = nullptr; // (made again with its picture: SendHintPicture)
+        label.uploadedLevel = -1;
+        label.uploadedOf = nullptr;
+        label.layeredNow = false;
+    }
+    for (PointerSwapchain& picture : g_pointerPictures)
+    {
+        letGo(picture.swapchain);
+        picture.ready = false;
+        picture.failed = false;
+    }
+    g_pointerPieceCount = 0;
+    PieceSwapchain* pieces[3] = { &g_pieceSwapchains[0], &g_pieceSwapchains[1], &g_screenPicture };
+    for (PieceSwapchain* piece : pieces)
+    {
+        letGo(piece->swapchain);
+        piece->imageCount = 0;
+        piece->width = piece->height = 0;
+        piece->hasPicture = false;
+    }
+    // (Any set still known, which should be none: its own pictures freed, the entry cleared.)
+    for (KnownSet& known : g_knownSets)
+    {
+        if (known.set == XR_NULL_HANDLE) continue;
+        if (known.own && wglGetCurrentContext() != nullptr) glDeleteTextures((GLsizei)known.count, known.pictures);
+        known = {};
+    }
+
+    XrSpace* spaces[] = { &g_gripSpaces[0], &g_gripSpaces[1], &g_aimSpaces[0], &g_aimSpaces[1], &g_floorSpace, &g_headSpace, &g_stageSpace };
+    for (XrSpace* space : spaces)
+    {
+        if (*space != XR_NULL_HANDLE) xrDestroySpace(*space);
+        *space = XR_NULL_HANDLE;
+    }
+    // (The actions go with their set.)
+    if (g_actionSet != XR_NULL_HANDLE) xrDestroyActionSet(g_actionSet);
+    g_actionSet = XR_NULL_HANDLE;
+    XrAction* actions[] = { &g_gripAction, &g_aimAction, &g_squeezeAction, &g_triggerAction, &g_moveAction, &g_turnAction,
+                            &g_crouchAction, &g_sprintAction, &g_menuAction, &g_gunAction, &g_aimAction2, &g_vrMenuAction,
+                            &g_hapticAction, &g_thumbTouchAction, &g_triggerTouchAction, &g_gripForceAction, &g_inventoryAction };
+    for (XrAction* action : actions) *action = XR_NULL_HANDLE;
+    g_handsReady = false;
+    g_hapticReady = false;
+    g_handPaths[0] = g_handPaths[1] = XR_NULL_PATH;
+
+    if (g_session != XR_NULL_HANDLE) xrDestroySession(g_session);
+    g_session = XR_NULL_HANDLE;
+    if (g_instance != XR_NULL_HANDLE) xrDestroyInstance(g_instance);
+    g_instance = XR_NULL_HANDLE;
+    g_systemId = XR_NULL_SYSTEM_ID;
+
+    g_sessionRunning = false;
+    g_sessionFocused = false;
+    g_frameOpen = false;
+    g_framePoseValid = false;
+    g_midPair = false;
+    g_secondOfPair = false;
+    g_failingFrames = 0; // (a new connection starts the count again: see FrameCallFailed)
+    g_failingSinceMs = -1.0;
+}
+
+// The connection to the headset software is lost while playing (see above).
+static void LoseVr(const char* why)
+{
+    if (g_state != VrState::Ready) return;
+    ++g_lossCount;
+    Log("VR: the connection to the headset software is lost (%s; %d this run): every button and key is let go, the game pauses, "
+        "head and hands are held where they were, and connecting is tried again in %.0f s.", why, g_lossCount, kLostRetryMs / 1000.0);
+    SetInteractHeld(false); // never leave a button or key stuck down
+    ReleaseMoveKeys();
+    ClockHold(false);
+    // (As when the headset is taken off: see g_headsetOff. The scripts stay in VR, and the game's menu is opened.)
+    g_headsetOff = true;
+    if (g_lostSinceMs < 0.0) g_lostSinceMs = NowMs();
+    // The studio's card at the start, not shown yet: left out (the game's own start goes on).
+    if (g_dedicationStage != 2)
+    {
+        g_dedicationStage = 2;
+        g_dedicationFade = g_dedicationFadeRest = 0.0f;
+        g_dedicationHolding = false;
+        Log("VR: the studio's card is left out this time.");
+    }
+    TearDownVr();
+    SetMonitorSync(true);
+    ResetLogicHalf();
+    g_state = VrState::Lost;
+    g_lostRetryAtMs = NowMs() + kLostRetryMs;
+}
+
+// Connecting is given up on: a connecting thread still at work lets go of
+// what it makes itself; one that finished just now, here.
+static void AbandonConnecting()
+{
+    if (InterlockedCompareExchange(&g_connectStep, 3, 1) == 2 && g_connect.instance != XR_NULL_HANDLE)
+    {
+        xrDestroyInstance(g_connect.instance);
+        g_connect.instance = XR_NULL_HANDLE;
+    }
+}
+
+// VR could not be won back after a loss: the game goes on without VR (the
+// head and hands no longer held), and the player is told.
+static void GiveUpVr(const char* why)
+{
+    Log("VR: the connection to the headset software could not be won back (%s): the game goes on without VR; the player is told.", why);
+    AbandonConnecting();
+    TearDownVr();
+    g_state = VrState::Failed;
+    g_headsetOff = false;
+    g_lostSinceMs = -1.0;
+    CameraSetFieldOfViewOverride(0, 0);
+    UpdatePcInputBlock(); // (the game's window no longer kept on top: see UpdateGameFront)
+    ShowMessageLater(L"BunkerVR lost the connection to the VR software and couldn't get it back, so the game goes on without VR.\n\n"
+                     L"Quit the game from its menu, check that the headset works in SteamVR or the Meta Quest Link app, then "
+                     L"start the game again to play in VR.");
+}
+
+// While connecting (VrState::Starting), once a frame: done yet? Takes what it
+// found, finishes the setup, and decides what comes next.
+static void UpdateConnecting()
+{
+    bool reconnecting = g_lostSinceMs >= 0.0;
+    if (g_connectStep != 2)
+    {
+        // (The VR software that never answers: given up on as well, with the player told.)
+        if (NowMs() - (reconnecting ? g_lostSinceMs : g_connectStartedMs) < kLostGiveUpMs) return;
+        if (reconnecting)
+        {
+            GiveUpVr("connecting took too long");
+            return;
+        }
+        AbandonConnecting();
+        g_state = VrState::Failed;
+        Log("VR: the VR software did not answer in %.0f s. The game will keep running normally without VR; the player is told.", kLostGiveUpMs / 1000.0);
+        TellNotStarted(ConnectFailure::NoAnswer, XR_SUCCESS, "");
+        return;
+    }
+    g_connectStep = 0;
+    ConnectResult found = g_connect;
+    if (found.instance != XR_NULL_HANDLE)
+    {
+        Log("VR: connected and the headset found in %.1f s.", found.tookMs / 1000.0);
+        g_instance = found.instance;
+        g_systemId = found.system;
+        if (FinishSetup(found.runtimeName, found.runtimeVersion))
+        {
+            g_state = VrState::Ready;
+            g_everReady = true;
+            return;
+        }
+        found.failure = ConnectFailure::NotConnected;
+        found.result = XR_ERROR_RUNTIME_FAILURE;
+        TearDownVr();
+    }
+    if (!reconnecting)
+    {
+        g_state = VrState::Failed;
+        Log("VR: setup failed. The game will keep running normally without VR; the player is told why.");
+        TellNotStarted(found.failure, found.result, found.runtimeName);
+        return;
+    }
+    if (NowMs() - g_lostSinceMs >= kLostGiveUpMs)
+    {
+        GiveUpVr("still no connection");
+        return;
+    }
+    Log("VR: not connected yet; tried again in %.0f s.", kLostRetryMs / 1000.0);
+    g_state = VrState::Lost;
+    g_lostRetryAtMs = NowMs() + kLostRetryMs;
+}
+
+// While VR is lost (VrState::Lost), once a frame: time to connect again?
+static void UpdateLost()
+{
+    if (g_lossCount > kMostLosses)
+    {
+        GiveUpVr("lost too often this run");
+        return;
+    }
+    if (NowMs() < g_lostRetryAtMs) return;
+    if (StartConnecting()) g_state = VrState::Starting;
+    else g_lostRetryAtMs = NowMs() + kLostRetryMs;
+}
+
+// The monitor while VR is lost and being won back: a line in the game's
+// lettering near the bottom of the window (over the game's own picture and its
+// menu, which the window shows as it is: the interface is not taken for a
+// headset then).
+static GLuint g_lostNoteTexture = 0, g_lostNoteFramebuffer = 0;
+static int g_lostNoteWidth = 0, g_lostNoteHeight = 0;
+
+static void DrawLostNote()
+{
+    if (g_lostSinceMs < 0.0 || !GlLoadFunctions()) return;
+    int width = 0, height = 0;
+    if (!GlGetWindowSize(width, height) || width <= 0 || height <= 0) return;
+    if (g_lostNoteTexture == 0)
+    {
+        int noteWidth = 0, noteHeight = 0;
+        const unsigned char* pixels = VrHintPicture("The headset's connection was lost. Reconnecting...", noteWidth, noteHeight);
+        if (!pixels || noteWidth <= 0 || noteHeight <= 0) return;
+        KeepForMonitor(pixels, noteWidth, noteHeight, g_lostNoteTexture, g_lostNoteFramebuffer, g_lostNoteWidth, g_lostNoteHeight);
+        if (g_lostNoteTexture == 0 || g_lostNoteWidth <= 0) return;
+    }
+    int shownWidth = width / 2;
+    int shownHeight = shownWidth * g_lostNoteHeight / g_lostNoteWidth;
+    bool drawn = GlDrawOverRect(g_lostNoteTexture, 0, (width - shownWidth) / 2, height / 10, shownWidth, shownHeight);
+    static double saidFor = -1.0; // (once a loss)
+    if (drawn && saidFor != g_lostSinceMs)
+    {
+        saidFor = g_lostSinceMs;
+        Log("VR: the PC's screen says the connection was lost (%d x %d, near the bottom of the %d x %d window).", shownWidth, shownHeight,
+            width, height);
+    }
+}
+
 // First half of a headset frame: wait for the headset's timing and read where
 // the head will be, so the game can draw its next picture from there.
 static void BeginFrameWork()
@@ -14050,18 +15578,21 @@ static void BeginFrameWork()
             if (thread) CloseHandle(thread);
             return;
         }
-        if (Setup())
-        {
-            g_state = VrState::Ready;
-        }
-        else
+        if (!StartConnecting())
         {
             g_state = VrState::Failed;
             Log("VR: setup failed. The game will keep running normally without VR.");
             return;
         }
+        g_state = VrState::Starting;
     }
-    UpdatePcInputBlock();
+    // Lost while playing, and connecting again (see LoseVr). (The watcher's
+    // beat and the game's window let go of being on top go on meanwhile.)
+    if (g_state == VrState::Lost) UpdateLost();
+    if (g_state == VrState::Starting) UpdateConnecting();
+    if (g_state == VrState::Failed) return;
+    if (g_everReady) UpdatePcInputBlock();
+    if (g_state != VrState::Ready) return;
 
     // Both eyes every frame, second half: the same headset frame goes on, now
     // for the right eye. No waiting for the headset here. The game's clock is
@@ -14094,11 +15625,11 @@ static void BeginFrameWork()
     // is what sets the game's speed (90 frames per second on a Rift).
     XrFrameState frameState = { XR_TYPE_FRAME_STATE };
     double waitStarted = NowMs();
-    bool waited = Check(xrWaitFrame(g_session, nullptr, &frameState), "Waiting for the headset's next frame");
+    XrResult waitResult = xrWaitFrame(g_session, nullptr, &frameState);
     g_statLastWaitMs = NowMs() - waitStarted;
-    if (!waited)
+    if (XR_FAILED(waitResult))
     {
-        g_state = VrState::Failed;
+        FrameCallFailed(waitResult, "Waiting for the headset's next frame");
         return;
     }
 
@@ -14124,9 +15655,10 @@ static void BeginFrameWork()
         g_statLastFrameMs = nowMs;
         if (g_standIn) StandInWatchFrame();
     }
-    if (!Check(XrBeginFrameGl(g_session, nullptr), "Beginning the headset frame"))
+    XrResult beginResult = XrBeginFrameGl(g_session, nullptr);
+    if (XR_FAILED(beginResult))
     {
-        g_state = VrState::Failed;
+        FrameCallFailed(beginResult, "Beginning the headset frame");
         return;
     }
 
@@ -14204,6 +15736,7 @@ static void BeginFrameWork()
         UpdateMenuRoom(head.pose);
         UpdateRecentre();
         PublishHeadPose(head.pose, g_frameEyePose); // the camera hook picks this up
+        RelocateSharedHands(frameState.predictedDisplayTime); // (the hands for the same time, before the game's update)
 
         // Ask the game's camera for a view big enough to cover everything
         // either eye can see through the headset's lenses.
@@ -14261,7 +15794,9 @@ static void RunProtected(void (*work)(), const char* stage, bool isBegin)
 
     bool canGuard = GlLoadFunctions();
     GlStateGuard guard;
+    double guardStartMs = NowMs();
     if (canGuard) guard.Capture();
+    g_statGlGuardMs += NowMs() - guardStartMs;
 
     // (Errors left by the game's own drawing, or the mod's elsewhere: taken
     // and named apart from those the mod's work then leaves.)
@@ -14284,7 +15819,10 @@ static void RunProtected(void (*work)(), const char* stage, bool isBegin)
         wglMakeCurrent(gameDC, gameContext);
     }
 
-    if (canGuard && guard.Restore())
+    guardStartMs = NowMs();
+    bool restored = canGuard && guard.Restore();
+    g_statGlGuardMs += NowMs() - guardStartMs;
+    if (restored)
     {
         static int logsLeft = 1;
         if (logsLeft > 0)

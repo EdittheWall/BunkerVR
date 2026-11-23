@@ -1,0 +1,8 @@
+BunkerVR patch 1
+file script/custom/player/PlayerState_UsingLantern.hps
+from 363b571bda6a32efe7199fa8c375c78acca33067ed858ba6a5ca7e27822ff5a1 18035
+to 4f2ae6151a011dd89e5b3fea53659f3de53ecc6be5fe52c5c4917dbbe0ff5771 18147
+=83
+-1
++		mlUseItemMode = (cVR_Running() ? 0 : cLux_GetUserConfig().GetInt("Accessibility", "ChargeFlashlightMode", 0)); // BunkerVR: Hold while VR runs (the mod holds the game's buttons as long as a hand does)
+end

@@ -5,7 +5,7 @@
 // player's settings (Player, Holsters, Comfort, Movement, Hands,
 // Accessibility, System), named as VR games name them, and behind "Debug" the
 // pages for testing the mod (Tuning, Tools, Test List, Spawn, Beast, Places,
-// Bandage, Physics, Grips).
+// Bandage, Physics, Grips; and the Trailer page, opened from the Beast page).
 //
 // This file draws the menu into a plain picture in memory and reacts to a
 // pointer. Showing that picture in the headset is done in vr.cpp.
@@ -62,8 +62,8 @@ void VrMenuSetComfortInfo(const char* text);
 // Turns to a page, by its number (the remote "page" command):
 // 0 Comfort, 1 Movement, 2 Hands, 3 Tuning, 4 Tools, 5 Test List, 6 Spawn,
 // 7 Beast, 8 Bandage, 9 Physics, 10 Grips, 11 Holsters, 12 Player,
-// 13 Accessibility, 14 System, 15 Places; 17 Controls (the whole layout,
-// opened from the title line).
+// 13 Accessibility, 14 System, 15 Places, 16 Trailer; 18 Controls (the whole
+// layout, opened from the title line).
 void VrMenuShowPage(int page);
 
 // For the tests: every page's words measured against their room,
@@ -127,7 +127,23 @@ enum VrMenuAction
     kMenuActionBeastKillHole = 51,     // killed through the nearest of its holes in the walls
     kMenuActionBeastKillHiding = 52,   // killed while hiding (under a bed or a table)
     kMenuActionBeastKillLadder = 53,   // killed on a ladder
-    kMenuActionTestLast = 59,
+    // The Trailer page: the level's own Beast directed for filming. Sent to the body script as commands of their own,
+    // 200 on (kScriptTrailerFirst in vr.cpp; VRTrailerCommand in PlayerBodyHandler.hps), as the scripts use 60 to 81
+    // for others. The first three wait for a spot: the player looks at it and pulls the right trigger.
+    kMenuActionTrailerSpawn = 62,      // the Beast brought in where the player looks
+    kMenuActionTrailerWalk = 63,       // the Beast walks to where the player looks
+    kMenuActionTrailerRun = 64,        // the Beast runs there
+    kMenuActionTrailerEmerge = 65,     // the Beast comes out of the hole nearest the player
+    kMenuActionTrailerIntoHole = 66,   // the Beast goes into the hole nearest to it
+    kMenuActionTrailerCalm = 67,       // the Beast takes no notice of the player
+    kMenuActionTrailerNotice = 68,     // the Beast notices the player as in the game
+    kMenuActionTrailerHunt = 69,       // the Beast is told where the player is and hunts them
+    // (And its power: the game's generator filled and started, or stopped. Script commands 208 and 209, after the
+    // scenes'; these two numbers come after the Checks page's.)
+    kMenuActionTrailerPowerFull = 76,  // full power
+    kMenuActionTrailerPowerNone = 77,  // no power
+    kMenuActionTestLast = 59,          // (the Tools and Beast pages' commands end here; the Trailer page's are its own)
+    kMenuActionTrailerPage = 61,       // the Beast page's "Trailer Scenes": opens the Trailer page (the menu's own)
     // The Checks page's reasons after a Fail: 70 to 75, the six
     // buttons of TestListWhyChoice.
     kMenuActionCheckWhyFirst = 70,

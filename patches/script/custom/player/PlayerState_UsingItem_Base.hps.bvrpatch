@@ -1,8 +1,23 @@
 BunkerVR patch 1
 file script/custom/player/PlayerState_UsingItem_Base.hps
 from 62990e324e8e186bdac18c9701c3270290e017aafea9daac7e7d3235896cb37b 33756
-to 6cc81d449aeae3e45924d8fb569622b6c569f44123987dd7be7f5b7b9ea6f25a 35911
-=397
+to 543139147b936a2be3028de65a22061a013aa54963f8d0b6f46c5535b8e74200 36598
+=74
+-1
++		mlUseItemMode = (cVR_Running() ? 0 : cLux_GetUserConfig().GetInt("Accessibility", "UseItemMode", 0)); // BunkerVR: Hold while VR runs (the mod holds the game's buttons as long as a hand does)
+=65
+-1
++		Player_SetCanRun(cVR_Running()); // BunkerVR: in VR an item held ready does not stop a run (the mod keeps it ready through a sprint, as a hand carries a thing running)
+=8
+-1
++			// BunkerVR: not in VR for an item whose use there needs one hand only (mbVROtherHandKept): the other hand
++			// keeps its item (the lantern), held ready the whole time the item is in hand.
++			if (mbVROtherHandKept == false || cVR_Running() == false)
++				WaitForUnequip(mItemHand == eItemHandlerHand_Left ? eItemHandlerHand_Right : eItemHandlerHand_Left, msOnEnterUnequipException);
+=195
+-1
++			Player_SetCanRun(mbLeaveState || cVR_Running()); // BunkerVR: (as above)
+=51
 -1
 +			// (BunkerVR: at once when the left hand waits for the game's
 +			// interact button while the item is ready in the right. Otherwise a
@@ -39,8 +54,7 @@ to 6cc81d449aeae3e45924d8fb569622b6c569f44123987dd7be7f5b7b9ea6f25a 35911
 +		// freeze the player under tables and in low gaps, so with the VR mod
 +		// running the player can move.
 +		if ((alAnalogId == eAnalogType_Move || alAnalogId == eAnalogType_GamepadMove) && Player_GetCrawling() && VRUsingItemModActive() == false)
-=8
-+	
+=9
 +	// BunkerVR: is the VR mod running? It answers through the camera: after
 +	// setting a special roll value, reading the camera's matrix returns the
 +	// mod's data (12345 as its first number) instead.
@@ -59,4 +73,7 @@ to 6cc81d449aeae3e45924d8fb569622b6c569f44123987dd7be7f5b7b9ea6f25a 35911
 +	}
 +	
 +	//------------------------------------------------------------
++	
+=446
++	bool mbVROtherHandKept = false; // BunkerVR: in VR the other hand keeps its item anyway (its use there needs one hand: the wrench)
 end

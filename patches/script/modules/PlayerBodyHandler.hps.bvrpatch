@@ -1,7 +1,7 @@
 BunkerVR patch 1
 file script/modules/PlayerBodyHandler.hps
 from e3bfe183959e10e4973f8350d62240ce83d26e8d7fcf482351712754acd42861 128394
-to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
+to af27116b6a0cb4eb614c63116f3d61f38d6734caefd5c041c48b886928aefdc4 843632
 =9
 +#include "custom/helpers/helper_bunkervr.hps"
 +#include "custom/helpers/helper_bunkervr_items.hps"
@@ -21,9 +21,7 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +	float mfSqueezedFor = 0.0f;		// how long the empty hand has been squeezed (seconds; see VRUpdateFreeHand)
 +	bool mbHadGravity = true;
 +	bool mbCollidedCharacter = true;
-+	cVector3f[] mvHandTrail = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};	// where the hand was over the last 20 updates
-+	int mlHandTrailCount = 0;
-+	float mfHandTrailStep = 0.0083f;
++	cBunkerVRHandTrail mTrail;		// where the hand has been, and when: the speed it lets go with (helper_bunkervr.hps)
 +	cVector3f mvOffset = cVector3f(0);			// where the body sits, as the hand sees it
 +	cMatrixf m_mtxRotation = cMatrixf_Identity;	// how the body is turned, as the hand sees it
 +	bool mbSettling = false;	// settling back to its place after touching another thing (BunkerVR_HoldSettleSpeed)
@@ -55,6 +53,8 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +// lets go of things as the game's grab does (gfBunkerVR_HoldFollow and the
 +// rest, in helper_bunkervr.hps).
 +const float gfVRBodySlotWait = 1.0f;
++const float gfVRTakeOverSlack = 0.15f;	// BunkerVR: a hand keeps what the other let go of this much beyond its reach for the thing's size (meters: VRTakeOverFromGrab)
++const float gfVRFlareCarryWait = 5.0f;	// BunkerVR: a flare carried burning into a new level is lit again if the hand has it back within this long (seconds)
 +const float gfVRFreeHoldReach = 0.42f;
 +const float gfVRFreeHoldMaxMass = 25.0f;
 +const float gfVRFreeHoldMaxThrowSpeed = 14.0f;
@@ -121,24 +121,17 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +const float gfVRTorchHeadReach = 0.08f;
 +const cVector3f gvVRTorchFlame = cVector3f(0.0f, 0.22f, 0.0f);
 +
-+// BunkerVR: the gentle view of knockdowns, kills and deaths (VRGentleView):
-+// how tightly the view follows the animated head (a critically damped
-+// spring, BunkerVR_SpringFollow; per second); the view's speeds at which the
-+// dark ring starts to close and is closed (m/s); a sudden stop of the head,
-+// for a blink (above the first speed, then below the second within so many
-+// seconds; m/s, s); how long the blink is dark, then how long it takes to
-+// clear (s); how long the eased return to the game's own view takes (s); and
-+// how far from the head the view may be before it is put there at once (m:
-+// a jump of the game's, not a move).
-+const float gfVRGentleSpring = 10.0f;
++// BunkerVR: a knockdown, a kill or a death seen with comfort (VRVignetteView): the
++// animated head's speeds at which the dark ring starts to close and is closed
++// (m/s); a sudden stop of the head, a landing, for a blink and a buzz (above
++// the first speed, then below the second within so many seconds; m/s, s;
++// VRBuzzBlows too); and how far the head may go in a frame before it counts as
++// put there at once (m: a jump of the game's, not a move).
 +const float gfVRGentleRingSlow = 0.5f;
 +const float gfVRGentleRingFast = 3.0f;
 +const float gfVRGentleStopFast = 2.0f;
 +const float gfVRGentleStopSlow = 0.7f;
 +const float gfVRGentleStopWithin = 0.25f;
-+const float gfVRGentleBlinkDark = 0.06f;
-+const float gfVRGentleBlinkClear = 0.12f;
-+const float gfVRGentleEaseBack = 0.5f;
 +const float gfVRGentleJump = 3.0f;
 +// BunkerVR: a Beast kill seen through the eyes (VRStartKillView): the
 +// Beast's report of where it is counts if this fresh (seconds). A blink,
@@ -176,6 +169,9 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +const float gfVRKillHoleDarkFrom = 0.5f;
 +const float gfVRKillHoleDarkOver = 0.5f;
 +const float gfVRKillEndFade = 0.4f;
++const float gfVRDeathDarkOver = 0.3f;	// with comfort, a death that is not the Beast's kill darkens over this (seconds; VRUpdateKillView)
++const float gfVRCrouchMoving = 0.3f;	// with comfort, a crouch's blink is kept dark while the view moves faster than this (m/s; VRCrouchComfort)...
++const float gfVRCrouchBlinkMost = 1.0f;	// ...for at most this long (seconds)
 +const float gfVRKillHeightEvery = 0.25f;
 +// BunkerVR: a kill or a death seen through the eyes keeps the real eyes on the game's camera
 +// point, the place the game's own camera has and its death animations are made for, from
@@ -243,6 +239,12 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +// switched off for want of path nodes (VRBeastStandIn): its name
 +// and its entity file (in the item test map's entities folder).
 +const tString gsVRBeastBodyName = "VRTestBeastBody";
++// BunkerVR: the Trailer page (VRTrailerCommand): a scene waits this long for a spot; a spot is looked for this far off;
++// the Beast sent there is watched this long for getting there (said in hpl.log), and counts as there this near.
++const float gfVRTrailerWaitMost = 30.0f;
++const float gfVRTrailerWatchMost = 30.0f;
++const float gfVRTrailerThere = 2.5f; // (it stops a body's length short, at the end of its path)
++const float gfVRTrailerLookFurthest = 60.0f;
 +const tString gsVRBeastBodyFile = "bunkervr_test_beast.ent";
 +
 +// BunkerVR: the gun pushing things. How much of the gun counts, measured back
@@ -263,8 +265,8 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +
 +const float gfVRNeckToEyesUp = 0.14f;
 +const float gfVRNeckToEyesForward = 0.11f;
-+// (The body may be slid under the head this far from the camera: enough for
-+// walking about the room, as the game's body follows the head.)
++// (The drawn body may be slid under the head this far from the game's body, the room's offset aside: a tracking
++// glitch goes no further.)
 +const float gfVRBodyShiftMax = 3.0f;
 +// BunkerVR: the whole body is moved until the middle of its shoulders is this far behind the real neck
 +// and this far below it (meters), by at most so much sideways and forwards (see "the chest goes under the neck").
@@ -281,6 +283,24 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +const float gfVRHeadFloorBlack = 0.10f;
 +// BunkerVR: how far the head may turn (radians, about 30 degrees) before the body turns after it.
 +const float gfVRBodyTurnSlack = 0.52f;
++// BunkerVR: the body's drag after the head past that is drawn eased with this time constant (seconds; a torso may lag
++// the head this much without the player feeling it, the neck kept under the head), by at most gfVRBodyTurnLagMost
++// (radians) behind the drag.
++const float gfVRBodyTurnEase = 0.1f;
++const float gfVRBodyTurnLagMost = 0.8f;
++// BunkerVR: the chest goes under the neck with this time constant (seconds; a fifth of the way per update at 90 a
++// second, as it was), sideways and forwards only while the body turns slower than gfVRChestStillTurn (radians a
++// second); up and down never more than gfVRChestLagMost behind (meters). A gap up or down past gfVRChestLagNote is
++// noted in hpl.log (VRChestLagNote), one lasting gfVRChestLagLongest (seconds) then.
++const float gfVRChestFixTime = 0.05f;
++const float gfVRChestStillTurn = 0.36f;
++const float gfVRChestLagMost = 0.02f;
++const float gfVRChestLagNote = 0.06f;
++const float gfVRChestLagLongest = 5.0f;
++// BunkerVR: the body leans into a reach that falls short with this time constant, and comes back with the second
++// (seconds; as a quarter of the shortfall per update and 1.5% back per update at 90 a second were).
++const float gfVRLeanTime = 0.039f;
++const float gfVRLeanBackTime = 0.74f;
 +// BunkerVR: while the stick walks, the character turns towards the head this
 +// fast at most, and the drawn body's own turn after the head goes back to
 +// nothing as fast (radians a second, about 140 degrees; see VRDoWalkTurn)...
@@ -294,6 +314,26 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +// ...by at most this much in one update (less than the body's half width,
 +// 28 cm, so that the fit check also catches anything thin on the way).
 +const float gfVRFollowStep = 0.15f;
++const float gfVRFollowStepUpMost = 0.35f;	// BunkerVR: following the head up a stair: the feet raised by at most this (meters; the game's step height, if lower)
++// BunkerVR: playing standing, while the game has the eyes lowered (its crouch by the stick, a crawl), the view is
++// kept at least this far over the feet (game meters; VRUpdateDuckLift): the real head bending down on top of the
++// game's lowering stops there, not in the floor.
++const float gfVRViewLowest = 0.15f;
++// BunkerVR: the view's height follows the character's feet up and down stairs and steps as a critically damped
++// spring over this time (seconds), not in the engine's step-ups and the drawn body's catch-ups (VRStairView)...
++const float gfVRStairViewTime = 0.1f;
++// ...is put at the feet at once when they are farther than this from it (meters)...
++const float gfVRStairViewMost = 1.0f;
++// ...and, in the air falling faster than this (m/s: faster than a step down ever gets, 2 m/s from 20 cm), follows them
++// over a time eased down to gfVRStairViewFallTime in gfVRStairViewFallRamp seconds, until it has caught up after
++// landing; rising in the air faster than gfVRStairViewJumpRise (a jump), the same over gfVRStairViewJumpRamp...
++const float gfVRStairViewFallSpeed = 2.5f;
++const float gfVRStairViewFallTime = 0.02f;
++const float gfVRStairViewFallRamp = 0.35f;
++const float gfVRStairViewJumpRise = 0.5f;
++const float gfVRStairViewJumpRamp = 0.1f;
++// ...and whatever lift is left when the ease is switched off is eased away over this time (seconds).
++const float gfVRStairViewLeftTime = 0.1f;
 +// BunkerVR: the view darkens when a wall or a door is this close ahead of the
 +// head (on the line from the game's body to the head), early enough that the
 +// wall doesn't fill the view first...
@@ -574,6 +614,8 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 =49
 +		mvVRPullList.resize(0); // BunkerVR: the pull's list of pick-ups is the last map's
 +		mfVRPullListTime = -100.0f;
++		mvVRSpillList.resize(0); // BunkerVR: and the flames' list of spilled fuel
++		mfVRSpillListTime = -100.0f;
 +		// BunkerVR: the room's offset from the game's body (VRFollowHead) is the last map's: cleared, and the view put
 +		// over the body at the first update it can be (see mbVRFollowArrive).
 +		mvVRFollowLastMap = mvVRFollow;
@@ -582,6 +624,12 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		mbVRFollowArriveTeleport = false;
 +		mbVRFollowLastFeetKnown = false; // (a new map isn't a teleport within it)
 +		mfVRTeleportWait = 0.0f;
++		mbVRStairOn = false; // (the view's ease on stairs starts again at the feet: VRStairView)
++		mfVRDuckLift = 0.0f; // (and the duck's lift from nothing: VRUpdateDuckLift)
++		mbVRDuckLifting = false;
++		mbVRDuckOwn = false;
++		mfVRStairLeft = 0.0f;
++		mbVRStairFeetKnown = false;
 +		mbVRLastHeadKnown = false;
 +		mfVRHeadBlackTime = 0.0f;
 =2
@@ -589,7 +637,87 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		// place. The health is logged again from here.
 +		cVR_Say("level: " + apMap.GetFileName());
 +		mfVRHealthSaid = -1.0f;
-=119
++		// BunkerVR: none of the things the mod makes for the hands belongs in a level as it is entered (each is made when
++		// wanted, and kept out of saves): any found was restored from a save, and would hang where a hand or an arm was.
++		int lLeftOver = VRMadeThingsGone(apMap);
++		if(lLeftOver > 0) Log("BunkerVR: the level entered: " + lLeftOver + " of the hands' made things found in it (from a save) taken out\n");
+=10
++		// BunkerVR: what the mod made in this level for the hands goes, so a level kept for a return holds none of it
++		// in the air where the hands were (VRMadeThingsAtLeave); a flare burning in the hand is carried on into the
++		// next level (VRFlareAtLeave).
++		VRFlareAtLeave(apMap);
++		VRMadeThingsAtLeave(apMap);
++	}
++
++	// BunkerVR: a flare burning in the right hand as the level is left: the burning one is taken out of this level
++	// (made here, it cannot go along: kept for a return, it would hang lit where the hand was), its item stays in the
++	// hand, and once the hand has it again in the next level it is lit there anew, burning on from how long it had
++	// burned (VRUpdateFlare). Forgotten if the hand does not have it back within gfVRFlareCarryWait (a death's restart
++	// gives back the hands of before).
++	void VRFlareAtLeave(cLuxMap@ apMap)
++	{
++		tString sLit = cScript_GetGlobalVarString("BunkerVR_FlareLit");
++		if(sLit == "") return;
++		iLuxEntity@ pLit = apMap !is null ? apMap.GetEntityByName(sLit) : null;
++		if(pLit !is null) apMap.DestroyEntity(pLit);
++		// (Not out of a death: its restart loads the hands of before, the flare in them unlit, which must stay so.)
++		bool bDead = Player_IsDead();
++		msVRFlareCarryItem = bDead ? "" : cScript_GetGlobalVarString("BunkerVR_FlareLitItem");
++		mfVRFlareCarryBurnt = cScript_GetGlobalVarFloat("BunkerVR_FlareLitBurnt");
++		mfVRFlareCarryWait = 0.0f;
++		cScript_SetGlobalVarBool("BunkerVR_FlareInHand_" + sLit, false);
++		cScript_SetGlobalVarString("BunkerVR_FlareLit", "");
++		cScript_SetGlobalVarString("BunkerVR_FlareLitItem", "");
++		cScript_SetGlobalVarString("BunkerVR_FlareLitHand", "");
++		if(bDead) VRFlareNote("the level left by a death with the flare burning in the hand: not carried");
++		else VRFlareNote("the level left with the flare burning in the hand (" + msVRFlareCarryItem + ", " + int(mfVRFlareCarryBurnt) +
++						 " s burned): taken along, to be lit again in the next level's hand");
++	}
++
++	// BunkerVR: the things the mod makes in a level for the hands, taken out of it as it is left: the bandage's roll,
++	// its tin and the cloth to the roll (Prop_PlayerBody.hps VRBandageRoll, VRBandageMakePieces, the tin), the
++	// medkit's bag, bottle and dressing, and a bag of it dropped (VRUpdateMedkit there), the dressing wound on each
++	// forearm, its slices or the whole (VRPlaceWrap), and the gas mask held in a hand (put back in the pockets, what
++	// the right hand held given back). The body model that works them is made anew in each level, and they would stay
++	// in a kept level where the arm was.
++	void VRMadeThingsAtLeave(cLuxMap@ apMap)
++	{
++		if(apMap is null) return;
++		int lGone = VRMadeThingsGone(apMap);
++		if(m_idVRHandMask != tID_Invalid)
++		{
++			VRMaskOutOfHand(apMap, false, "the level left with the mask in the hand: back in the pockets");
++			mbVRMaskGiveBackOnArrival = true;
++		}
++		if(lGone > 0) Log("BunkerVR: the level left: " + lGone + " of the bandage's and medkit's things the mod made taken out of it\n");
++	}
++
++	// BunkerVR: the bandage's and medkit's things the mod makes for the hands (VRMadeThingsAtLeave), found by their names
++	// and taken out of a level: how many there were.
++	int VRMadeThingsGone(cLuxMap@ apMap)
++	{
++		if(apMap is null) return 0;
++		int lGone = 0;
++		array<tString> vNames = { "vr_bandage_roll", "vr_bandage_tin", "vr_medkit_case", "vr_medkit_roll", "vr_medkit_bottle", "vr_medkit_dropped",
++								  "vr_medkit_dropped_bottle", "vr_dressing_0", "vr_dressing_1" };
++		for(int i = 0; i < glVRBandagePieces; ++i) vNames.push_back("vr_bandage_piece_" + i);
++		for(int i = 0; i < 32; ++i)
++		{
++			vNames.push_back("vr_wrap_0_" + i);
++			vNames.push_back("vr_wrap_1_" + i);
++		}
++		for(uint i = 0; i < vNames.length(); ++i)
++		{
++			iLuxEntity@ pThing = apMap.GetEntityByName(vNames[i]);
++			if(pThing is null) continue;
++			apMap.DestroyEntity(pThing);
++			lGone++;
++		}
++		return lGone;
+=72
++		
++		msVRFlareCarryItem = ""; // BunkerVR: a game started or loaded carries no burning flare in from before (VRFlareAtLeave)
+=37
 +		VRTimeMark(7070); // BunkerVR: timing (to the end of Update)
 +		VRTimeMark(7092); // BunkerVR: timing, the game's own part
 +		
@@ -615,6 +743,9 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		else
 +		{
 +			cScript_SetGlobalVarInt("BunkerVR_LegsOk", 0); // BunkerVR: the drawn legs are the game's own (see UpdateVRLegs)
++			mbVRStairOn = false; // BunkerVR: (and the view's ease on stairs starts again at the feet after it: VRStairView)
++			mfVRStairLeft = 0.0f;
++			mbVRStairFeetKnown = false;
 +			cScript_SetGlobalVarBool("BunkerVR_LadderBend", false); // BunkerVR: nor fitted under the head on a ladder (Prop_PlayerBody.hps VRLadderLean)
 +		}
 +		
@@ -727,7 +858,7 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +				// where the animation takes the head, but it is not turned or
 +				// tipped by it: the horizon stays level, and looking about is
 +				// the real head's. Not when the menu has these on the cutscene
-+				// screen. Seen through the eyes (not the gentle view): in a
++				// screen. Seen through the eyes (with comfort or none): in a
 +				// knockdown the view keeps the way it faced (and VRKnockBodyTurn
 +				// the body with it); in a kill it faces the way the body does
 +				// (VRRoughYawNow). The eyes follow the head (VRRoughViewPlace).
@@ -751,9 +882,11 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +						{
 +							mbVRKillCovered = true;
 +							mfVRKillCoveredFor = 0.0f;
-+							Log("BunkerVR: the Beast's " + msVRKillNearBone + " is " + int(fVRNear * 100.0f + 0.5f) + " cm from the game's camera point " + BunkerVR_Fixed(mfVRKillTime, 2) + " s into the kill: the view becomes the animated head's\n");
++							Log("BunkerVR: the Beast's " + msVRKillNearBone + " is " + int(fVRNear * 100.0f + 0.5f) + " cm from the game's camera point " + BunkerVR_Fixed(mfVRKillTime, 2) + " s into the kill: " +
++								(VRRoughComfort() ? "the view goes dark (comfort)" : "the view becomes the animated head's") + "\n");
 +						}
-+						if(mbVRKillCovered)
++						// (With comfort the view is never tipped or rolled: it goes dark instead, VRUpdateKillView.)
++						if(mbVRKillCovered && VRRoughComfort() == false)
 +						{
 +							float fVRShare = BunkerVR_SmoothStep(0.0f, gfVRKillCoverBlend, mfVRKillCoveredFor);
 +							mtxRot = BunkerVR_Slerp(fVRShare, mtxRot, VRKillCoveredTurn(BunkerVR_PureTurn(mtxVRAnimated), mfVRKillLookOff)); // (BunkerVR_Slerp: without the engine's NaN)
@@ -777,7 +910,6 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +							m_mtxVRKillLookGoal = BunkerVR_PureTurn(mtxVRAnimated);
 +						}
 +					}
-+					else vVRRoughCam = pAttachNode.GetWorldPosition() + vCamPosAdd - mvVRBodyShift; // (gently, or faded: the view on the camera point, the body's slide in a knockdown taken off)
 +					bVRRoughPlaced = true;
 +				}
 +
@@ -807,8 +939,12 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +				cVector3f vVRSteady = cVector3f(0.0f);
 +				if(mbVRSeen)
 +				{
-+					fVRDuckLift = VRUpdateDuckLift(pAttachNode.GetWorldPosition().y - mvPrevSmoothPos.y, afTimeStep);
 +					vVRSteady = VRSteadyEyes(pEntity, pAttachNode, pCharBody, afTimeStep);
++					// (The eyes above the feet, and the camera there before it is raised: with the game's additions
++					// and the steadying, which the duck's lift playing standing works from, and without the body's
++					// slide under the real head, which the camera leaves out too.)
++					float fVREyes = pAttachNode.GetWorldPosition().y - mvPrevSmoothPos.y;
++					fVRDuckLift = VRUpdateDuckLift(fVREyes, fVREyes + vCamPosAdd.y - mvVRBodyShift.y + vVRSteady.y, afTimeStep);
 +				}
 +				pCam.SetPosition(VRCameraPlace(pAttachNode.GetWorldPosition() + vCamPosAdd - mvVRBodyShift + cVector3f(0.0f, fVRDuckLift, 0.0f) + vVRSteady, vCamPosAdd));
 +				// (BunkerVR: on a ladder, the view put over the body and darkened near the rungs, now
@@ -822,16 +958,13 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +				// knockdown, a kill or a death begin: VRRoughViewPlace.)
 +				if(mbVRSeen)
 +				{
-+					mvVRRoughSocket0 = pAttachNode.GetWorldPosition();
++					mvVRRoughSocket0 = pAttachNode.GetWorldPosition() + cVector3f(0.0f, VRStairLift(), 0.0f); // (with the stairs' ease, where the view was put: VRCameraPlace)
 +					m_mtxVRRoughSocketTurn0 = BunkerVR_PureTurn(pAttachNode.GetWorldMatrix());
 +				}
 +
 =55
-+			// BunkerVR: a knockdown, a kill or a death seen "My eyes, gentle"
-+			// (VRGentleView), before mvCameraPos takes this frame's place:
-+			// it starts from where the view was.
-+			VRGentleView(pCam, afTimeStep);
-+			VRVignetteView(pCam, afTimeStep); // (or with the vignette)
++			// BunkerVR: a knockdown, a kill or a death seen with comfort: its vignette and the landing's blink.
++			VRVignetteView(pCam, afTimeStep);
 +
 =3
 +			
@@ -840,9 +973,22 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +			// arms on the VR controllers again. The body's animation only does that
 +			// at its own fixed rhythm, which left the hands trailing behind or
 +			// jumping about whenever the player walked or ran.
-+			if(mbCameraAnimation_Active == false)
++			// (Not while the level is stopped: the game over stops it, and the drawn body's script can't be
++			// reached until it starts again.)
++			cLuxMap@ pMapNow = cLux_GetCurrentMap();
++			if(mbCameraAnimation_Active == false && pMapNow !is null && pMapNow.IsActive())
 +			{
 +				cScript_RunGlobalFunc(pEntity.GetName(), "cScrPropPlayerBody", "_Global_VRUpdateArms");
++			}
++			else if(pMapNow !is null && pMapNow.IsActive())
++			{
++				// (The arms not placed meanwhile, the medkit open in them shuts: its case would hang where the hand was.)
++				cScript_RunGlobalFunc(pEntity.GetName(), "cScrPropPlayerBody", "_Global_VRMedkitInterrupted");
++				// (The duck's lift is not worked out meanwhile: after the scene it starts again from nothing, so a lift
++				// from before it never eases the view down afterwards. VRUpdateDuckLift.)
++				mfVRDuckLift = 0.0f;
++				mbVRDuckLifting = false;
++				mbVRDuckOwn = false;
 +			}
 +			if(mlVRTraceLeft > 0) VRStandInTrace2(pCam, pAttachNode, pMeshEnt); // (testing: the per-frame trace, once the camera and arms are placed)
 =273
@@ -895,7 +1041,31 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		cLuxPlayer@ pPlayer = cLux_GetPlayer();
 +		cCamera@ pCam = pPlayer !is null ? pPlayer.GetCamera() : null;
 +		if(pCam is null) return;
-+		
++
++		// Not through a knockdown, a kill or a death (VRUpdateRoughMove), the body tied into a scene, the game's camera
++		// animations, nor the cutscene screen, as the pull stops for them (VRDoPull): the hands' own holds let go,
++		// dropped, not thrown (the hands' moves then are not the player's), so nothing is carried along with an
++		// animated camera or floats beside the cutscene's. A squeeze held through it takes nothing new as it ends.
++		if(mlVRRoughKind != 0 || mbAttached || mbCameraAnimation_Active || mbVRScreenWas)
++		{
++			if(mVRHoldLeft.m_idBody != tID_Invalid || mVRHoldRight.m_idBody != tID_Invalid)
++				Log("BunkerVR: the hands' own holds let go: " + (mlVRRoughKind != 0 ? "a knockdown, kill or death" : (mbVRScreenWas ? "the cutscene screen" : "a scene or camera animation")) + "\n");
++			if(mVRHoldLeft.m_idBody != tID_Invalid) VRReleaseFreeHold(@mVRHoldLeft, false);
++			if(mVRHoldRight.m_idBody != tID_Invalid) VRReleaseFreeHold(@mVRHoldRight, false);
++			mVRHoldLeft.mbWasSqueezing = true;
++			mVRHoldLeft.mfSqueezedFor = 100.0f;
++			mVRHoldRight.mbWasSqueezing = true;
++			mVRHoldRight.mfSqueezedFor = 100.0f;
++			// (And said so, as below: nothing held, no hand helping the game's grab. Left as they were, the arms' code
++			// would draw a squeezed empty hand as one still holding, and the grab would take a let-go hand for a helper.)
++			cScript_SetGlobalVarInt("BunkerVR_FreeHolding", 0);
++			cScript_SetGlobalVarInt("BunkerVR_HelperHand", -1);
++			cScript_SetGlobalVarID("BunkerVR_HelperBody", tID_Invalid);
++			cScript_SetGlobalVarID("BunkerVR_FreeBody0", tID_Invalid);
++			cScript_SetGlobalVarID("BunkerVR_FreeBody1", tID_Invalid);
++			return;
++		}
++
 +		int lMask = 0;
 +		cMatrixf mtxLeft = cMatrixf_Identity;
 +		cMatrixf mtxRight = cMatrixf_Identity;
@@ -1013,7 +1183,7 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +				apHold.mfTakingOverTime = 0.0f;
 +				apHold.mbHelping = false;
 +				apHold.mvHelpGrip = cMath_MatrixMul(cMath_MatrixInverse(pGrabbed.GetLocalMatrix()), a_mtxHand.GetTranslation());
-+				apHold.mlHandTrailCount = 0;
++				apHold.mTrail.Clear();
 +				cScript_SetGlobalVarID("BunkerVR_HandOverBody", idGrabbed);
 +				cScript_SetGlobalVarFloat("BunkerVR_HandOverTime", float(cEngine_GetGameTime()));
 +				Log("BunkerVR: the other hand takes the game's interact button: this hand keeps what the game's grab held in it, by itself" +
@@ -1150,7 +1320,7 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +			pBest.SetCollideCharacter(false);
 +			pBest.Enable();
 +			apHold.m_idBody = pBest.GetID();
-+			apHold.mlHandTrailCount = 0;
++			apHold.mTrail.Clear();
 +			apHold.mbSettling = false;
 +			apHold.mbPullingIn = bBestHeavy == false; // (it glides in; see BunkerVR_HoldPullSpeed)
 +			apHold.mfPullSpeed = 0.0f;
@@ -1195,7 +1365,7 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +				return;
 +			}
 +			apHold.mbTakingOver = false;
-+			VRTakeOverFromGrab(apHold, pBody, a_mtxHand, false);
++			if(VRTakeOverFromGrab(apHold, pBody, a_mtxHand, false) == false) return;
 +		}
 +
 +		// Both hands on one thing (see BunkerVR_TwoHandPlace in
@@ -1227,8 +1397,9 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +				return;
 +			}
 +			// The other hand has let go of it: this one keeps it, as if it had
-+			// taken hold of it alone (held on below, from this update).
-+			VRTakeOverFromGrab(apHold, pBody, a_mtxHand, true);
++			// taken hold of it alone (held on below, from this update), if it is
++			// within this hand's reach.
++			if(VRTakeOverFromGrab(apHold, pBody, a_mtxHand, true) == false) return;
 +		}
 +		else if(idGrabBody == apHold.m_idBody)
 +		{
@@ -1364,10 +1535,7 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		if(apHold.mbHeavy == false) BunkerVR_HoldRaiseSpinLimit(pBody); // (it may spin as fast as the hand turns it; put back in VRReleaseFreeHold)
 +
 +		// For throwing: remember where the hand was over the last few updates.
-+		for(int i = 0; i < 19; ++i) apHold.mvHandTrail[i] = apHold.mvHandTrail[i + 1];
-+		apHold.mvHandTrail[19] = a_mtxHand.GetTranslation();
-+		if(apHold.mlHandTrailCount < 20) apHold.mlHandTrailCount++;
-+		apHold.mfHandTrailStep = afTimeStep;
++		apHold.mTrail.Add(a_mtxHand.GetTranslation());
 +		
 +		// Caught on something and left far behind: drop it. (Not thrown: it
 +		// would leave with the hand's speed, and a hand pushing it hard is
@@ -1428,8 +1596,7 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		{
 +			// The hand's own speed (from its last two places), and towards its
 +			// place at the glide's speed.
-+			cVector3f vHandSpeed = cVector3f(0.0f);
-+			if(apHold.mlHandTrailCount >= 2) vHandSpeed = (apHold.mvHandTrail[19] - apHold.mvHandTrail[18]) / afTimeStep;
++			cVector3f vHandSpeed = apHold.mTrail.LastStep();
 +			float fError = vPosError.Length();
 +			apHold.mfPullSpeed = BunkerVR_HoldPullSpeed(apHold.mfPullSpeed, fError, afTimeStep);
 +			vSpeed = vHandSpeed;
@@ -1558,7 +1725,7 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		cMatrixf mtxAt = a_mtxHand;
 +		mtxAt.SetTranslation(avGripAt);
 +		apHold.m_mtxHelpPalm = cMath_MatrixMul(cMath_MatrixInverse(apBody.GetLocalMatrix()), mtxAt);
-+		apHold.mlHandTrailCount = 0;
++		apHold.mTrail.Clear();
 +		apHold.mbSettling = false;
 +		apHold.mbPullingIn = false;
 +		apHold.mbFeedKnown = false;
@@ -1587,10 +1754,7 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		// hand off the thing.)
 +		if(gbBunkerVR_HandOnThing) BunkerVR_HoldGlue(alHand, apBody, apHold.m_mtxHelpPalm, true);
 +		else BunkerVR_HoldGlue(alHand, null, cMatrixf_Identity, false); // (the Feel page: not fixed)
-+		for(int i = 0; i < 19; ++i) apHold.mvHandTrail[i] = apHold.mvHandTrail[i + 1];
-+		apHold.mvHandTrail[19] = a_mtxHand.GetTranslation();
-+		if(apHold.mlHandTrailCount < 20) apHold.mlHandTrailCount++;
-+		apHold.mfHandTrailStep = afTimeStep;
++		apHold.mTrail.Add(a_mtxHand.GetTranslation());
 +	}
 +
 +	// BunkerVR: the other hand has let go of what this one helped to hold:
@@ -1607,8 +1771,27 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +	// since it took hold), not as the real hand is now: the drawn hand stays
 +	// where it is on the thing, and the thing comes round to the real hand
 +	// with it, instead of the drawn hand jumping to the real hand's turn.
-+	void VRTakeOverFromGrab(cVRFreeHold@ apHold, iPhysicsBody@ apBody, const cMatrixf &in a_mtxHand, bool abWasHelping)
++	// False when the thing is out of this hand's reach (see below): it is not kept, and this hand holds nothing.
++	bool VRTakeOverFromGrab(cVRFreeHold@ apHold, iPhysicsBody@ apBody, const cMatrixf &in a_mtxHand, bool abWasHelping)
 +	{
++		// (Only a thing within this hand's reach for its size, as a hand takes hold of one (BunkerVR_HoldReachLimit),
++		// and a little more (gfVRTakeOverSlack): one the grab let go of some way off, caught on something or pulled
++		// away, or one this hand helped with while the real hand was far from where it is drawn on it, falls instead
++		// of being kept at a distance.)
++		float fFar = (apBody.GetLocalPosition() - a_mtxHand.GetTranslation()).Length();
++		float fReach = BunkerVR_HoldReachLimit(apBody, gfBunkerVR_HoldReachLeast) + gfVRTakeOverSlack;
++		if(fFar > fReach)
++		{
++			// (The drawn hand, fixed to it while it helped, is freed: see BunkerVR_HoldGlue.)
++			for(int lHand = 0; lHand < 2; ++lHand)
++				if(cScript_GetGlobalVarID("BunkerVR_HoldBody" + lHand) == apBody.GetID()) BunkerVR_HoldGlue(lHand, null, cMatrixf_Identity, false);
++			apHold.mbHelping = false;
++			apHold.mbTakingOver = false;
++			apHold.m_idBody = tID_Invalid;
++			Log("BunkerVR: the other hand let go; this hand is " + int(fFar * 100.0f + 0.5f) + " cm from it (it reaches " + int(fReach * 100.0f + 0.5f) +
++				" for its size): not kept\n");
++			return false;
++		}
 +		apHold.mbHelping = false;
 +		apHold.mbHeavy = cScript_GetGlobalVarBool("BunkerVR_GrabHeavy");
 +		cMatrixf mtxTurnNow = apBody.GetLocalMatrix().GetRotation();
@@ -1635,6 +1818,7 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		apHold.mWeight.Reset(); // (it starts again at the hand)
 +		apHold.mvHeavyGrip = apHold.mvHelpGrip; // (a heavy thing: the hand stays where it held it with both; see gfBunkerVR_HeavySlip)
 +		Log(apHold.mbHeavy ? "BunkerVR: the other hand let go; this hand keeps it, dragging it (heavy)\n" : "BunkerVR: the other hand let go; this hand keeps it\n");
++		return true;
 +	}
 +
 +	// abThrow: false when the hand did not let go itself (the thing was left
@@ -1678,27 +1862,18 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +
 +			// It leaves with the speed the hand had at its fastest moment just
 +			// now (people let go a little late, when the hand is already
-+			// slowing and dropping), so it can be thrown.
-+			if(abThrow && apHold.mlHandTrailCount > 3 && apHold.mfHandTrailStep > 0.0001f)
++			// slowing and dropping), so it can be thrown; a gentle let-go with
++			// the hand's speed now (cBunkerVRHandTrail.ThrowSpeed). With no
++			// fresh record of the hand (let go in a pause or a menu), still.
++			if(abThrow)
 +			{
-+				int lFirst = 20 - apHold.mlHandTrailCount;
-+				cVector3f vBest = cVector3f(0);
-+				float fBest = -1.0f;
-+				for(int i = lFirst + 3; i < 20; ++i)
-+				{
-+					cVector3f vSpeed = (apHold.mvHandTrail[i] - apHold.mvHandTrail[i - 3]) / (apHold.mfHandTrailStep * 3.0f);
-+					float fSpeed = vSpeed.Length();
-+					if(fSpeed > fBest)
-+					{
-+						fBest = fSpeed;
-+						vBest = vSpeed;
-+					}
-+				}
-+				cVector3f vThrow = vBest * mfVRThrowBoost;
++				float fBest = 0.0f;
++				cVector3f vThrow = apHold.mTrail.ThrowSpeed(mfVRThrowBoost, fBest);
 +				float fThrow = vThrow.Length();
 +				float fThrowMax = bHeavy ? gfBunkerVR_ThrowMaxSpeed * 0.5f : gfBunkerVR_ThrowMaxSpeed; // (as the game's grab: a heavy thing half)
 +				if(fThrow > fThrowMax) vThrow = vThrow * (fThrowMax / fThrow);
 +				vThrow = BunkerVR_ThrowLimit(vThrow, pBody.GetMass()); // (only so much energy: heavy things leave slowly)
++				if(bHeavy) vThrow = BunkerVR_DragLetGoLimit(vThrow, pBody.GetMass()); // (dragged by this one hand: one arm's push, as the game's grab)
 +				pBody.SetLinearVelocity(vThrow);
 +				if(abThrow && vThrow.Length() > 2.0f) cVR_HintUsed("throw"); // (the hints: let go in a swing)
 +				// (Logged for heavy things, such as the trenches' brick.)
@@ -1851,16 +2026,25 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +			if(lState == ePlayerState_Custom_UsingShotgun_Aim || lState == ePlayerState_Custom_UsingShotgun_Reload) apPlayer.ChangeState(ePlayerState_Normal);
 +			if(apPlayer.GetCurrentStateId() != ePlayerState_Normal)
 +			{
++				VRSlotFeel(false);
 +				VRShoulderNote("the shotgun not put away: the player is busy (state " + apPlayer.GetCurrentStateId() + ")");
 +				return;
 +			}
 +			Item_PutAway(eItemHandlerHand_Right);
++			VRSlotFeel(true);
 +			VRShoulderNote("the shotgun put away behind the shoulder");
 +			return;
 +		}
 +		if(ItemType_GetFirstInInventory("Shotgun") == "")
 +		{
++			VRSlotFeel(false);
 +			VRShoulderNote("a reach behind the shoulder: no shotgun carried");
++			return;
++		}
++		if(VRMayDrawGun() == false)
++		{
++			VRSlotFeel(false);
++			VRShoulderNote("the shotgun not taken out: the game allows no item now (" + (Player_GetUnderwater() ? "underwater" : "held back by the level") + ")");
 +			return;
 +		}
 +		// (Only the revolver's aim or loading is left for it: an item in use, the
@@ -1875,12 +2059,18 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +				mfVRShoulderWait = gfVRBodySlotWait;
 +				return;
 +			}
++			VRSlotFeel(false);
 +			VRShoulderNote("the shotgun not taken out: the player is busy (state " + apPlayer.GetCurrentStateId() + ")");
 +			return;
 +		}
++		tString sHeldID = Item_GetHeld(eItemHandlerHand_Right);
++		int lHeldState = Item_GetHandHeldState(eItemHandlerHand_Right);
 +		Item_SetLastWeaponUsed("Shotgun");
 +		Item_ToggleHeldItem("Shotgun");
-+		VRShoulderNote("the shotgun taken out from behind the shoulder" + (sHeld != "" ? " (" + sHeld + " put away)" : ""));
++		bool bActed = VRRightHandChanged(sHeldID, lHeldState);
++		VRSlotFeel(bActed);
++		if(bActed)	VRShoulderNote("the shotgun taken out from behind the shoulder" + (sHeld != "" ? " (" + sHeld + " put away)" : ""));
++		else		VRShoulderNote("the shotgun not taken out: the game took no item change so soon after the last");
 +	}
 +	
 +	// BunkerVR: the right chest's item slot, the VR form of the flat game's hotkey 1. The slot's
@@ -1896,27 +2086,37 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		tString sType = Item_GetAssignedToHotkey(1);
 +		if(sType == "")
 +		{
++			VRSlotFeel(false);
 +			VRChestSlotNote("a reach to the chest slot: nothing is stored in it");
 +			return;
 +		}
 +		tString sHeld = Item_GetHeldType(eItemHandlerHand_Right);
 +		if(sHeld != "")
 +		{
++			VRSlotFeel(false);
 +			VRChestSlotNote("the " + sType + " not taken out: the right hand holds the " + sHeld);
 +			return;
 +		}
 +		if(ItemType_GetFirstInInventory(sType) == "")
 +		{
++			VRSlotFeel(false);
 +			VRChestSlotNote("the chest slot's " + sType + " is no longer carried");
 +			return;
 +		}
 +		if(apPlayer.GetCurrentStateId() != ePlayerState_Normal)
 +		{
++			VRSlotFeel(false);
 +			VRChestSlotNote("the " + sType + " not taken out: the player is busy (state " + apPlayer.GetCurrentStateId() + ")");
 +			return;
 +		}
++		tString sHeldID = Item_GetHeld(eItemHandlerHand_Right);
++		int lHeldState = Item_GetHandHeldState(eItemHandlerHand_Right);
++		tString sLeftID = Item_GetHeld(eItemHandlerHand_Left);
 +		Item_TriggerHotkey(1);
-+		VRChestSlotNote("the " + sType + " taken out of the chest slot (the game's hotkey 1)");
++		bool bActed = VRRightHandChanged(sHeldID, lHeldState) || Item_GetHeld(eItemHandlerHand_Left) != sLeftID; // (equipped to the hand its type names)
++		VRSlotFeel(bActed);
++		if(bActed)	VRChestSlotNote("the " + sType + " taken out of the chest slot (the game's hotkey 1)");
++		else		VRChestSlotNote("the " + sType + " not taken out: the game refused it (an item it needs not carried, or items held back now)");
 +	}
 +
 +	void VRChestSlotPut()
@@ -1997,7 +2197,14 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		}
 +		if(ItemType_GetFirstInInventory("Gun") == "")
 +		{
++			VRSlotFeel(false);
 +			VRHipNote("a squeeze at the hip: no revolver carried");
++			return;
++		}
++		if(VRMayDrawGun() == false)
++		{
++			VRSlotFeel(false);
++			VRHipNote("the revolver not taken out: the game allows no item now (" + (Player_GetUnderwater() ? "underwater" : "held back by the level") + ")");
 +			return;
 +		}
 +		int lState = apPlayer.GetCurrentStateId();
@@ -2013,12 +2220,18 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +				mfVRHipWait = gfVRBodySlotWait;
 +				return;
 +			}
++			VRSlotFeel(false);
 +			VRHipNote("the revolver not taken out: the player is busy (state " + apPlayer.GetCurrentStateId() + ")");
 +			return;
 +		}
++		tString sHeldID = Item_GetHeld(eItemHandlerHand_Right);
++		int lHeldState = Item_GetHandHeldState(eItemHandlerHand_Right);
 +		Item_SetLastWeaponUsed("Gun");
 +		Item_ToggleHeldItem("Gun");
-+		VRHipNote("the revolver taken out at the hip" + (sHeld != "" ? " (" + sHeld + " put away)" : ""));
++		bool bActed = VRRightHandChanged(sHeldID, lHeldState);
++		VRSlotFeel(bActed);
++		if(bActed)	VRHipNote("the revolver taken out at the hip" + (sHeld != "" ? " (" + sHeld + " put away)" : ""));
++		else		VRHipNote("the revolver not taken out: the game took no item change so soon after the last");
 +	}
 +
 +	// BunkerVR: a "BunkerVR hip:" line in hpl.log (the first 30).
@@ -2027,6 +2240,37 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		if(mlVRHipNotes >= 30) return;
 +		mlVRHipNotes++;
 +		Log("BunkerVR hip: " + asText + "\n");
++	}
++
++	// BunkerVR: the feel of a place on the body as it acts, or refuses, in the right hand: as the mod's SlotFeel
++	// (vr.cpp), from here where the outcome is known (the hip's and the shoulder's take-outs, the chest slot's).
++	void VRSlotFeel(bool abActed)
++	{
++		VRBuzzHand(1, abActed ? 0.05f : 0.03f, abActed ? 0.6f : 0.3f);
++	}
++
++	// BunkerVR: did the game take up a change of the right hand's item asked for just now (Item_ToggleHeldItem, a
++	// hotkey)? It ignores a toggle within half a second of the last (ItemHandler.hps ToggleHeldItem), and a hotkey
++	// can be refused (an item that needs another not carried: a molotov without a lighter). The hand's item and its
++	// held state, compared with before the asking.
++	bool VRRightHandChanged(const tString &in asHeldBefore, int alStateBefore)
++	{
++		return Item_GetHeld(eItemHandlerHand_Right) != asHeldBefore || Item_GetHandHeldState(eItemHandlerHand_Right) != alStateBefore;
++	}
++
++	// BunkerVR: may a gun be drawn now, as the game's own key allows it (Player_Custom.hps): not underwater, nor while
++	// a level holds items back (Player_GetCanEquipItems).
++	bool VRMayDrawGun()
++	{
++		return Player_GetUnderwater() == false && Player_GetCanEquipItems();
++	}
++
++	// BunkerVR: a "BunkerVR chest light:" line in hpl.log (the first 30): the lantern asked for with an item held ready.
++	void VRLightNote(const tString &in asText)
++	{
++		if(mlVRLightNotes >= 30) return;
++		mlVRLightNotes++;
++		Log("BunkerVR chest light: " + asText + "\n");
 +	}
 +	
 +	void VRDoGunCommands()
@@ -2108,6 +2352,45 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +			VRStandInUseItem(); // (testing with a stand-in headset)
 +			return;
 +		}
++		if(lCommand == 96)
++		{
++			VRStandInHeldBones(); // (testing with a stand-in headset)
++			return;
++		}
++		if(lCommand == 98)
++		{
++			// (Testing with a stand-in headset: how a dressing wound on a forearm sits, tried from run\survey.txt's
++			// lines: its size and its start from the wrist (meters); "off" on the first line goes back to the mod's
++			// own: Prop_PlayerBody.hps VRWrapFrame.)
++			bool bOn = cVR_SurveyName(0) != "off";
++			cScript_SetGlobalVarBool("BunkerVR_MedkitTryOn", bOn);
++			if(bOn) cScript_SetGlobalVarVector3f("BunkerVR_MedkitTryDressing", cVector3f(cVR_SurveyNumber(0), cVR_SurveyNumber(1), 0.0f));
++			cVR_Say("medkit try: " + (bOn ? "on" : "off"));
++			return;
++		}
++		if(lCommand == 101)
++		{
++			// (Testing with a stand-in headset: the game's Forward bound to run\survey.txt's first line, a key as the key
++			// bindings name it ("Keyboard.Up"; "Keyboard.W" is the game's own), and the keys bound again as the options
++			// menu does. The input script tells the mod, which presses the bound key for the stick: cVR_KeyBound.)
++			cConfigFile@ pKeys = cLux_GetKeyConfig();
++			if(pKeys is null) return;
++			pKeys.SetString("Forward", "Primary", cVR_SurveyName(0));
++			cLux_GetInputHandler().LoadKeyConfig();
++			cVR_Say("forward bound to " + cVR_SurveyName(0));
++			return;
++		}
++		if(lCommand == 97)
++		{
++			// (Testing with a stand-in headset: the medkit's own report, from the body script's next update: VRMedkitReport.)
++			cScript_SetGlobalVarBool("BunkerVR_MedkitReportAsked", true);
++			return;
++		}
++		if(lCommand == 99 || lCommand == 100)
++		{
++			VRStandInCrawl(lCommand == 99); // (testing with a stand-in headset)
++			return;
++		}
 +		if(lCommand == 69)
 +		{
 +			VRStandInMapFunction(); // (the same)
@@ -2136,6 +2419,18 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		if((lCommand >= 4 && lCommand <= 19) || lCommand == 60)
 +		{
 +			VRDoItemCommand(lCommand);
++			return;
++		}
++		if(lCommand == 95)
++		{
++			// The bandage pulled open while the game would not use it (the mod kept its roll in): the game's own
++			// words say why ("not injured").
++			cScript_RunGlobalFunc("State_UsingHealthItem", "", "_Global_VRSayWhyNot");
++			return;
++		}
++		if(lCommand >= 200 && lCommand <= 209)
++		{
++			VRTrailerCommand(lCommand); // (the Trailer page's scenes and its power)
 +			return;
 +		}
 +		if(lCommand >= 20 && lCommand <= 59)
@@ -2209,6 +2504,13 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		if(lCommand == 92)
 +		{
 +			VRStandInTapPins(); // (testing with a stand-in headset: pins at the fuel tap's points for a picture)
++			return;
++		}
++		if(lCommand == 94)
++		{
++			// Testing with a stand-in headset: a death that is not the Beast's kill (shot: "player_shot_death_1"), for
++			// how such deaths are seen (VRUpdateKillView).
++			Player_GiveDamage(1000.0f, 0.0f, eDamageType_Gun, "");
 +			return;
 +		}
 +		if(lCommand < 1 || lCommand > 3) return;
@@ -2292,6 +2594,8 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +					  vAnswer.z >= 0.0f && vAnswer.z < 100.0f;
 +		bool bDucked = bKnown && vAnswer.y > 1.5f;
 +		bool bCrouching = Player_GetCrouching();
++		// (Playing standing or seated: told even with ducking switched off, for VRUpdateDuckLift.)
++		if(vAnswer.x > 12344.0f && vAnswer.x < 12346.0f) mbVRPlayStanding = vAnswer.z > 50.0f;
 +
 +		// Only while walking about normally: not on ladders, and not during
 +		// cutscenes and the like, when the game poses the body itself.
@@ -2308,8 +2612,10 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		{
 +			mfVRDuckMaxLift = cMath_Min(vAnswer.z, gvBodySize.y - gvBodyCrouchSize.y);
 +
-+			// Head went down: crouch (unless already crouching by the stick).
-+			if(bDucked && mbVRDuckWas == false && bCrouching == false)
++			// Head went down: crouch (unless already crouching by the stick). Playing standing, also a head still
++			// down when the game has stood the player up (a crawl over as they come out of a hiding place): the
++			// game counts them crouched again, their own crouch, as they really are.
++			if(bDucked && bCrouching == false && (mbVRDuckWas == false || (mbVRPlayStanding && Player_GetCrawling() == false)))
 +			{
 +				mbVRRealCrouch = vAnswer.z > 50.0f; // playing standing: the player's own crouch
 +				Player_SetCrouching(true);
@@ -2339,22 +2645,35 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +	// head has come down as well, so the view would drop twice. While such a
 +	// crouch lasts, the view is raised again by as much as the game has lowered
 +	// it, up to the limit the mod gave: playing seated that is only the depth
-+	// of the duck, so the game's crouch still lowers the view; playing standing
-+	// it is the whole of the game's crouch, so the view is at the real height.
-+	// It follows the crouch's own movement, so nothing jumps. Returns how far
-+	// to raise the view (game meters). afEyeHeight: the eyes above the feet now.
-+	float VRUpdateDuckLift(float afEyeHeight, float afTimeStep)
++	// of the duck, so the game's crouch still lowers the view.
++	// Playing standing, the view is the real head, moved by the game only where
++	// the player chose the game's own crouch. The player's own crouch lowers
++	// nothing of the game's (SetCrouch, VRSteadyEyes), and while the game has the
++	// eyes lowered under it (its crawl into a hiding place or a crawlspace, which
++	// takes its body into the crouch even for the player's own) all the game
++	// lowered is raised again: the crawl only makes the body small enough to fit,
++	// the view stays the real head, coming out as going in (mbVRDuckOwn, kept
++	// until the game's lowering is over). A crouch by the stick, or a crawl begun
++	// standing up, lowers the view as the game does, and the real head moves it on
++	// top as ever, down to gfVRViewLowest over the feet, never into the floor.
++	// It follows the game's own easing, so nothing jumps. Returns how far to
++	// raise the view (game meters). afEyeHeight: the eyes above the feet now;
++	// afCamHeight: the camera there, with the game's additions and the steadying,
++	// before it is raised.
++	float VRUpdateDuckLift(float afEyeHeight, float afCamHeight, float afTimeStep)
 +	{
 +		iCharacterBody@ pCharBody = cLux_GetPlayer().GetCharacterBody();
 +		bool bCrouching = Player_GetCrouching();
 +
-+		// Learn the standing eye height while plainly standing.
++		// Learn the standing eye height while plainly standing (and the camera's, for playing standing).
 +		if(mbVRDuckLifting == false && bCrouching == false && Player_GetCrawling() == false &&
 +			GetCrouchTransitionActive() == false && mbCameraAnimation_Active == false && mbAttached == false &&
 +			pCharBody !is null && pCharBody.IsOnGround() && afEyeHeight > 1.0f && afEyeHeight < 2.5f)
 +		{
 +			if(mfVRStandEye < 0.0f)	mfVRStandEye = afEyeHeight;
 +			else					mfVRStandEye += (afEyeHeight - mfVRStandEye) * cMath_Min(1.0f, afTimeStep * 3.0f);
++			if(mfVRStandCam < 0.0f)	mfVRStandCam = afCamHeight;
++			else					mfVRStandCam += (afCamHeight - mfVRStandCam) * cMath_Min(1.0f, afTimeStep * 3.0f);
 +		}
 +
 +		if(mbVRDuckCrouched && mbVRRealCrouch == false && mfVRStandEye > 0.0f)
@@ -2362,6 +2681,10 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +			mbVRDuckLifting = true;
 +			mfVRDuckIdle = 0.0f;
 +		}
++
++		// (Playing standing: while the game has the eyes lowered on purpose, or is easing them back.)
++		bool bVRStandingLowered = mbVRPlayStanding && mfVRStandCam > 0.0f && mbCameraAnimation_Active == false && mbAttached == false &&
++			VROnLadder() == false && (Player_GetCrawling() || mfCrawlTransitionT > 0.001f || GetCrouchTransitionActive() || (bCrouching && mbVRRealCrouch == false));
 +
 +		if(mbVRDuckLifting)
 +		{
@@ -2377,12 +2700,153 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +			}
 +			if(mbCameraAnimation_Active || mbAttached) mbVRDuckLifting = false;
 +		}
++		else if(bVRStandingLowered)
++		{
++			if(mbVRRealCrouch) mbVRDuckOwn = true;
++			mfVRDuckRealLast = VRRealDuck();
++			float fLift = mbVRDuckOwn ? cMath_Max(0.0f, mfVRStandCam - afCamHeight) : 0.0f;
++			float fEyes = afCamHeight + fLift - mfVRDuckRealLast; // (the view over the feet, so raised)
++			if(fEyes < gfVRViewLowest) fLift += gfVRViewLowest - fEyes;
++			mfVRDuckLift = fLift;
++		}
 +		else
 +		{
++			mbVRDuckOwn = false; // (the game's lowering over: the next is the player's own again only if made so)
 +			mfVRDuckLift = cMath_IncreaseTo(mfVRDuckLift, afTimeStep * 0.6f, 0.0f);
 +		}
 +
++		mlVRDuckWay = mbVRDuckLifting ? 1 : (bVRStandingLowered ? 2 : 0);
++		mfVRDuckEyesLast = afCamHeight;
++		VRCrouchComfort(afEyeHeight + mfVRDuckLift, afTimeStep);
 +		return mfVRDuckLift;
++	}
++
++	// BunkerVR: how far the real head is below the game's camera (the drop the mod adds to the view): the head between
++	// the eyes (roll 7005) under the game's own camera as placed last (7007, the head's movement left out; the
++	// camera's own position has the head in it already). Game meters, 0 when not lower.
++	float VRRealDuck()
++	{
++		cLuxPlayer@ pPlayer = cLux_GetPlayer();
++		cCamera@ pCam = pPlayer !is null ? pPlayer.GetCamera() : null;
++		cMatrixf mtxHead;
++		if(pCam is null || VRReadRealHead(pCam, mtxHead) == false) return 0.0f;
++		float fRealRoll = pCam.GetRoll();
++		pCam.SetRoll(7007.0f);
++		float fGameCam = pCam.GetMatrix().GetTranslation().y;
++		pCam.SetRoll(fRealRoll);
++		return cMath_Max(0.0f, fGameCam - mtxHead.GetTranslation().y);
++	}
++
++	//------------------------------------------------------------
++
++	// BunkerVR: the view eased up and down stairs and steps. The engine lifts the character up a step at its climb
++	// speed (3.5 m/s), or at once where it stalled at a step's edge, and the drawn body, which the view hangs on,
++	// follows from at most 12.5 cm behind (UpdateOrientation): left at that, on stairs the view rises in bursts, up to
++	// 5 cm in one frame. Here the feet's height (afFeetY) is followed by a critically damped spring over
++	// gfVRStairViewTime, worked out for the update's own time (the same at any update rate), and VRCameraPlace raises
++	// or lowers the view by the difference between it and the drawn body's (VRStairLift). Only the game's own up and
++	// down is eased: the real head moves the view on top of it as ever. A fall (in the air, falling faster than
++	// gfVRStairViewFallSpeed) is followed more and more closely, the spring's time eased down to gfVRStairViewFallTime
++	// over gfVRStairViewFallRamp (switched at once, the view would lurch to catch up); the player's own jump closely
++	// from its take-off, and anything else rising in the air faster than gfVRStairViewJumpRise over
++	// gfVRStairViewJumpRamp; either stays so until the view has caught up after landing (a landing is never floaty).
++	// Not eased: a jump to a place or a new level (farther than
++	// gfVRStairViewMost, or just after the body was moved at once, mfVRTeleportWait: the view put at the feet at
++	// once), ladders and anything else the drawn body isn't smoothed in (abSmooth), swimming, and where the game moves
++	// or holds the body itself (VRFollowStateOk: ledges, cutscenes, being thrown). Switched off, what lift is left is
++	// eased away over gfVRStairViewLeftTime (dropped where the body was moved at once or the view is placed otherwise);
++	// switched on, the ease starts from where the view is. So the view never jumps as it switches.
++	void VRStairView(float afFeetY, float afTimeStep, bool abSmooth)
++	{
++		cLuxPlayer@ pPlayer = cLux_GetPlayer();
++		iCharacterBody@ pCharBody = pPlayer !is null ? pPlayer.GetCharacterBody() : null;
++		bool bGround = pCharBody !is null && pCharBody.IsOnGround();
++		bool bCan = mbVRSeen && abSmooth && afTimeStep > 0.0f && mbAttached == false && mbCameraAnimation_Active == false &&
++			pPlayer !is null && VRFollowStateOk(pPlayer.GetCurrentStateId()) && pPlayer.GetCurrentMoveStateId() != eMoveState_Swim &&
++			mfVRTeleportWait <= 0.0f;
++		// How fast the feet go up and down (m/s; 0 for the first update after a pause in the updates).
++		float fRise = afTimeStep > 0.0f && mbVRStairFeetKnown ? (afFeetY - mfVRStairFeetWas) / afTimeStep : 0.0f;
++		mfVRStairFeetWas = afFeetY;
++		mbVRStairFeetKnown = afTimeStep > 0.0f;
++		if(bCan == false)
++		{
++			// Off: the lift left eased away while the view is still placed by VRCameraPlace; dropped at a jump to a
++			// place, attached or in a camera animation (the view is placed by those).
++			if(mbVRStairOn) mfVRStairLeft = mfVRStairY - mvPrevSmoothPos.y;
++			if(afTimeStep > 0.0f && mfVRTeleportWait <= 0.0f && mbAttached == false && mbCameraAnimation_Active == false)
++				mfVRStairLeft *= 1.0f - BunkerVR_EaseShare(afTimeStep, gfVRStairViewLeftTime);
++			else
++				mfVRStairLeft = 0.0f;
++			mfVRStairY = afFeetY;
++			mfVRStairSpeed = 0.0f;
++			mbVRStairOn = false;
++			mbVRStairFalling = false;
++			return;
++		}
++		if(mbVRStairOn == false || cMath_Abs(afFeetY - mfVRStairY) > gfVRStairViewMost)
++		{
++			// On again: from where the view is (the drawn body's place and the lift left), at rest. Too far from the
++			// feet (a jump to a place): at the feet.
++			mfVRStairY = mbVRStairOn ? afFeetY : mvPrevSmoothPos.y + mfVRStairLeft;
++			if(cMath_Abs(afFeetY - mfVRStairY) > gfVRStairViewMost) mfVRStairY = afFeetY;
++			mfVRStairLeft = 0.0f;
++			mfVRStairSpeed = 0.0f;
++			mbVRStairOn = true;
++			mbVRStairFalling = false;
++			return;
++		}
++		// A jump of the player's own (MoveState_Normal Jump: "BunkerVR_Jumps"): followed closely from its take-off, the
++		// view still at the feet (the engine says "on the ground" for some frames after it, so the rise in the air
++		// below would be seen late, the view already behind).
++		int lJumps = cScript_GetGlobalVarInt("BunkerVR_Jumps");
++		bool bJumped = mlVRStairJumps >= 0 && lJumps != mlVRStairJumps;
++		mlVRStairJumps = lJumps;
++		if(bJumped)
++		{
++			mbVRStairFalling = true;
++			mbVRStairAir = false;
++			mfVRStairFallRamp = gfVRStairViewJumpRamp;
++			mfVRStairFallFor = cMath_Abs(mfVRStairY - afFeetY) < 0.02f ? gfVRStairViewJumpRamp : 0.0f;
++		}
++		else if(mbVRStairFalling == false && bGround == false && (fRise < -gfVRStairViewFallSpeed || fRise > gfVRStairViewJumpRise))
++		{
++			mbVRStairFalling = true;
++			mbVRStairAir = false;
++			mfVRStairFallFor = 0.0f;
++			mfVRStairFallRamp = fRise > 0.0f ? gfVRStairViewJumpRamp : gfVRStairViewFallRamp;
++		}
++		if(bGround == false) mbVRStairAir = true;
++		float fTime = gfVRStairViewTime;
++		if(mbVRStairFalling)
++		{
++			mfVRStairFallFor += afTimeStep;
++			fTime = gfVRStairViewTime + (gfVRStairViewFallTime - gfVRStairViewTime) * BunkerVR_SmoothStep(0.0f, mfVRStairFallRamp, mfVRStairFallFor);
++		}
++		// (The spring's exact step for a target held still over the update.)
++		float fOmega = 2.0f / fTime;
++		float fGap = mfVRStairY - afFeetY;
++		float fFade = cMath_Pow(2.718281828f, -fOmega * afTimeStep);
++		float fCarry = (mfVRStairSpeed + fOmega * fGap) * afTimeStep;
++		mfVRStairY = afFeetY + (fGap + fCarry) * fFade;
++		mfVRStairSpeed = (mfVRStairSpeed - fOmega * fCarry) * fFade;
++		mbVRStairOn = true;
++		// (Done once on the ground again after being in the air, caught up; a jump that never left the ground, as under a
++		// low ceiling, after half a second.)
++		if(mbVRStairFalling && bGround && ((mbVRStairAir && cMath_Abs(mfVRStairY - afFeetY) < 0.01f) || (mbVRStairAir == false && mfVRStairFallFor > 0.5f)))
++			mbVRStairFalling = false;
++	}
++
++	// BunkerVR: how far VRStairView puts the view above where the drawn body's place has it (below it: minus);
++	// 0 where it doesn't place the view.
++	float VRStairLift()
++	{
++		return mbVRStairOn ? mfVRStairY - mvPrevSmoothPos.y : mfVRStairLeft;
++	}
++
++	// BunkerVR: the height of the feet under the view: the character's (afFeetY), as VRStairView eases them.
++	float VRViewFeetY(float afFeetY)
++	{
++		return mbVRStairOn ? mfVRStairY : afFeetY + mfVRStairLeft;
 +	}
 +
 +	//------------------------------------------------------------
@@ -2401,11 +2865,12 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +	// under the real head from where the camera would have been (UpdateOrientation), so that its
 +	// head is where the real head is. (Placed from the camera as returned here, the body would be
 +	// 15 cm too far forwards: the real eyes 26 cm behind its head in a knockdown.)
++	// On stairs and steps the height is eased (VRStairLift, VRStairView).
 +	cVector3f VRCameraPlace(const cVector3f &in avOnHead, const cVector3f &in avCamPosAdd)
 +	{
 +		mvVRCamLeftOut = cVector3f(0.0f);
 +		if(mbVRSeen == false || mbAttached) return avOnHead;
-+		cVector3f vPlace = cVector3f(mvPrevSmoothPos.x - mvVRFollow.x + avCamPosAdd.x, avOnHead.y, mvPrevSmoothPos.z - mvVRFollow.z + avCamPosAdd.z);
++		cVector3f vPlace = cVector3f(mvPrevSmoothPos.x - mvVRFollow.x + avCamPosAdd.x, avOnHead.y + VRStairLift(), mvPrevSmoothPos.z - mvVRFollow.z + avCamPosAdd.z);
 +		mvVRCamLeftOut = cVector3f(avOnHead.x - vPlace.x, 0.0f, avOnHead.z - vPlace.z);
 +		return vPlace;
 +	}
@@ -3033,7 +3498,13 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		cLuxProp@ pItem = cLux_ID_Prop(apPull.m_idFlying);
 +		if(pItem is null || pItem.IsActive() == false)
 +		{
-+			apPull.m_idFlying = tID_Invalid; // (gone already: picked up some other way)
++			// (Gone already: picked up some other way. It bumps into the player again, as at the end of a flight.)
++			for(int i = 0; pItem !is null && i < pItem.GetBodyNum(); ++i)
++			{
++				iPhysicsBody@ pBody = pItem.GetBody(i);
++				if(pBody !is null) pBody.SetCollideCharacter(true);
++			}
++			apPull.m_idFlying = tID_Invalid;
 +			return;
 +		}
 +		apPull.mfFlying += afTimeStep;
@@ -3275,14 +3746,15 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		pCam.GetMatrix();
 +		
 +		// More news (special roll value 7026): what the hands hold, as far as
-+		// the mod's hand moves are concerned (right: 2 = bandage or medkit,
-+		// 3 = grenade, 4 = lighter, 5 = an empty or full bottle, 6 = torch;
++		// the mod's hand moves are concerned (right: 2 = bandage, 3 = grenade,
++		// 4 = lighter, 5 = an empty or full bottle, 6 = torch, 7 = medkit;
 +		// left: 1 = flashlight), and how far the game has faded its picture
 +		// to black. The game draws a fade as part of its flat interface, so
 +		// the mod has to darken the eyes' pictures itself.
 +		tString sHeldLow = cString_ToLowerCase(sHeld);
 +		float fRightKind = 0.0f;
-+		if(sHeld == "Bandage" || sHeld == "Medkit")						fRightKind = 2.0f;
++		if(sHeld == "Bandage")											fRightKind = 2.0f;
++		else if(sHeld == "Medkit")										fRightKind = 7.0f;	// (worked by the body script: VRUpdateMedkit in Prop_PlayerBody.hps)
 +		else if(cString_GetFirstStringPos(sHeldLow, "grenade") >= 0)	fRightKind = 3.0f;
 +		else if(sHeld == "Lighter")										fRightKind = 4.0f;
 +		else if(sHeld == "EmptyBottle" || sHeld == "FuelBottle")		fRightKind = 5.0f;
@@ -3302,10 +3774,9 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		if(sHeld == "Flare" && mbVRFlareLitNow == false) lRightMoves = 0; // (the flare is thrown only once its cord is pulled: VRUpdateFlare)
 +		mbVRThrowableHeld = (fRightKind > 2.5f && fRightKind < 3.5f) || (lRightMoves & glBunkerVR_Move_Throw) != 0;
 +		
-+		// (The darkening also takes in a head in a wall (VRFollowHead), a
-+		// knockdown, a kill or a death faded to black, the blink of the gentle
-+		// ones (VRGentleView), and a Beast kill's blink and end (VRUpdateKillView).)
-+		pCam.SetPosition(cVector3f(fRightKind, fLeftKind, cMath_Max(cMath_Max(cMath_Max(cMath_Max(cLux_GetEffectHandler().GetFadeAlpha(), mfVRHeadFade), mfVRRoughFade), mfVRGentleDark), mfVRKillDark)));
++		// (The darkening also takes in a head in a wall (VRFollowHead), and a knockdown's, a kill's or a death's
++		// blinks and darkness (VRUpdateKillView).)
++		pCam.SetPosition(cVector3f(fRightKind, fLeftKind, cMath_Max(cMath_Max(cLux_GetEffectHandler().GetFadeAlpha(), mfVRHeadFade), mfVRKillDark)));
 +		pCam.SetRoll(7026.0f);
 +		pCam.GetMatrix();
 +		
@@ -3379,7 +3850,7 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +	{
 +		if(mbVRThrowableHeld == false)
 +		{
-+			mVRThrowHand.mlHandTrailCount = 0;
++			mVRThrowHand.mTrail.Clear();
 +			return;
 +		}
 +		if(afTimeStep < 0.0001f) return;
@@ -3400,10 +3871,7 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		cVector3f vHand = pCam.GetMatrix().GetTranslation();
 +		pCam.SetRoll(fRealRoll);
 +		
-+		for(int i = 0; i < 19; ++i) mVRThrowHand.mvHandTrail[i] = mVRThrowHand.mvHandTrail[i + 1];
-+		mVRThrowHand.mvHandTrail[19] = vHand;
-+		if(mVRThrowHand.mlHandTrailCount < 20) mVRThrowHand.mlHandTrailCount++;
-+		mVRThrowHand.mfHandTrailStep = afTimeStep;
++		mVRThrowHand.mTrail.Add(vHand);
 +	}
 +	
 +	//------------------------------------------------------------
@@ -3413,15 +3881,37 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +	// in the normal state, or given up after gfVRBodySlotWait and reported as busy.
 +	void VRDoBodySlotWait(float afTimeStep)
 +	{
-+		if(mfVRHipWait <= 0.0f && mfVRShoulderWait <= 0.0f) return;
++		if(mfVRHipWait <= 0.0f && mfVRShoulderWait <= 0.0f && mfVRLightWait <= 0.0f) return;
 +		cLuxPlayer@ pPlayer = cLux_GetPlayer();
 +		if(pPlayer is null)
 +		{
 +			mfVRHipWait = 0.0f;
 +			mfVRShoulderWait = 0.0f;
++			mfVRLightWait = 0.0f;
 +			return;
 +		}
 +		bool bNormal = pPlayer.GetCurrentStateId() == ePlayerState_Normal;
++		// The lantern switched at the chest while an item was held ready (command 5): once normal, as the game's own
++		// key does there, with the buzz of its outcome; not normal in time: the soft tap.
++		if(mfVRLightWait > 0.0f)
++		{
++			mfVRLightWait -= afTimeStep;
++			if(bNormal)
++			{
++				bool bCan = Player_GetCanUseLightSource();
++				if(bCan) Player_ToggleLightSource();
++				VRBuzzHand(0, bCan ? 0.05f : 0.03f, bCan ? 0.6f : 0.3f);
++				float fWaited = gfVRBodySlotWait - mfVRLightWait;
++				VRLightNote(bCan ? "the lantern switched once the item's state was left (" + fWaited + " s)" : "the lantern cannot be used now");
++				mfVRLightWait = 0.0f;
++			}
++			else if(mfVRLightWait <= 0.0f)
++			{
++				mfVRLightWait = 0.0f;
++				VRBuzzHand(0, 0.03f, 0.3f);
++				VRLightNote("the item's state was not left in time: busy");
++			}
++		}
 +		if(mfVRHipWait > 0.0f)
 +		{
 +			mfVRHipWait -= afTimeStep;
@@ -3544,12 +4034,18 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		}
 +		if(vFlames.length() == 0) return;
 +
-+		// Spilled fuel.
-+		array<iLuxEntity@> vSpills;
-+		pMap.GetEntityArray("*", eLuxEntityType_Prop, "cScrPropFuelSpill", vSpills);
-+		for(uint i = 0; i < vSpills.length(); ++i)
++		// Spilled fuel. (Listed once a second, as the pull's pick-ups are: each listing walks the whole level, and
++		// this runs ten times a second while a flame is out. A spill made since is found within the second.)
++		float fNow = float(cEngine_GetGameTime());
++		if(fNow - mfVRSpillListTime > 1.0f || fNow < mfVRSpillListTime)
 +		{
-+			iLuxEntity@ pSpill = vSpills[i];
++			mfVRSpillListTime = fNow;
++			mvVRSpillList.resize(0);
++			pMap.GetEntityArrayID("*", eLuxEntityType_Prop, "cScrPropFuelSpill", mvVRSpillList);
++		}
++		for(uint i = 0; i < mvVRSpillList.length(); ++i)
++		{
++			iLuxEntity@ pSpill = cLux_ID_Entity(mvVRSpillList[i]);
 +			if(pSpill is null) continue;
 +			cMeshEntity@ pMesh = pSpill.GetMeshEntity();
 +			if(pMesh is null) continue;
@@ -4089,8 +4585,8 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		mbVRTapNearNow = bNear;
 +		mvVRTapHintAt = vEnd;
 +
-+		// The left hand: a fresh squeeze at the handle takes it (the left hand holding nothing of the game's); let go,
-+		// or pulled away from the tap, it lets go.
++		// The left hand: a fresh squeeze at the handle takes it (the left hand holding nothing of the game's, or the
++		// lantern: VRLeftHandFreeToWork); let go, or pulled away from the tap, it lets go.
 +		float fCurl = BunkerVR_HandCurl(0);
 +		bool bSqueeze = fCurl > (mbVRTapSqueezeWas ? gfVRLidLetGo : gfVRLidSqueeze);
 +		bool bFresh = bSqueeze && mbVRTapSqueezeWas == false;
@@ -4099,7 +4595,7 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		float fArmScale;
 +		bool bPalm = BunkerVR_ReadFollowedPalm(0, mtxPalm, fArmScale);
 +		cVector3f vPalm = mtxPalm.GetTranslation();
-+		if(mbVRTapHeld == false && bFresh && bPalm && bNear && Item_GetHeldType(eItemHandlerHand_Left) == "")
++		if(mbVRTapHeld == false && bFresh && bPalm && bNear && VRLeftHandFreeToWork())
 +		{
 +			float fNear = BunkerVR_DistanceToSegment(vPalm, vHub, vEnd);
 +			if(cMath_Abs(fNow - cScript_GetGlobalVarFloat("BunkerVR_IndexTipTime0")) < 0.25f)
@@ -5537,7 +6033,9 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		if(pCan.GetID() != m_idVRFuelSplashCan)
 +		{
 +			m_idVRFuelSplashCan = pCan.GetID();
-+			mlVRFuelSplashes = 0;
++			// (The splashes already thrown from this can are kept by its item: each take-out makes the can in the hand
++			// anew, and a can put away after a splash or two would come back full.)
++			mlVRFuelSplashes = cScript_GetGlobalVarInt(VRFuelSplashesVar(Item_GetHeld(eItemHandlerHand_Right)));
 +			mvVRFuelLastSpill = cVector3f(100000.0f);
 +			mbVRFuelOpeningKnown = false;
 +			mVRFuelShove.Reset();
@@ -5749,10 +6247,18 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		Log("BunkerVR fuel: " + asText + "\n");
 +	}
 +
++	// BunkerVR: the global variable that keeps how many splashes a fuel can's item has thrown (by its item ID: each can
++	// its own, kept as the can is put away and taken out again).
++	tString VRFuelSplashesVar(const tString &in asItemID)
++	{
++		return "BunkerVR_FuelSplashes_" + asItemID;
++	}
++
 +	// BunkerVR: one splash of fuel from the can (see VRUpdateFuelSplash).
 +	void VRFuelSplash(cLuxMap@ apMap, cLuxProp@ apCan, const cMatrixf &in a_mtxOpening, const cVector3f &in avVelocity)
 +	{
 +		mlVRFuelSplashes++;
++		cScript_SetGlobalVarInt(VRFuelSplashesVar(Item_GetHeld(eItemHandlerHand_Right)), mlVRFuelSplashes); // (kept by the can's item)
 +		mlVRFuelSpills++;
 +		cParticleSystem@ pSplash = apCan.CreateParticleSystem("VRFuelSplash_" + mlVRFuelSpills, "fuel_throw.ps", true, false);
 +		if(pSplash !is null) pSplash.SetWorldMatrix(a_mtxOpening);
@@ -5762,18 +6268,39 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		cVR_HintUsed("fuel_splash");
 +		cScript_SetGlobalVarBool("HasUsedFuelItem", true); // (as the game's throw)
 +
-+		// Where it lands: along the flick's level way, as far as it was fast
-+		// (short of a wall), then down onto what is below.
++		// Where it lands: along the throw's level way, as far as its arc from the opening carries it
++		// (BunkerVR_FuelSplashDistance: the opening's height over the floor the player stands on; a ray down from the
++		// opening would meet the can or the player's own body), short of a wall, then down onto what is below.
 +		float fSpeed = avVelocity.Length();
 +		cVector3f vDir = cMath_Vector3Normalize(cVector3f(avVelocity.x, 0.0f, avVelocity.z));
-+		float fReach = BunkerVR_FuelSplashReach(fSpeed);
-+		cVector3f vFrom = a_mtxOpening.GetTranslation() + vDir * 0.15f; // (clear of the can)
 +		float fHitDist = 0.0f;
 +		cVector3f vHitNrm = cVector3f(0.0f, 1.0f, 0.0f);
++		iCharacterBody@ pCharBody = cLux_GetPlayer().GetCharacterBody();
++		float fHeight = pCharBody !is null ? cMath_Max(a_mtxOpening.GetTranslation().y - pCharBody.GetFeetPosition().y, 0.1f) : 1.0f;
++		float fReach = BunkerVR_FuelSplashDistance(avVelocity, fHeight);
++		// (Clear of the can, as far as the throw goes.)
++		cVector3f vFrom = a_mtxOpening.GetTranslation() + vDir * cMath_Min(0.15f, fReach);
++		fReach = cMath_Max(fReach - 0.15f, 0.01f);
 +		iPhysicsBody@ pWall = cLux_GetClosestBody(vFrom, vDir, fReach, fHitDist, vHitNrm);
 +		if(pWall is null) fHitDist = fReach;
 +		cVector3f vTarget = vFrom + vDir * cMath_Max(fHitDist - 0.1f, 0.0f);
-+		iPhysicsBody@ pGround = cLux_GetClosestBody(vTarget, cVector3f_Down, 100.0f, fHitDist, vHitNrm);
++		// (Down past the player's own body: a throw at the feet would otherwise land on it.)
++		iPhysicsBody@ pGround = null;
++		float fDown = 0.0f;
++		for(int lTry = 0; lTry < 4; ++lTry)
++		{
++			float fHit = 0.0f;
++			iPhysicsBody@ pHit = cLux_GetClosestBody(vTarget + cVector3f_Down * fDown, cVector3f_Down, 100.0f - fDown, fHit, vHitNrm);
++			if(pHit is null) break;
++			if(pHit.IsCharacter())
++			{
++				fDown += fHit + 0.01f;
++				continue;
++			}
++			@pGround = pHit;
++			fHitDist = fDown + fHit;
++			break;
++		}
 +		tString sWhere = "nothing below it";
 +		if(pGround !is null)
 +		{
@@ -5803,7 +6330,9 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +			}
 +			else sWhere += " (within 0.75 m of the last: no new spill)";
 +		}
-+		Log("BunkerVR: FUEL: splash " + mlVRFuelSplashes + " of " + glBunkerVR_FuelSplashes + " by a throw at " + BunkerVR_Fixed(fSpeed, 1) + " m/s: " + sWhere + "\n");
++		float fPitch = cMath_ToDeg(cMath_ATan2(avVelocity.y, cVector3f(avVelocity.x, 0.0f, avVelocity.z).Length()));
++		Log("BunkerVR: FUEL: splash " + mlVRFuelSplashes + " of " + glBunkerVR_FuelSplashes + " by a throw at " + BunkerVR_Fixed(fSpeed, 1) + " m/s, " +
++			int(cMath_Abs(fPitch) + 0.5f) + " degrees " + (fPitch < 0.0f ? "down" : "up") + ", from " + BunkerVR_Fixed(fHeight, 2) + " m up: " + sWhere + "\n");
 +
 +		// The can empty: used up, as after the game's own throw.
 +		if(mlVRFuelSplashes >= glBunkerVR_FuelSplashes)
@@ -5838,6 +6367,33 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		tString sHand = bFlare ? Item_GetHeldEntity(eItemHandlerHand_Right) : "";
 +		tString sLit = cScript_GetGlobalVarString("BunkerVR_FlareLit");
 +		mbVRFlareLitNow = false;
++		// A flare carried burning out of the last level (VRFlareAtLeave): lit again once the hand has it.
++		if(msVRFlareCarryItem != "")
++		{
++			mfVRFlareCarryWait += afTimeStep;
++			if(sLit == "" && bFlare && Item_GetHeld(eItemHandlerHand_Right) == msVRFlareCarryItem && pMap.GetEntityByName(sHand) !is null)
++			{
++				cScript_SetGlobalArgFloat(0, mfVRFlareCarryBurnt);
++				cScript_RunGlobalFunc("State_UsingFlare", "", "_Global_VRIgniteCarried");
++				sLit = cScript_GetGlobalVarString("BunkerVR_FlareLit");
++				VRFlareNote(sLit != "" ? "the flare carried from the last level burns on in the hand (" + int(mfVRFlareCarryBurnt) + " s burned)" :
++										 "the flare carried from the last level could not be lit again");
++				msVRFlareCarryItem = "";
++				if(sLit == "") return;
++			}
++			else if(mfVRFlareCarryWait > gfVRFlareCarryWait)
++			{
++				// (It was burning: used up, as a flare let go of burning is, not kept as a fresh one in the pockets. Left
++				// as it is should it be in the hand after all, unlit.)
++				iScrItemHandler_Interface@ pVRItems = cast<iScrItemHandler_Interface>(cLux_GetUserModuleFromID(eModuleType_Custom_ItemHandler));
++				bool bVRThere = pVRItems !is null && pVRItems.GetItemByID(msVRFlareCarryItem) !is null;
++				bool bVRHeld = Item_GetHeld(eItemHandlerHand_Right) == msVRFlareCarryItem;
++				if(bVRThere && bVRHeld == false) Item_RemoveFromInventory(msVRFlareCarryItem);
++				VRFlareNote("the flare carried from the last level is not back in the hand: " +
++							(bVRHeld ? "in the hand unlit, left as it is" : (bVRThere ? "used up" : "its item already gone")));
++				msVRFlareCarryItem = "";
++			}
++		}
 +		if(sLit != "")
 +		{
 +			iLuxEntity@ pLit = pMap !is null ? pMap.GetEntityByName(sLit) : null;
@@ -6164,7 +6720,8 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +			msVRSlotCheckedID = sSlotHeld;
 +			mbVRSlotCheckedTakes = VRChestSlotTakes(sSlotHeld);
 +		}
-+		cVR_HintCarried(mbVRSlotCheckedTakes ? (mlVRHintCarried | 64) : mlVRHintCarried);
++		// (And, every update, whether the bandage in the right hand would be refused now: then it is not pulled open.)
++		cVR_HintCarried((mbVRSlotCheckedTakes ? (mlVRHintCarried | 64) : mlVRHintCarried) | (VRBandageRefused() ? 128 : 0));
 +
 +		bool bNormal = pPlayer.GetCurrentStateId() == ePlayerState_Normal;
 +		tString sRight = Item_GetHeldType(eItemHandlerHand_Right);
@@ -6263,13 +6820,36 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		}
 +	}
 +
++	// BunkerVR: would the bandage in the right hand be refused now? The game's own
++	// rule (ItemCallbacks.hps CanUseOnSelf), without its words: not hurt, or with
++	// the hardcore health system not bleeding (or hardly hurt). Pulled open, it
++	// would only be wound for nothing (vr.cpp: then its roll stays in).
++	bool VRBandageRefused()
++	{
++		if(Item_GetHeldType(eItemHandlerHand_Right) != "Bandage") return false;
++		float fHealth = Player_GetHealth();
++		if(fHealth >= 1.0f) return true;
++		return GameDifficulty_GetSettingValueByID_Bool(eGameDifficultySetting_HardcoreHealthSystem) && (Player_GetBleedingStopped() || fHealth > 0.9f);
++	}
++
 +	// BunkerVR: the hints the item in the right hand (asType, apThing) asks of a
 +	// hand (alHand), in order, with where each is (see VRUpdateHints).
 +	void VRHintsForItem(int alHand, const tString &in asType, const tString &in asLeftType, iLuxEntity@ apThing, array<tString> &inout avKeys, array<cVector3f> &inout avAt)
 +	{
 +		cVector3f vThing = apThing.GetPosition();
 +		bool bLeftFree = asLeftType == "";
-+		if(asType == "Wrench")
++		bool bLeftWorks = bLeftFree || asLeftType == "DynamoLantern"; // (a cork or the tap's lever: VRLeftHandFreeToWork)
++		if(asType == "Medkit")
++		{
++			// (The body script says which step's hint and where, every update: VRUpdateMedkit in Prop_PlayerBody.hps.)
++			float fAge = float(cEngine_GetGameTime()) - cScript_GetGlobalVarFloat("BunkerVR_MedkitHintTime");
++			if(fAge < -0.001f || fAge > 0.25f || cScript_GetGlobalVarInt("BunkerVR_MedkitHintHand") != alHand) return;
++			tString sKey = cScript_GetGlobalVarString("BunkerVR_MedkitHint");
++			if(sKey == "") return;
++			avKeys.push_back(sKey);
++			avAt.push_back(cScript_GetGlobalVarVector3f("BunkerVR_MedkitHintAt"));
++		}
++		else if(asType == "Wrench")
 +		{
 +			if(alHand != 1) return;
 +			avKeys.push_back(mbVRWrenchOn ? "wrench_turn" : "wrench_fit");
@@ -6305,7 +6885,7 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +			if(m_idVRPourVessel != apThing.GetID()) return;
 +			if(mbVRLidOff == false)
 +			{
-+				if(alHand == 0 && bLeftFree)
++				if(alHand == 0 && bLeftWorks)
 +				{
 +					avKeys.push_back("lid_open");
 +					avAt.push_back(mvVRHintOpening);
@@ -6332,7 +6912,7 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		else if(asType == "EmptyBottle" || asType == "EmptyMolotovCocktail")
 +		{
 +			// (At the fuel tap: its lever's handle, for the left hand; VRUpdateFuelTap.)
-+			if(alHand == 0 && bLeftFree && mbVRTapNearNow && mbVRTapHeld == false)
++			if(alHand == 0 && bLeftWorks && mbVRTapNearNow && mbVRTapHeld == false)
 +			{
 +				avKeys.push_back("tap_turn");
 +				avAt.push_back(mvVRTapHintAt);
@@ -7629,6 +8209,13 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		cLuxMap@ pMap = cLux_GetCurrentMap();
 +		cCamera@ pCam = cLux_GetPlayer().GetCamera();
 +		if(pMap is null || pCam is null) return;
++		// (The mask was in the hand as the last level was left (VRMadeThingsAtLeave): what the right hand held before
++		// it is given back here, in play in the new level, not while the old one is being left.)
++		if(mbVRMaskGiveBackOnArrival)
++		{
++			mbVRMaskGiveBackOnArrival = false;
++			VRMaskGiveBack();
++		}
 +		bool bAsked = cScript_GetGlobalVarInt("BunkerVR_MaskAsked") == 1;
 +		if(bAsked) cScript_SetGlobalVarInt("BunkerVR_MaskAsked", 0);
 +		bool bOn = Player_GetGasMaskEquipped();
@@ -7784,6 +8371,7 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +			return;
 +		}
 +		Entity_SetInteractionDisabled(sName, true);
++		pMask.SetScriptableIsSaved(false); // (kept out of saves, as the hands' other made things: Prop_PlayerBody.hps VRMakeNamed)
 +		m_idVRHandMask = pMask.GetID();
 +		mlVRMaskHand = alHand;
 +		mbVRMaskGripped = abGripped;
@@ -7975,7 +8563,7 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +			}
 +			return;
 +		}
-+		if(bFresh == false || Item_GetHeldType(eItemHandlerHand_Left) != "") return;
++		if(bFresh == false || VRLeftHandFreeToWork() == false) return;
 +
 +		// The squeeze begun at its opening?
 +		cMatrixf mtxPalm;
@@ -7998,6 +8586,15 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		VRBuzzHand(0, 0.03f, 0.5f);
 +		VRBuzzHand(1, 0.02f, 0.3f);
 +		Log("BunkerVR: the left hand opens the " + (abCan ? "fuel can's lid" : "fuel bottle's cork") + " (" + int(fNear * 100.0f + 0.5f) + " cm from its opening)\n");
++	}
++
++	// BunkerVR: may the left hand take a cork, a lid or the fuel tap's lever? Empty, or holding the lantern: the
++	// lantern hangs from the palm by its handle, the thumb and first finger free (as a lamp is held while a door is
++	// opened). With it, a full bottle could not be opened at all while the lantern lit the way, and nothing said why.
++	bool VRLeftHandFreeToWork()
++	{
++		tString sLeft = Item_GetHeldType(eItemHandlerHand_Left);
++		return sLeft == "" || sLeft == "DynamoLantern";
 +	}
 +
 +	// BunkerVR: the molotov in the right hand, or null.
@@ -8041,7 +8638,7 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +	// BunkerVR: things done with the hands instead of buttons. The VR mod
 +	// watches the hands and asks for these (special roll value 7016, second
 +	// number):
-+	//   4  the bandage or medkit in the right hand has been wound around the left forearm three times: use it
++	//   4  the bandage in the right hand has been wound around the left forearm three times: use it
 +	//  10  the bandage was pulled out of its tin (hands pulled apart)
 +	//  11  the bandage has gone once more around the left forearm
 +	//   5  take out / put away the flashlight
@@ -8070,7 +8667,6 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		{
 +			// The health item's own script does it (see _Global_VRUseNow there).
 +			cScript_RunGlobalFunc("State_UsingHealthItem", "", "_Global_VRUseNow");
-+			mlVRBandageTurn = 0;
 +		}
 +		else if(alCommand == 12)
 +		{
@@ -8080,31 +8676,46 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +			// VRDoPutAwayWait, straight after this in the same update).
 +			if(Item_GetHeld(eItemHandlerHand_Right) != "") mfVRPutAwayWait = 2.0f;
 +		}
-+		else if(alCommand == 10 || alCommand == 11)
++		else if(alCommand == 10)
 +		{
-+			// Sounds only: the cloth coming out of the tin, and each time it
-+			// goes around the arm.
-+			tString sType = Item_GetHeldType(eItemHandlerHand_Right);
-+			if(sType != "Bandage" && sType != "Medkit") return;
-+			tString sFolder = sType == "Medkit" ? "player/tools/medkit/ready/" : "player/tools/bandage/ready/";
-+
-+			if(alCommand == 10)
-+			{
-+				mlVRBandageTurn = 0;
-+				Sound_PlayGui(sFolder + "focus_start_1", 1.0f, eSoundEntryType_GuiWorld);
-+			}
-+			else
-+			{
-+				mlVRBandageTurn++;
-+				int lSound = 1 + (mlVRBandageTurn % 3);
-+				Sound_PlayGui(sFolder + "focus_stop_" + lSound, 1.0f, eSoundEntryType_GuiWorld);
-+			}
++			// A sound only: the cloth coming out of the tin (heard as the player's own, as the mod's other hand
++			// sounds; the cloth winding round the arm is heard as it goes: Prop_PlayerBody.hps VRWrapSet).
++			if(Item_GetHeldType(eItemHandlerHand_Right) != "Bandage") return;
++			Sound_CreateAtEntity("BunkerVR_BandageOut", "player/tools/bandage/ready/focus_start_1", "player", 0.0f, false);
++		}
++		else if(alCommand == 11)
++		{
++			// (Each whole turn round the arm: heard a quarter turn at a time as it is wound now.)
 +		}
 +		else if(alCommand == 5)
 +		{
 +			bool bAiming = lState == ePlayerState_Custom_UsingGun_Aim || lState == ePlayerState_Custom_UsingShotgun_Aim;
 +			bool bReloading = lState == ePlayerState_Custom_UsingGun_Reload || lState == ePlayerState_Custom_UsingShotgun_Reload;
-+			if(lState != ePlayerState_Normal && bAiming == false && bReloading == false) return;
++			if(lState != ePlayerState_Normal && bAiming == false && bReloading == false)
++			{
++				// An item the mod keeps ready in the right hand (its own state; the kinds the news reports as 5 or 9,
++				// VRSendNews): the mod lets go of its ready button for a moment, and the lantern is switched once the
++				// game is back in its normal state (VRDoBodySlotWait). Not with an item whose state takes the left
++				// hand (it would take the lantern away again as it is readied), nor without the lantern: a soft tap.
++				// The mod has already buzzed at the chest for anything else in the right hand, or nothing there
++				// (another state: a ladder, a door).
++				tString sRightType = Item_GetHeldType(eItemHandlerHand_Right);
++				bool bKeptReady = sRightType != "" && sRightType != "Bandage" && sRightType != "Medkit" && sRightType != "Lighter" &&
++								  sRightType != "Torch" && cString_GetFirstStringPos(cString_ToLowerCase(sRightType), "grenade") < 0;
++				if(bKeptReady == false) return;
++				bool bLantern = Item_GetHeldType(eItemHandlerHand_Left) == "DynamoLantern" || ItemType_GetCountInInventory("DynamoLantern") > 0;
++				if(VRStateTakesLeftHand(lState) || bLantern == false || Player_GetCanUseLightSource() == false)
++				{
++					VRBuzzHand(0, 0.03f, 0.3f);
++					VRLightNote("refused with the " + sRightType + " held ready (" + (bLantern == false ? "no lantern" :
++								VRStateTakesLeftHand(lState) ? "its use takes the left hand" : "the lantern cannot be used now") + ")");
++					return;
++				}
++				cVR_LetGoOfReady();
++				mfVRLightWait = gfVRBodySlotWait;
++				VRLightNote("asked for with the " + sRightType + " held ready: its ready button let go of");
++				return;
++			}
 +			// The gun open (its reload state): the lamp can only be put away, as
 +			// the game itself does before loading (Item_Unequip, see
 +			// PlayerState_UsingWeapon_Reload_Base.hps), so the lamp can still be
@@ -8164,28 +8775,13 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +			if(sThrowState == "") return;
 +			
 +			// It leaves with the speed the hand had at its fastest moment of
-+			// the last 20 updates (people let go a little late, when the hand is already
-+			// slowing and dropping).
-+			cVector3f vThrow = cVector3f(0);
-+			if(mVRThrowHand.mlHandTrailCount > 3 && mVRThrowHand.mfHandTrailStep > 0.0001f)
-+			{
-+				int lFirst = 20 - mVRThrowHand.mlHandTrailCount;
-+				float fBest = -1.0f;
-+				for(int i = lFirst + 3; i < 20; ++i)
-+				{
-+					cVector3f vSpeed = (mVRThrowHand.mvHandTrail[i] - mVRThrowHand.mvHandTrail[i - 3]) / (mVRThrowHand.mfHandTrailStep * 3.0f);
-+					float fSpeed = vSpeed.Length();
-+					if(fSpeed > fBest)
-+					{
-+						fBest = fSpeed;
-+						vThrow = vSpeed;
-+					}
-+				}
-+			}
-+			vThrow = vThrow * mfVRThrowBoost;
++			// the last fifth of a second (people let go a little late, when the
++			// hand is already slowing and dropping): cBunkerVRHandTrail.ThrowSpeed.
++			float fPeak = 0.0f;
++			cVector3f vThrow = mVRThrowHand.mTrail.ThrowSpeed(mfVRThrowBoost, fPeak);
 +			float fThrow = vThrow.Length();
 +			if(fThrow > gfVRFreeHoldMaxThrowSpeed) vThrow = vThrow * (gfVRFreeHoldMaxThrowSpeed / fThrow);
-+			mVRThrowHand.mlHandTrailCount = 0;
++			mVRThrowHand.mTrail.Clear();
 +			
 +			// The item's own state makes the thrown thing (see _Global_VRThrowAs
 +			// in PlayerState_UsingThrowable.hps): as what the profile names (a
@@ -8216,11 +8812,9 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +			tString sThrowState = BunkerVR_ItemThrowState(sType);
 +			if(sThrowState == "" || (BunkerVR_ItemMoves(sType) & glBunkerVR_Move_LetGoPutsDown) == 0) return;
 +			
-+			// How the hand moves now: over its last three updates.
-+			cVector3f vHand = cVector3f(0);
-+			if(mVRThrowHand.mlHandTrailCount > 3 && mVRThrowHand.mfHandTrailStep > 0.0001f)
-+				vHand = (mVRThrowHand.mvHandTrail[19] - mVRThrowHand.mvHandTrail[16]) / (mVRThrowHand.mfHandTrailStep * 3.0f);
-+			mVRThrowHand.mlHandTrailCount = 0;
++			// How the hand moves now (cBunkerVRHandTrail.SpeedNow).
++			cVector3f vHand = mVRThrowHand.mTrail.SpeedNow();
++			mVRThrowHand.mTrail.Clear();
 +			
 +			Log("BunkerVR: the right hand puts down " + sType + " where it is, moving at " + vHand.Length() + " m/s (" + sThrowState + ")\n");
 +			cScript_SetGlobalArgVector3f(0, vHand);
@@ -8332,11 +8926,15 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		pCam.SetRoll(7005.0f);
 +		cVector3f vHead = pCam.GetMatrix().GetTranslation();
 +		pCam.SetRoll(fRealRoll);
-+		cVR_Say("report head: " + vHead.x + " " + vHead.y + " " + vHead.z + "; the view darkened " + int(mfVRHeadFade * 100.0f + 0.5f) +
++		// (Darkened: by the head in a wall, or by a knockdown's, a kill's or a death's blinks and darkness.)
++		cVR_Say("report head: " + vHead.x + " " + vHead.y + " " + vHead.z + "; the view darkened " + int(cMath_Max(mfVRHeadFade, mfVRKillDark) * 100.0f + 0.5f) +
 +			"%; the neck " + int(mfVRFollowFar * 100.0f + 0.5f) + " cm from the body");
 +		// (Real-body stealth: how low the player really is, and the Beast's sight range against them now.)
 +		cVR_Say("report stealth: low " + BunkerVR_Fixed(mfVRStealthLow, 2) + "; crouched " + (Player_GetCrouching() ? "yes" : "no") +
-+			"; the sight range x " + BunkerVR_Fixed(pPlayer.GetVisibilityRangeMul(), 2) + "; standing eyes " + BunkerVR_Fixed(mfVRStealthStandEye, 2) + " m");
++			(Player_GetCrawling() ? ", crawling" : "") +
++			"; the sight range x " + BunkerVR_Fixed(pPlayer.GetVisibilityRangeMul(), 2) + "; standing eyes " + BunkerVR_Fixed(mfVRStealthStandEye, 2) + " m" +
++			"; the view raised " + BunkerVR_Fixed(mfVRDuckLift, 2) + " (way " + mlVRDuckWay + ", the game's eyes " + BunkerVR_Fixed(mfVRDuckEyesLast, 2) +
++			", standing " + BunkerVR_Fixed(mfVRStandEye, 2) + ", the real head " + BunkerVR_Fixed(mfVRDuckRealLast, 2) + " under the camera; " + (mbVRPlayStanding ? "standing" : "seated") + ")");
 +		// (The creatures' sight at the real head's height.)
 +		cVR_Say("report sight: " + (mbVRSightOn ? "the real head counts" : "the game's own") + "; the real head " +
 +			BunkerVR_Fixed(mfVRSightUp, 3) + " m from the game's eye");
@@ -8349,14 +8947,22 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +
 +	// BunkerVR, for testing: the player put where the survey list says (cVR_SurveyNumber 0 to 2),
 +	// the feet at x, y, z, for an automated test run: to go and see a thing, or how far a floor
-+	// lies under it (the player falls from there as anyone would).
++	// lies under it (the player falls from there as anyone would). A fourth line, if there is
++	// one, turns the player by that many degrees (positive: to the left, as cMath_MatrixRotateY),
++	// as a snap turn does: a test faces a thing without the stick, which turns only with the
++	// game's window in front.
 +	void VRStandInMoveTo()
 +	{
-+		cLux_GetPlayer().GetCharacterBody();
 +		iCharacterBody@ pCharBody = cLux_GetPlayer().GetCharacterBody();
 +		if(pCharBody is null) return;
 +		cVR_SurveyName(0);
 +		pCharBody.SetFeetPosition(cVector3f(cVR_SurveyNumber(0), cVR_SurveyNumber(1), cVR_SurveyNumber(2)), false);
++		float fTurn = cVR_SurveyNumber(3);
++		if(fTurn != 0.0f)
++		{
++			cScript_SetGlobalVarFloat("BunkerVR_ViewJumpTime", float(cEngine_GetGameTime()));
++			pCharBody.SetYaw(pCharBody.GetYaw() + cMath_ToRad(fTurn) * mfVRYawSense);
++		}
 +	}
 +
 +	//------------------------------------------------------------
@@ -8369,23 +8975,26 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		cLuxMap@ pMap = cLux_GetCurrentMap();
 +		if(pMap is null) return;
 +		cVR_Say("things start");
-+		for(int lKind = 0; lKind < 6; ++lKind)
++		for(int lKind = 0; lKind < 8; ++lKind)
 +		{
 +			array<iLuxEntity@> vItems;
 +			if(lKind < 3) pMap.GetEntityArray("*", eLuxEntityType_Prop, lKind == 0 ? "cScrPropPickup" : (lKind == 1 ? "cScrPropReadable" : "cScrPropReadableDogTag"), vItems);
-+			else pMap.GetEntityArray("*", eLuxEntityType_Area, lKind == 3 ? "cScrAreaInteractAux" : (lKind == 4 ? "cScrAreaZoom" : "cScrAreaTrigger"), vItems);
++			else if(lKind < 6) pMap.GetEntityArray("*", eLuxEntityType_Area, lKind == 3 ? "cScrAreaInteractAux" : (lKind == 4 ? "cScrAreaZoom" : "cScrAreaTrigger"), vItems);
++			else pMap.GetEntityArray("*", eLuxEntityType_Prop, lKind == 6 ? "cScrPropGrab" : "cScrPropHeavyThrowable", vItems); // (the things the game's grab holds: and their mass)
 +			for(uint i = 0; i < vItems.length(); ++i)
 +			{
 +				iLuxEntity@ pItem = vItems[i];
 +				if(pItem is null || pItem.IsActive() == false) continue;
 +				if(lKind == 5 && pItem.HasPlayerInteractCallback() == false) continue;
-+				cMeshEntity@ pMesh = lKind < 3 ? pItem.GetMeshEntity() : null;
-+				iPhysicsBody@ pBody = lKind < 3 ? pItem.GetMainBody() : pItem.GetBody(0);
++				bool bProp = lKind < 3 || lKind > 5;
++				cMeshEntity@ pMesh = bProp ? pItem.GetMeshEntity() : null;
++				iPhysicsBody@ pBody = bProp ? pItem.GetMainBody() : pItem.GetBody(0);
 +				cBoundingVolume@ pBounds = pBody !is null ? pBody.GetBoundingVolume() : (pMesh !is null ? pMesh.GetBoundingVolume() : null);
 +				if(pBounds is null) continue;
 +				cVector3f vMiddle = pBounds.GetWorldCenter();
 +				cVector3f vSize = pBounds.GetMax() - pBounds.GetMin();
-+				cVR_Say("thing: " + lKind + " " + pItem.GetName() + " " + vMiddle.x + " " + vMiddle.y + " " + vMiddle.z + " " + vSize.x + " " + vSize.y + " " + vSize.z + " " + (pItem.GetInteractionDisabled() ? "disabled" : "open") + " " + (pBody !is null ? "body" : "nobody"));
++				cVR_Say("thing: " + lKind + " " + pItem.GetName() + " " + vMiddle.x + " " + vMiddle.y + " " + vMiddle.z + " " + vSize.x + " " + vSize.y + " " + vSize.z + " " + (pItem.GetInteractionDisabled() ? "disabled" : "open") + " " + (pBody !is null ? "body" : "nobody") +
++						(lKind > 5 && pBody !is null ? " mass " + pBody.GetMass() : ""));
 +			}
 +		}
 +		cVR_Say("things done");
@@ -8408,7 +9017,18 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		cVector3f vSize = pBounds.GetMax() - pBounds.GetMin();
 +		cVR_Say("where: " + sName + " " + vMiddle.x + " " + vMiddle.y + " " + vMiddle.z + " " + vSize.x + " " + vSize.y + " " + vSize.z +
 +				"; can be used " + (pThing.CanInteract(0, pBody) ? 1 : 0) + ", use switched off " + (pThing.GetInteractionDisabled() ? 1 : 0) +
-+				", collides " + (pBody.GetCollide() ? 1 : 0) + ", mass " + pBody.GetMass());
++				", collides " + (pBody.GetCollide() ? 1 : 0) + ", mass " + pBody.GetMass() +
++				", gravity " + (pBody.GetGravity() ? 1 : 0) + ", bumps into the player " + (pBody.GetCollideCharacter() ? 1 : 0));
++		// (A number lock: its code too, which the game sets afresh for each playthrough.)
++		array<iLuxEntity@> vLocks;
++		cLux_GetCurrentMap().GetEntityArray("*", eLuxEntityType_Prop, "cScrPropCombinationLock", vLocks);
++		for(uint i = 0; i < vLocks.length(); ++i)
++		{
++			if(vLocks[i] is null || vLocks[i].GetID() != pThing.GetID()) continue;
++			cScript_SetGlobalReturnString("");
++			cScript_RunGlobalFunc(sName, "cScrPropCombinationLock", "_Global_VRCombination");
++			cVR_Say("lock code: " + sName + " " + cScript_GetGlobalReturnString());
++		}
 +	}
 +
 +	//------------------------------------------------------------
@@ -8430,6 +9050,52 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		iLuxEntity@ pGrabThing = pGrabBody !is null ? cLux_GetBodyEntity(pGrabBody) : null;
 +		if(pGrabThing !is null) sHolds += (sHolds != "" ? "," : "") + pGrabThing.GetName();
 +		cVR_Say("touch: right " + (pTouched !is null ? pTouched.GetName() : "nothing") + " said " + int(fAge * 1000.0f) + " ms ago; held back " + int(vBack.Length() * 100.0f) + " cm; way " + int(vBack.x * 100.0f) + " " + int(vBack.y * 100.0f) + " " + int(vBack.z * 100.0f) + "; held " + Item_GetHeld(eItemHandlerHand_Right) + "; holds " + sHolds);
++	}
++
++	//------------------------------------------------------------
++
++	// BunkerVR, for testing: where the bones named on run\survey.txt's lines are in the item the right hand
++	// holds (the entity named on the first line instead, if there is one by that name), from the right palm: its
++	// own directions, in centimetres (x right, y up, z back), and how far the bone's own x, y and z point there.
++	void VRStandInHeldBones()
++	{
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		if(pMap is null) return;
++		tString sFirst = cVR_SurveyName(0);
++		iLuxEntity@ pThing = sFirst != "" ? pMap.GetEntityByName(sFirst) : null;
++		int lFirstBone = pThing !is null ? 1 : 0;
++		if(pThing is null) @pThing = pMap.GetEntityByName(Item_GetHeldEntity(eItemHandlerHand_Right));
++		cMeshEntity@ pMesh = pThing !is null ? pThing.GetMeshEntity() : null;
++		cMatrixf mtxPalm;
++		float fArmScale;
++		if(pMesh is null || BunkerVR_ReadFollowedPalm(1, mtxPalm, fArmScale) == false)
++		{
++			cVR_Say("bones: no held thing or no right palm");
++			return;
++		}
++		cMatrixf mtxFromPalm = cMath_MatrixInverse(mtxPalm);
++		cVector3f vOrigin = cMath_MatrixMul(mtxFromPalm, pMesh.GetWorldMatrix().GetTranslation());
++		cVR_Say("bones: " + pThing.GetName() + " origin " + int(vOrigin.x * 100.0f) + " " + int(vOrigin.y * 100.0f) + " " + int(vOrigin.z * 100.0f) + " cm from the right palm");
++		for(int i = lFirstBone; i < 40; ++i)
++		{
++			tString sBone = cVR_SurveyName(i);
++			if(sBone == "") break;
++			cBoneState@ pBone = pMesh.GetBoneStateFromName(sBone);
++			if(pBone is null)
++			{
++				cVR_Say("bone " + sBone + ": none");
++				continue;
++			}
++			cMatrixf mtxBone = cMath_MatrixMul(mtxFromPalm, pBone.GetWorldMatrix());
++			cVector3f vAt = mtxBone.GetTranslation();
++			cVector3f vX = cMath_MatrixMul3x3(mtxBone, cVector3f(1.0f, 0.0f, 0.0f));
++			cVector3f vY = cMath_MatrixMul3x3(mtxBone, cVector3f(0.0f, 1.0f, 0.0f));
++			cVector3f vZ = cMath_MatrixMul3x3(mtxBone, cVector3f(0.0f, 0.0f, 1.0f));
++			cVR_Say("bone " + sBone + ": " + BunkerVR_Fixed(vAt.x * 100.0f, 1) + " " + BunkerVR_Fixed(vAt.y * 100.0f, 1) + " " + BunkerVR_Fixed(vAt.z * 100.0f, 1) +
++					" cm; x " + BunkerVR_Fixed(vX.x, 2) + " " + BunkerVR_Fixed(vX.y, 2) + " " + BunkerVR_Fixed(vX.z, 2) +
++					"; y " + BunkerVR_Fixed(vY.x, 2) + " " + BunkerVR_Fixed(vY.y, 2) + " " + BunkerVR_Fixed(vY.z, 2) +
++					"; z " + BunkerVR_Fixed(vZ.x, 2) + " " + BunkerVR_Fixed(vZ.y, 2) + " " + BunkerVR_Fixed(vZ.z, 2));
++		}
 +	}
 +
 +	//------------------------------------------------------------
@@ -8567,7 +9233,11 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +	// character's, the drawn body's feet yaw (mfYaw) and its turn after the head, where the game's
 +	// camera is (the view minus the head), its point on the drawn head (the CameraSocket), the eyes'
 +	// steadying (VRSteadyEyes), both collar bones and hips (which way the chest and the hips face),
-+	// the right palm and what it holds.
++	// the right palm and what it holds, both palms against their controllers, the heights of the character's feet,
++	// the drawn body's place and the feet under the view (VRStairView), with whether it stands on the ground, the duck's
++	// and the stairs' lifts of the view, whether the game has the player crouched and whether that is the player's own
++	// crouch, the character's size (0 standing, 1 crouched), and the view's own place (the real eyes: their height, then
++	// where they are across and which way they look).
 +	void VRStandInTrace2(cCamera@ apCam, cNode3D@ apSocket, cMeshEntity@ apMesh)
 +	{
 +		if(apCam is null || apSocket is null || apMesh is null) return;
@@ -8590,6 +9260,15 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		iPhysicsBody@ pHeld = idHeld != tID_Invalid ? cLux_ID_Body(idHeld) : null;
 +		cBoundingVolume@ pHeldBox = pHeld !is null ? pHeld.GetBoundingVolume() : null;
 +		if(pHeldBox !is null) vHeld = pHeldBox.GetWorldCenter();
++		// Where each controller's palm is in the world this frame (the drawn palms should be there), and the drawn left palm.
++		cBoneState@ pLPalm = apMesh.GetBoneStateFromName("j_L_HandSocket");
++		cVector3f vLPalm = pLPalm !is null ? pLPalm.GetWorldPosition() : vPalm;
++		float fRealRoll = apCam.GetRoll();
++		apCam.SetRoll(7012.0f);
++		cVector3f vRGoal = apCam.GetMatrix().GetTranslation();
++		apCam.SetRoll(7011.0f);
++		cVector3f vLGoal = apCam.GetMatrix().GetTranslation();
++		apCam.SetRoll(fRealRoll);
 +		cVR_Say("trace2 " + float(cEngine_GetGameTime()) + " cam " + apCam.GetYaw() + " char " + cLux_GetPlayer().GetCharacterBody().GetYaw() +
 +			" feet " + mfYaw + " vr " + mfVRBodyTurnApplied +
 +			" campos " + vCam.x + " " + vCam.y + " " + vCam.z +
@@ -8600,7 +9279,24 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +			" lleg " + vLL.x + " " + vLL.y + " " + vLL.z + " rleg " + vRL.x + " " + vRL.y + " " + vRL.z +
 +			" palm " + vPalm.x + " " + vPalm.y + " " + vPalm.z +
 +			" held " + vHeld.x + " " + vHeld.y + " " + vHeld.z +
-+			" feet " + VRTraceFoot(apMesh, "j_L_") + " " + VRTraceFoot(apMesh, "j_R_"));
++			" feet " + VRTraceFoot(apMesh, "j_L_") + " " + VRTraceFoot(apMesh, "j_R_") +
++			" rgoal " + vRGoal.x + " " + vRGoal.y + " " + vRGoal.z + " lpalm " + vLPalm.x + " " + vLPalm.y + " " + vLPalm.z +
++			" lgoal " + vLGoal.x + " " + vLGoal.y + " " + vLGoal.z +
++			" body " + cLux_GetPlayer().GetCharacterBody().GetFeetPosition().y + " " + mvPrevSmoothPos.y + " " + (cLux_GetPlayer().GetCharacterBody().IsOnGround() ? 1 : 0) +
++			" " + VRViewFeetY(cLux_GetPlayer().GetCharacterBody().GetFeetPosition().y) +
++			" lifts " + mfVRDuckLift + " " + VRStairLift() + " " + (Player_GetCrouching() ? 1 : 0) + " " + (mbVRRealCrouch ? 1 : 0) +
++			" " + cLux_GetPlayer().GetCharacterBody().GetActiveSize() + " view " + VRTraceView(apCam));
++	}
++
++	// For VRStandInTrace2: the view itself, the real head's eyes in the world (roll 7005): their height, then
++	// "eye x z look x y z" (where they are across and which way they look); "-1" alone if unknown.
++	tString VRTraceView(cCamera@ apCam)
++	{
++		cMatrixf mtxHead;
++		if(VRReadRealHead(apCam, mtxHead) == false) return "-1";
++		cVector3f vEye = mtxHead.GetTranslation();
++		cVector3f vLook = cMath_MatrixMul3x3(mtxHead, cVector3f(0.0f, 0.0f, -1.0f));
++		return vEye.y + " eye " + vEye.x + " " + vEye.z + " look " + vLook.x + " " + vLook.y + " " + vLook.z;
 +	}
 +
 +	// For VRStandInTrace2: a drawn foot's ankle and toes positions, as six numbers.
@@ -8669,13 +9365,9 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		}
 +		else if(alCommand == 26 || alCommand == 27)
 +		{
-+			iLuxEntity@ pOld = pMap.GetEntityByName("VRTestBeast");
-+			if(pOld !is null) pMap.DestroyEntity(pOld);
-+			// Also remove the still Beast standing in for it (VRBeastStandIn).
-+			iLuxEntity@ pOldBody = pMap.GetEntityByName(gsVRBeastBodyName);
-+			if(pOldBody !is null) pMap.DestroyEntity(pOldBody);
-+			mfVRBeastBodyCheck = -1.0f;
-+			mfVRBeastBodyAnimLeft = -1.0f;
++			// One Beast at a time: the one made before, and the level's own if the Trailer page brought it in.
++			VRRemoveTestBeast();
++			VRTrailerRelease();
 +			if(alCommand == 27) return;
 +			
 +			// Five meters ahead, the way the head is turned, a little above
@@ -8862,14 +9554,10 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +	//   then turns the view only by that, level, while the animation still
 +	//   carries it (the view goes where the head goes).
 +	// - When one begins: the menu's choice for them is read (VR option 35,
-+	//   see below) into mlVRRoughView: 0 through the eyes, level; 1 on the
-+	//   cutscene screen, the game's own view. The code also handles 2 (faded
-+	//   to black) and 3 (through the eyes, gentle: VRGentleView), which the
-+	//   menu doesn't offer. Both controllers buzz (longer and stronger for a
++	//   see below) into mlVRRoughView: 0 through the eyes, level (with comfort
++	//   or none: mbVRRoughVignette, VRRoughComfort); 1 on the cutscene screen,
++	//   the game's own view. Both controllers buzz (longer and stronger for a
 +	//   kill or a death), and hpl.log says what began and how it is seen.
-+	// - Faded to black: the view darkens in a quarter of a second and comes
-+	//   back in half a second after (sent with the game's own fades, see
-+	//   VRSendGunNews); a death stays dark into the game's own fade.
 +	// - Through the eyes, the view faces the way the animated head faces in
 +	//   a kill (VRRoughYawNow), keeps the eyes where they were on the head
 +	//   (VRRoughViewPlace), and eases back after it (VRRoughReturn). In a
@@ -8893,21 +9581,30 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		else
 +		{
 +			mfVRRoughYawFor += afTimeStep;
++			mfVRRoughFor += afTimeStep;
 +			if(mbVRKillCovered) mfVRKillCoveredFor += afTimeStep;
 +		}
 +		if(lKind == 0 && mlVRRoughKind != 0 && mlVRRoughView == 0) mbVRRoughReturnDue = true;
 +
 +		if(lKind != mlVRRoughKind)
 +		{
++			mfVRRoughFor = 0.0f; // (from each change: a knockdown that becomes a death starts again)
 +			if(mlVRRoughKind == 0)
 +			{
-+				// The menu's choice: 0 no comfort and 2 the vignette are both seen through the eyes, the vignette
-+				// darkening the view's edges as it moves fast (VRVignetteView); 1 the cutscene screen. The menu
-+				// offers no fade to black or gentle view (mlVRRoughView 2 and 3).
++				// The menu's choice: 0 no comfort and 2 comfort are both seen through the eyes, comfort with
++				// blinks and darkness and the view's edges darkened as it moves fast (VRVignetteView); 1 the
++				// cutscene screen.
 +				int lView = VRModOption(35);
 +				mbVRRoughVignette = lView == 2;
 +				mlVRRoughView = lView == 1 ? 1 : 0;
 +				mfVRKillBlinkHold = 0.0f; // no blink carried over from an earlier one
++				// With comfort, a blink as it begins: the view is not carried off in the light (and a kill's turn
++				// to the body's facing is made in it: VRRoughYawNow).
++				if(VRRoughComfort())
++				{
++					mfVRKillBlinkAgo = 0.0f;
++					mfVRKillBlinkHold = gfVRKillBlinkDark;
++				}
 +				mbVRRoughEyesNoted = false; // VRRoughViewPlace
 +				mbVRRoughStartDue = true; // VRRoughStartEase
 +				mbVRRoughEndChecked = false;
@@ -8915,9 +9612,10 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +				VRBuzzHand(1, lKind == 2 ? 0.6f : 0.3f, lKind == 2 ? 1.0f : 0.6f);
 +			}
 +			array<tString> vKinds = { "nothing", "a knockdown", "a kill or a death" };
-+			array<tString> vViews = { "through the eyes, level", "on the cutscene screen", "faded to black", "through the eyes, gentle" };
++			array<tString> vViews = { "through the eyes, level", "on the cutscene screen" };
 +			if(lKind != 0)
-+				Log("BunkerVR: " + vKinds[lKind] + " begins (" + msCameraAnimation_Name + "), seen " + vViews[mlVRRoughView] + "\n");
++				Log("BunkerVR: " + vKinds[lKind] + " begins (" + msCameraAnimation_Name + "), seen " + vViews[mlVRRoughView] +
++					(mlVRRoughView == 0 ? (mbVRRoughVignette ? ", with comfort (a blink first)" : ", no comfort") : "") + "\n");
 +			else
 +				Log("BunkerVR: " + vKinds[mlVRRoughKind] + " is over\n");
 +			mlVRRoughKind = lKind;
@@ -8938,8 +9636,6 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		else cScript_SetGlobalVarInt("BunkerVR_ArmsToMove", 0);
 +		VRBuzzBlows(pCam, afTimeStep);
 +
-+		float fGoal = (mlVRRoughKind != 0 && mlVRRoughView == 2) ? 1.0f : 0.0f;
-+		mfVRRoughFade = cMath_IncreaseTo(mfVRRoughFade, afTimeStep * (fGoal > mfVRRoughFade ? 4.0f : 2.0f), fGoal);
 +		VRHideTorsoWhenLying();
 +	}
 +
@@ -9084,11 +9780,11 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		mfVRKillLookOff = 0.0f;
 +		mbVRKillPinned = false;
 +		mbVRKillLookExact = false;
-+		mbVRKillHoldWanted = mlVRRoughView == 0 && VRKillHoldsHead(msCameraAnimation_Name); // the view isn't turned by the head in it
++		mbVRKillHoldWanted = mlVRRoughView == 0 && VRRoughComfort() == false && VRKillHoldsHead(msCameraAnimation_Name); // the view isn't turned by the head in it (no comfort only: with comfort the head is always the player's)
 +		mbVRKillHoldAsked = false;
 +		mbVRKillHoldSeen = false;
 +		if(mlVRRoughView == 0) VRKillLineUp(apCam); // before the kill moves the camera
-+		if(mlVRRoughView != 0 && mlVRRoughView != 3) return;
++		if(mlVRRoughView != 0) return;
 +		if(cString_Sub(msCameraAnimation_Name, 0, 13) != "player_death_") return;
 +		float fAge = cMath_Abs(float(cEngine_GetGameTime()) - cScript_GetGlobalVarFloat("BunkerVR_KillTime"));
 +		if(fAge > gfVRKillFresh)
@@ -9139,6 +9835,78 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +			" m off; the player is moved " + BunkerVR_Fixed(vMoved.Length(), 1) + " m" + (bMoved || bSlid ? ", in a blink" : "") + "\n");
 +	}
 +
++	// BunkerVR: a blink of comfort for a forced move: dark at once for afHold seconds (or one under way made that much
++	// longer), clearing as a kill's blink does (VRUpdateKillView; sent with the fades). The first 20 are logged:
++	// "with comfort, <asWhy>: a blink".
++	void VRComfortBlink(float afHold, const tString &in asWhy)
++	{
++		if(mfVRKillBlinkAgo >= mfVRKillBlinkHold)
++		{
++			mfVRKillBlinkAgo = 0.0f;
++			mfVRKillBlinkHold = afHold;
++		}
++		else mfVRKillBlinkHold = cMath_Max(mfVRKillBlinkHold, mfVRKillBlinkAgo + afHold);
++		if(mlVRComfortBlinkNotes < 20)
++		{
++			mlVRComfortBlinkNotes++;
++			Log("BunkerVR: with comfort, " + asWhy + ": a blink\n");
++		}
++	}
++
++	// BunkerVR: with comfort (cVR_ComfortOn: the menu's "Knockdown and Death View" anything but No Comfort), the game
++	// lowering or raising the view for a crouch, by the stick or by a seated duck (not a standing player's own duck,
++	// mbVRRealCrouch: that view is the real head's), is made in a blink, held while the view still moves faster than
++	// gfVRCrouchMoving, for at most gfVRCrouchBlinkMost. afViewHeight: the view above the feet as placed this update
++	// (the game's eyes less what VRUpdateDuckLift raises them).
++	void VRCrouchComfort(float afViewHeight, float afTimeStep)
++	{
++		int lCrouching = Player_GetCrouching() ? 1 : 0;
++		float fSpeed = (afTimeStep > 0.0f && mlVRCrouchingWas >= 0) ? cMath_Abs(afViewHeight - mfVRCrouchViewWas) / afTimeStep : 0.0f;
++		mfVRCrouchViewWas = afViewHeight;
++		// (A crouch that was the player's own is remembered until its end is seen here: VRDoDuck, earlier in the
++		// update, clears mbVRRealCrouch as the player stands, and that stand-up moves no view either.)
++		if(mbVRRealCrouch) mbVRCrouchWasReal = true;
++		if(lCrouching != mlVRCrouchingWas)
++		{
++			bool bOwn = mbVRRealCrouch || mbVRCrouchWasReal;
++			mbVRCrouchWasReal = mbVRRealCrouch;
++			if(mlVRCrouchingWas >= 0 && bOwn == false && cVR_ComfortOn())
++			{
++				mfVRCrouchBlinkFor = 0.0f;
++				VRComfortBlink(gfVRKillBlinkDark, lCrouching == 1 ? "the crouch lowers the view" : "standing up raises the view");
++			}
++			mlVRCrouchingWas = lCrouching;
++		}
++		if(mfVRCrouchBlinkFor >= gfVRCrouchBlinkMost) return;
++		mfVRCrouchBlinkFor += afTimeStep;
++		// (Kept dark while the view still moves; never opened again once it has begun to clear.)
++		if(fSpeed > gfVRCrouchMoving && mfVRKillBlinkAgo < mfVRKillBlinkHold)
++			mfVRKillBlinkHold = cMath_Max(mfVRKillBlinkHold, mfVRKillBlinkAgo + afTimeStep * 2.0f);
++	}
++
++	// BunkerVR: does this item state take the left hand's item away as it begins (mbUsesOtherHandAnims, and in VR not
++	// kept: mbVROtherHandKept)? Its use needs the left hand: the fuel can (its lid and bottom), the cutters (their
++	// second handle), the flare (its cord), the molotov (the game's lighter put in the left hand), the grenades (their
++	// pin), a bandage or medkit, the wheel, the pocket watch's winding. The wrench keeps it (one hand in VR).
++	bool VRStateTakesLeftHand(int alState)
++	{
++		return alState == ePlayerState_Custom_UsingFuel || alState == ePlayerState_Custom_UsingCutters ||
++			   alState == ePlayerState_Custom_UsingFlare || alState == ePlayerState_Custom_UsingMolotovCocktail ||
++			   alState == ePlayerState_Custom_UsingGrenade || alState == ePlayerState_Custom_UsingGasGrenade ||
++			   alState == ePlayerState_Custom_UsingHealthItem || alState == ePlayerState_Custom_UsingWheel ||
++			   alState == ePlayerState_Custom_UsingPocketWatch;
++	}
++
++	// BunkerVR: is this knockdown, kill or death seen with comfort (the menu's "Comfort", VR option 35 2)? Through
++	// the eyes, softened: a blink as it begins (VRUpdateRoughMove) and as the body lands (VRVignetteView), the view's
++	// edges darkened while it moves fast, the real head's turn never held, dark once the Beast's hand is over the eyes,
++	// and any other death dark from its start (VRUpdateKillView). "No Comfort" shows all of it unsoftened but for the
++	// fade as the body hits the floor in a Beast's kill (VRKillDropIsTheKill).
++	bool VRRoughComfort()
++	{
++		return mlVRRoughView == 0 && mbVRRoughVignette;
++	}
++
 +	// BunkerVR: is the real head's turn held in this kill, the view looking exactly as the game's
 +	// camera does? True for the kill from the front, the one from behind and the one on a ladder.
 +	bool VRKillHoldsHead(const tString &in asAnimation)
@@ -9166,6 +9934,13 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		}
 +		mbVRKillEyesIn = bIn;
 +		return bIn ? 1.0f : 0.0f;
++	}
++
++	// BunkerVR: is the head's drop in this Beast kill the kill itself (dragged into a hole, pulled off a ladder), not
++	// the body falling to the floor at its end?
++	bool VRKillDropIsTheKill(const tString &in asAnimation)
++	{
++		return cString_Sub(asAnimation, 0, 18) == "player_death_hole_" || asAnimation == gsVRKillHeldAnimLadder;
 +	}
 +
 +	// BunkerVR: how dark the view is this long after the body fell in a Beast kill
@@ -9236,15 +10011,18 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +				mfVRKillFallFor = 0.0f;
 +				Log("BunkerVR: the Beast's kill: the body falls " + BunkerVR_Fixed(mfVRKillTime, 2) + " s in\n");
 +			}
-+			// With No Comfort chosen, the fall's fade and the hole's darkening below are left out, so the hole and
-+			// ladder kills don't go dark from their start: the view is dark only while the eyes are where nothing can
-+			// be seen from, past a wall or the floor (VRKillEyesInside). With the vignette, both apply.
++			// With No Comfort chosen, the hole and ladder kills don't go dark from their start: their drop is the kill
++			// itself (VRKillDropIsTheKill), so neither the fall's fade nor the hole's darkening below darkens them, and
++			// the view is dark only while the eyes are where nothing can be seen from, past a wall or the floor
++			// (VRKillEyesInside). Any other kill still fades out as the body hits the floor, the moment seen through
++			// the eyes that most unsettles. With comfort, all of them do.
 +			bool bNoComfort = mlVRRoughView == 0 && mbVRRoughVignette == false;
 +			if(bNoComfort && pCam !is null) fDark = cMath_Max(fDark, VRKillEyesInside(pCam.GetPosition()));
 +			if(mbVRKillFalling)
 +			{
 +				mfVRKillFallFor += afTimeStep;
-+				if(bNoComfort == false) fDark = cMath_Max(fDark, VRKillFallDark(msCameraAnimation_Name, mfVRKillFallFor));
++				if(bNoComfort == false || VRKillDropIsTheKill(msCameraAnimation_Name) == false)
++					fDark = cMath_Max(fDark, VRKillFallDark(msCameraAnimation_Name, mfVRKillFallFor));
 +			}
 +			// The kills through a hole drag the head down into it fast (1.7 m in 0.27 s, 2.8 m by 0.52 s), too fast
 +			// for the fall's fade over gfVRKillFallFade: the eyes would go below the floor half seen. There the view
@@ -9253,6 +10031,10 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +			// the floor's underside never.
 +			if(bNoComfort == false && pCam !is null && cString_Sub(msCameraAnimation_Name, 0, 18) == "player_death_hole_")
 +				fDark = cMath_Max(fDark, cMath_Clamp((mfVRKillStartHeight - pCam.GetPosition().y - gfVRKillHoleDarkFrom) / gfVRKillHoleDarkOver, 0.0f, 1.0f));
++			// With comfort, the Beast's hand or face over the eyes darkens the view over gfVRKillCoverBlend, as a hand
++			// over the eyes does, where no comfort turns the view to the animated head's own (tipped and rolled).
++			if(VRRoughComfort() && mbVRKillCovered)
++				fDark = cMath_Max(fDark, BunkerVR_SmoothStep(0.0f, gfVRKillCoverBlend, mfVRKillCoveredFor));
 +
 +			cAnimationState@ pAnim = GetAnimationState(msCameraAnimation_Name);
 +			if(pAnim !is null)
@@ -9267,6 +10049,18 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +				}
 +				fDark = cMath_Max(fDark, fEnd);
 +			}
++		}
++		// With comfort, any other death (a fall, a shot, the rats, a shell, bleeding: no Beast's kill) darkens over
++		// gfVRDeathDarkOver from its start and stays dark into the game's own fade: the view would drop with the body
++		// to the floor, in the light.
++		else if(VRRoughComfort() && mlVRRoughKind == 2)
++		{
++			if(mfVRRoughFor <= afTimeStep && mlVRDeathDarkNotes < 10)
++			{
++				mlVRDeathDarkNotes++;
++				Log("BunkerVR: a death (" + msCameraAnimation_Name + "), no Beast's kill: with comfort the view darkens over " + BunkerVR_Fixed(gfVRDeathDarkOver, 1) + " s\n");
++			}
++			fDark = cMath_Max(fDark, cMath_Clamp(mfVRRoughFor / gfVRDeathDarkOver, 0.0f, 1.0f));
 +		}
 +		mfVRKillDark = fDark;
 +	}
@@ -9651,8 +10445,8 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +	// BunkerVR: the blows of a knockdown, a kill or a death, felt all through it,
 +	// not only at the start: both controllers buzz (gfVRBlowBuzz long,
 +	// gfVRBlowStrength strong) when the
-+	// animated head stops suddenly (a landing, a hit), found as the gentle
-+	// view finds its blink (VRGentleView: from faster than gfVRGentleStopFast
++	// animated head stops suddenly (a landing, a hit), found as comfort finds
++	// its landing's blink (VRVignetteView: from faster than gfVRGentleStopFast
 +	// to slower than gfVRGentleStopSlow within gfVRGentleStopWithin), at most
 +	// one every gfVRBlowApart. The head as the camera was put last frame. The
 +	// first ten logged.
@@ -9690,6 +10484,15 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		}
 +	}
 +
++	// BunkerVR, for testing (the stand-in headset's scripts 99 and 100): the game's crawl forced on where the player is,
++	// as a hiding place does for a crouched player (Player.hps, UpdateHidden), or let go again.
++	void VRStandInCrawl(bool abOn)
++	{
++		Player_SetForceCrawling(abOn);
++		cVR_Say("hide: the crawl " + (abOn ? "forced, as in a hiding place" : "let go") + "; crouched " + (Player_GetCrouching() ? "yes" : "no"));
++		Log("BunkerVR: the crawl " + (abOn ? "forced, as in a hiding place" : "let go") + " (testing)\n");
++	}
++
 +	// BunkerVR: the real head (the mod's roll 7006: is it followed; 7005:
 +	// where), as a matrix; false when it is not followed.
 +	bool VRReadRealHead(cCamera@ apCam, cMatrixf &out a_mtxHead)
@@ -9717,35 +10520,10 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		if(abNow) Log("BunkerVR: a cutscene begins (" + msCameraAnimation_Name + "), seen on the cutscene screen\n");
 +	}
 +
-+	// BunkerVR: the gentle view of knockdowns, kills and deaths (mlVRRoughView 3,
-+	// which the menu doesn't offer; see VRUpdateRoughMove): a view through the
-+	// eyes that is less disorienting and doesn't let the body clip through the
-+	// head. Every frame, once the camera is placed (the animated head, level,
-+	// facing the way the player faced, as with no comfort), while one plays and
-+	// for gfVRGentleEaseBack after:
-+	// - The body and everything hung on it (what the hands hold) are hidden,
-+	//   so nothing of it comes through the view (VRGentleHide); shown again
-+	//   as the move ends.
-+	// - The view follows the animated head as a soft spring
-+	//   (BunkerVR_SpringFollow, gfVRGentleSpring), from where the view was:
-+	//   the throw's start, the hit on the floor and the getting up are rounded
-+	//   off, and it never goes lower than the head went.
-+	// - A dark ring closes in from the edges of the view as the view goes
-+	//   faster (gfVRGentleRingSlow to gfVRGentleRingFast; the mod draws it,
-+	//   cVR_ComfortRing), most of all in the flight.
-+	// - A blink, the view dark for a moment (sent with the fades,
-+	//   VRSendGunNews), when the head stops suddenly (the impact): its speed
-+	//   from above gfVRGentleStopFast to below gfVRGentleStopSlow within
-+	//   gfVRGentleStopWithin.
-+	// - When it is over, the view eases back to where the game puts it, over
-+	//   gfVRGentleEaseBack (no jump).
-+	// The real head still looks about and moves the view as ever (the mod adds
-+	// it after this). Logged: the start and the end, each blink, and (the first
-+	// three) every 0.1 s the speeds, the lag and the ring, to tune by.
-+	// BunkerVR: a knockdown, a kill or a death through the eyes with the vignette (the menu's "Knockdown and Death
-+	// View": Vignette): the view goes as with no comfort (mlVRRoughView 0, all of it), and a dark ring closes in
-+	// from its edges as the view goes faster, as the gentle view's ring does (gfVRGentleRingSlow to gfVRGentleRingFast,
-+	// closing quickly and opening slowly; the mod draws it, cVR_ComfortRing), opening again as it ends. Narrowing the
++	// BunkerVR: a knockdown, a kill or a death through the eyes with comfort (the menu's "Knockdown and Death
++	// View": Comfort; VRRoughComfort for the rest of it): a dark ring closes in from the view's edges as the view
++	// goes faster (gfVRGentleRingSlow to gfVRGentleRingFast, closing quickly and opening slowly; the mod draws it,
++	// cVR_ComfortRing), opening again as it ends, and a blink as the body lands (the head stopped short). Narrowing the
 +	// view while it moves is a common comfort setting in VR games: Road to VR's "VR Comfort Settings Checklist &
 +	// Glossary" (a "comfort vignette", or tunneling); Fernandes and Feiner, "Combating VR Sickness through Subtle
 +	// Dynamic Field-Of-View Modification" (IEEE 3DUI 2016).
@@ -9760,13 +10538,23 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +			mbVRVignetteOn = true;
 +			mvVRVignetteLastHead = vHead;
 +			mfVRVignetteSpeed = 0.0f;
-+			Log("BunkerVR: a knockdown, a kill or a death with the vignette begins\n");
++			mfVRVignetteFastAgo = 100.0f;
++			Log("BunkerVR: a knockdown, a kill or a death with comfort begins (its vignette)\n");
 +		}
-+		// The animated head's speed, smoothed a little, as in the gentle view; a jump of the game's (a new place) is not a speed.
++		// The animated head's speed, smoothed a little; a jump of the game's (a new place) is not a speed.
 +		float fMoved = (vHead - mvVRVignetteLastHead).Length();
 +		mvVRVignetteLastHead = vHead;
 +		float fSpeed = fMoved < gfVRGentleJump ? fMoved / afTimeStep : 0.0f;
 +		mfVRVignetteSpeed += (fSpeed - mfVRVignetteSpeed) * afTimeStep / (0.05f + afTimeStep);
++		// The landing: the head stopped short (from over gfVRGentleStopFast to under gfVRGentleStopSlow within
++		// gfVRGentleStopWithin), as the body hits the floor or a wall: a blink, so the jolt is not seen.
++		if(mfVRVignetteSpeed > gfVRGentleStopFast) mfVRVignetteFastAgo = 0.0f;
++		else mfVRVignetteFastAgo += afTimeStep;
++		if(bOn && mfVRVignetteSpeed < gfVRGentleStopSlow && mfVRVignetteFastAgo < gfVRGentleStopWithin)
++		{
++			mfVRVignetteFastAgo = 100.0f;
++			VRComfortBlink(gfVRKillBlinkDark, "the body lands (" + msCameraAnimation_Name + ")");
++		}
 +		float fRing = bOn ? BunkerVR_SmoothStep(gfVRGentleRingSlow, gfVRGentleRingFast, mfVRVignetteSpeed) : 0.0f;
 +		mfVRVignetteRing = cMath_IncreaseTo(mfVRVignetteRing, afTimeStep * (fRing > mfVRVignetteRing ? 6.0f : 2.0f), fRing);
 +		if(bOn == false && mfVRVignetteRing <= 0.0f)
@@ -9777,180 +10565,6 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +			return;
 +		}
 +		cVR_ComfortRing(mfVRVignetteRing);
-+	}
-+
-+	void VRGentleView(cCamera@ apCam, float afTimeStep)
-+	{
-+		// With the headset off (mbVRSeen false) it counts as over, so that the body is shown.
-+		bool bRough = mlVRRoughKind != 0 && mlVRRoughView == 3;
-+		bool bMove = mbVRSeen && bRough;
-+		if(bMove == false && mbVRGentle == false) return;
-+		if(afTimeStep <= 0.0f) return;
-+		cVector3f vHead = apCam.GetPosition();
-+
-+		if(mbVRGentle == false)
-+		{
-+			// Begins: from where the view was a frame ago (mvCameraPos, not yet
-+			// this frame's), still; at the head if that is far off.
-+			mbVRGentle = true;
-+			float fFrom = (mvCameraPos - vHead).Length();
-+			mvVRGentlePos = fFrom < gfVRGentleJump ? mvCameraPos : vHead;
-+			mvVRGentleVel = cVector3f(0.0f);
-+			mvVRGentleLastHead = vHead;
-+			mfVRGentleHeadSpeed = 0.0f;
-+			mfVRGentleFastAgo = 100.0f;
-+			mfVRGentleBlinkAgo = 100.0f;
-+			mfVRGentleDark = 0.0f;
-+			mfVRGentleRing = 0.0f;
-+			mfVRGentleBack = -1.0f;
-+			mfVRGentleTime = 0.0f;
-+			mfVRGentleNoteWait = 0.0f;
-+			mlVRGentleCount++;
-+			mlVRGentleBlinks = 0;
-+			mfVRGentleTopHead = 0.0f;
-+			mfVRGentleTopView = 0.0f;
-+			mfVRGentleMostLag = 0.0f;
-+			int lHidden = bRough ? VRGentleHide(true) : 0;
-+			Log("BunkerVR: gentle view " + mlVRGentleCount + " begins (" + (bRough ? "a knockdown, a kill or a death" : "a cutscene") + "): " + lHidden + " thing(s) hidden (the body and what hangs on it); the view starts " + (fFrom < gfVRGentleJump ? BunkerVR_Fixed(fFrom * 100.0f, 0) + " cm from the head" : "at the head (it was " + BunkerVR_Fixed(fFrom, 1) + " m off)") + "\n");
-+		}
-+		else if(bMove && mfVRGentleBack >= 0.0f)
-+		{
-+			// Another begins during the eased return: on with it, hidden again.
-+			mfVRGentleBack = -1.0f;
-+			int lHidden = bRough ? VRGentleHide(true) : 0;
-+			Log("BunkerVR: gentle view " + mlVRGentleCount + ": another move begins during the return; " + lHidden + " thing(s) hidden again\n");
-+		}
-+		mfVRGentleTime += afTimeStep;
-+		if(mbVRGentleBlinkNow)
-+		{
-+			// (Asked as the view turned to a cutscene's facing: see the camera code.)
-+			mbVRGentleBlinkNow = false;
-+			mfVRGentleBlinkAgo = 0.0f;
-+			mlVRGentleBlinks++;
-+		}
-+
-+		// A jump of the game's (a new place, a map loaded): there at once.
-+		float fGap = (vHead - mvVRGentlePos).Length();
-+		if(fGap > gfVRGentleJump)
-+		{
-+			Log("BunkerVR: gentle view " + mlVRGentleCount + ": the head is " + BunkerVR_Fixed(fGap, 1) + " m off: the view goes there at once\n");
-+			mvVRGentlePos = vHead;
-+			mvVRGentleVel = cVector3f(0.0f);
-+			mvVRGentleLastHead = vHead;
-+		}
-+
-+		// The head's own speed, smoothed a little (the body's animation can
-+		// move it on some frames and not on others), and a sudden stop of it.
-+		float fHeadSpeed = (vHead - mvVRGentleLastHead).Length() / afTimeStep;
-+		mvVRGentleLastHead = vHead;
-+		mfVRGentleHeadSpeed += (fHeadSpeed - mfVRGentleHeadSpeed) * afTimeStep / (0.05f + afTimeStep);
-+		mfVRGentleTopHead = cMath_Max(mfVRGentleTopHead, mfVRGentleHeadSpeed);
-+		mfVRGentleFastAgo = mfVRGentleHeadSpeed > gfVRGentleStopFast ? 0.0f : mfVRGentleFastAgo + afTimeStep;
-+		mfVRGentleBlinkAgo += afTimeStep;
-+		if(bMove && mfVRGentleHeadSpeed < gfVRGentleStopSlow && mfVRGentleFastAgo < gfVRGentleStopWithin && mfVRGentleBlinkAgo > 0.6f)
-+		{
-+			Log("BunkerVR: gentle view " + mlVRGentleCount + ": a blink at " + BunkerVR_Fixed(mfVRGentleTime, 2) + " s (the head down to " + BunkerVR_Fixed(mfVRGentleHeadSpeed, 1) + " m/s, " + BunkerVR_Fixed(mfVRGentleFastAgo, 2) + " s after it was above " + BunkerVR_Fixed(gfVRGentleStopFast, 1) + ")\n");
-+			mfVRGentleBlinkAgo = 0.0f;
-+			mfVRGentleFastAgo = 100.0f;
-+			mlVRGentleBlinks++;
-+		}
-+		mfVRGentleDark = mfVRGentleBlinkAgo < gfVRGentleBlinkDark ? 1.0f : cMath_Max(0.0f, 1.0f - (mfVRGentleBlinkAgo - gfVRGentleBlinkDark) / gfVRGentleBlinkClear);
-+
-+		// The view follows the head as a soft spring.
-+		cVector3f vVelAfter;
-+		mvVRGentlePos = BunkerVR_SpringFollow(mvVRGentlePos, mvVRGentleVel, vHead, gfVRGentleSpring, afTimeStep, vVelAfter);
-+		mvVRGentleVel = vVelAfter;
-+		cVector3f vView = mvVRGentlePos;
-+		mfVRGentleMostLag = cMath_Max(mfVRGentleMostLag, (vHead - mvVRGentlePos).Length());
-+
-+		// Over: back to where the game puts the view, eased.
-+		if(bMove == false)
-+		{
-+			if(mfVRGentleBack < 0.0f)
-+			{
-+				// The body is shown again now, not after the return: outside
-+				// the game's cutscene code, which keeps a hidden body's bones
-+				// up to date, the view's place on the head could stand still.
-+				mfVRGentleBack = 0.0f;
-+				int lShown = VRGentleHide(false);
-+				Log("BunkerVR: gentle view " + mlVRGentleCount + ": the move is over at " + BunkerVR_Fixed(mfVRGentleTime, 2) + " s; " + lShown + " thing(s) shown again; easing back from " + BunkerVR_Fixed((vHead - mvVRGentlePos).Length() * 100.0f, 0) + " cm\n");
-+			}
-+			mfVRGentleBack += afTimeStep;
-+			vView = vView + (vHead - vView) * BunkerVR_SmoothStep(0.0f, gfVRGentleEaseBack, mfVRGentleBack);
-+		}
-+
-+		// The dark ring, closed further as the view goes faster.
-+		float fViewSpeed = mvVRGentleVel.Length();
-+		mfVRGentleTopView = cMath_Max(mfVRGentleTopView, fViewSpeed);
-+		float fRing = BunkerVR_SmoothStep(gfVRGentleRingSlow, gfVRGentleRingFast, fViewSpeed);
-+		mfVRGentleRing = cMath_IncreaseTo(mfVRGentleRing, afTimeStep * (fRing > mfVRGentleRing ? 6.0f : 2.0f), fRing);
-+
-+		mfVRGentleNoteWait -= afTimeStep;
-+		if(mlVRGentleCount <= 3 && mfVRGentleNoteWait <= 0.0f)
-+		{
-+			mfVRGentleNoteWait = 0.1f;
-+			Log("BunkerVR: gentle view " + mlVRGentleCount + " at " + BunkerVR_Fixed(mfVRGentleTime, 2) + " s: the head " + BunkerVR_Fixed(mfVRGentleHeadSpeed, 1) + " m/s, the view " + BunkerVR_Fixed(fViewSpeed, 1) + " m/s and " + BunkerVR_Fixed((vHead - vView).Length() * 100.0f, 0) + " cm behind, the ring " + BunkerVR_Fixed(mfVRGentleRing, 2) + (mfVRGentleDark > 0.0f ? ", dark " + BunkerVR_Fixed(mfVRGentleDark, 2) : "") + (bMove ? "" : " (returning)") + "\n");
-+		}
-+
-+		if(bMove == false && mfVRGentleBack >= gfVRGentleEaseBack)
-+		{
-+			// Done: the view is the game's own again (vHead, as placed).
-+			mbVRGentle = false;
-+			mfVRGentleRing = 0.0f;
-+			mfVRGentleDark = 0.0f;
-+			cVR_ComfortRing(0.0f);
-+			VRGentleHide(false); // (shown already as the move ended: nothing is left)
-+			Log("BunkerVR: gentle view " + mlVRGentleCount + " over after " + BunkerVR_Fixed(mfVRGentleTime, 2) + " s: " + mlVRGentleBlinks + " blink(s); the head's top speed " + BunkerVR_Fixed(mfVRGentleTopHead, 1) + " m/s, the view's " + BunkerVR_Fixed(mfVRGentleTopView, 1) + "; the view at most " + BunkerVR_Fixed(mfVRGentleMostLag * 100.0f, 0) + " cm behind\n");
-+			return;
-+		}
-+		cVR_ComfortRing(mfVRGentleRing);
-+		apCam.SetPosition(vView);
-+	}
-+
-+	// BunkerVR: hides the body and everything hung on it (what the hands hold,
-+	// the game's lighter, a healing item; the body's own list, asked of it by
-+	// _Global_VRGetAttachedProp in Prop_PlayerBody.hps), noting each it hid;
-+	// or shows those again, if they are still there (VRGentleView).
-+	// What was already hidden is left as it is. The game's cutscene code copes
-+	// with a hidden body (it shows it for a moment to move its bones); outside
-+	// it the body is shown again. Gives how many it hid, or showed again.
-+	int VRGentleHide(bool abHide)
-+	{
-+		if(abHide == false)
-+		{
-+			int lShown = 0;
-+			for(uint i = 0; i < mvVRGentleHidden.length(); ++i)
-+			{
-+				iLuxEntity@ pThing = cLux_ID_Entity(mvVRGentleHidden[i]);
-+				if(pThing is null || pThing.GetMeshEntity() is null) continue;
-+				pThing.GetMeshEntity().SetVisible(true);
-+				lShown++;
-+			}
-+			mvVRGentleHidden.resize(0);
-+			return lShown;
-+		}
-+
-+		mvVRGentleHidden.resize(0);
-+		iLuxEntity@ pBody = cLux_ID_Entity(m_idBody);
-+		if(pBody is null) return 0;
-+		array<iLuxEntity@> vThings = { pBody };
-+		cLuxMap@ pMap = cLux_GetCurrentMap();
-+		for(int i = 0; i < 16 && pMap !is null; ++i)
-+		{
-+			cScript_SetGlobalArgInt(0, i);
-+			cScript_SetGlobalReturnString("");
-+			cScript_RunGlobalFunc(pBody.GetName(), "cScrPropPlayerBody", "_Global_VRGetAttachedProp");
-+			tString sName = cScript_GetGlobalReturnString();
-+			if(sName != "") vThings.push_back(pMap.GetEntityByName(sName));
-+		}
-+		for(uint i = 0; i < vThings.length(); ++i)
-+		{
-+			iLuxEntity@ pThing = vThings[i];
-+			if(pThing is null || pThing.GetMeshEntity() is null || pThing.GetMeshEntity().IsVisible() == false) continue;
-+			pThing.GetMeshEntity().SetVisible(false);
-+			mvVRGentleHidden.push_back(pThing.GetID());
-+		}
-+		return int(mvVRGentleHidden.length());
 +	}
 +
 +	// BunkerVR: buzzes a controller (0 left, 1 right) for so many seconds (at
@@ -9968,11 +10582,384 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		pCam.SetRoll(fRealRoll);
 +	}
 +
++	// BunkerVR: the Tools page's Beast taken away (VRTestBeast), with the still Beast standing in for it (VRBeastStandIn).
++	void VRRemoveTestBeast()
++	{
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		if(pMap is null) return;
++		iLuxEntity@ pOld = pMap.GetEntityByName("VRTestBeast");
++		if(pOld !is null) pMap.DestroyEntity(pOld);
++		iLuxEntity@ pOldBody = pMap.GetEntityByName(gsVRBeastBodyName);
++		if(pOldBody !is null) pMap.DestroyEntity(pOldBody);
++		mfVRBeastBodyCheck = -1.0f;
++		mfVRBeastBodyAnimLeft = -1.0f;
++	}
++
++	//------------------------------------------------------------
++
++	// BunkerVR: the Trailer page of the VR mod's menu, for filming: the level's own Beast (VRTrailerBeast) brought in
++	// where the player looks, sent walking or running to where they look, out of or into the nearest of its holes, told
++	// to take no notice of the player or to hunt them. "Where they look": the menu shuts, the player looks at a spot and
++	// pulls the right trigger (VRUpdateTrailer). Each scene can be played again. Its calm and its speed are its own
++	// script's (agent_stalker.hps _Global_VRTrailer); it is sent by a sound the player did not make. And the page's
++	// full power and no power (208, 209: VRTrailerPower). The developer build only: only its menu sends these commands
++	// (the player build has no Trailer page).
++	void VRTrailerCommand(int alCommand)
++	{
++		if(alCommand == 208 || alCommand == 209)
++		{
++			VRTrailerPower(alCommand == 208);
++			return;
++		}
++		iLuxEntity@ pBeast = VRTrailerBeast();
++		if(alCommand >= 200 && alCommand <= 202)
++		{
++			mlVRTrailerWaits = alCommand;
++			mfVRTrailerWaitFor = 0.0f;
++			mbVRTrailerTriggerWas = true; // (a trigger already held counts once let go and pulled again)
++			VRBuzzHand(1, 0.05f, 0.4f);
++			Log("BunkerVR trailer: scene " + alCommand + " waits for a spot: look at it and pull the right trigger\n");
++		}
++		else if(alCommand == 203)
++		{
++			// Out of the hole nearest the player: brought in, put into the walls at that hole at once, then out of it
++			// (VRUpdateTrailer), as the level scripts bring it out.
++			cLuxPlayer@ pPlayer = cLux_GetPlayer();
++			if(pBeast is null) { VRTrailerNoBeast(); return; }
++			if(pPlayer is null || pPlayer.GetCharacterBody() is null) return;
++			VRTrailerTake(pBeast);
++			msVRTrailerHole = VRTrailerNearestHole(pPlayer.GetCharacterBody().GetFeetPosition());
++			if(msVRTrailerHole == "") { VRTrailerNoHole(); return; }
++			mlVRTrailerHoleStep = 1;
++			mfVRTrailerHoleIn = 0.0f;
++			Log("BunkerVR trailer: " + pBeast.GetName() + " is to come out of " + msVRTrailerHole + "\n");
++			VRTrailerWatch(false, cVector3f(0.0f));
++		}
++		else if(alCommand == 204)
++		{
++			if(pBeast is null || pBeast.IsActive() == false) { VRTrailerNoBeast(); return; }
++			tString sHole = VRTrailerNearestHole(pBeast.GetPosition());
++			if(sHole == "") { VRTrailerNoHole(); return; }
++			VRTrailerTell(1);
++			cScript_SetGlobalArgString(0, sHole);
++			cScript_SetGlobalArgBool(1, true);  // (now, whatever it is doing)
++			cScript_SetGlobalArgBool(2, false); // (walking there, not put there)
++			cScript_SetGlobalArgInt(3, 0);      // (eStalkerSpeed_Walk)
++			cScript_RunGlobalFunc(pBeast.GetName(), "cScrAgentStalker", "_Global_GoToHole");
++			Log("BunkerVR trailer: " + pBeast.GetName() + " walks into " + sHole + "\n");
++			VRTrailerWatch(false, cVector3f(0.0f));
++		}
++		else if(alCommand == 205 || alCommand == 206)
++		{
++			mbVRTrailerCalm = alCommand == 205;
++			VRTrailerTell(0);
++			Log("BunkerVR trailer: the Beast " + (mbVRTrailerCalm ? "takes no notice of the player" : "notices the player as in the game") + "\n");
++			VRTrailerWatch(false, cVector3f(0.0f));
++		}
++		else if(alCommand == 207)
++		{
++			// It comes for the player: brought in if need be, then alert to them; in the walls, out of the hole nearest
++			// them first (VRUpdateTrailer), alert to them as it comes out (agent_stalker.hps _Global_VRTrailerHunt).
++			if(pBeast is null) { VRTrailerNoBeast(); return; }
++			mbVRTrailerCalm = false;
++			VRTrailerTake(pBeast);
++			bool bInWalls = cScript_RunGlobalFunc(pBeast.GetName(), "cScrAgentStalker", "_Global_VRTrailerHunt") && cScript_GetGlobalReturnBool();
++			cLuxPlayer@ pPlayer = cLux_GetPlayer();
++			if(bInWalls && pPlayer !is null && pPlayer.GetCharacterBody() !is null)
++			{
++				msVRTrailerHole = VRTrailerNearestHole(pPlayer.GetCharacterBody().GetFeetPosition());
++				if(msVRTrailerHole != "")
++				{
++					mlVRTrailerHoleStep = 1;
++					mfVRTrailerHoleIn = 0.0f;
++				}
++				else VRTrailerNoHole(); // (it hunts as it next comes out by itself)
++			}
++			Log("BunkerVR trailer: " + pBeast.GetName() + " hunts the player" + (bInWalls && mlVRTrailerHoleStep == 1 ? " (out of " + msVRTrailerHole + " first)" : "") + "\n");
++			VRTrailerWatch(false, cVector3f(0.0f));
++		}
++	}
++
++	void VRTrailerNoBeast()
++	{
++		VRBuzzHand(1, 0.2f, 0.8f);
++		Log("BunkerVR trailer: no Beast to direct: " + (VRTrailerBeast() is null ? "this level has none of its own" : "spawn it first") + "\n");
++	}
++
++	void VRTrailerNoHole()
++	{
++		VRBuzzHand(1, 0.2f, 0.8f);
++		Log("BunkerVR trailer: no hole of the Beast's own (GhoulHole_) in this level\n");
++	}
++
++	// The Trailer page's power: the game's own generator, as when its tank is filled and its lever pulled (full power)
++	// or as when it stops (no power). The levels it powers light up or go dark with the game's own sounds and timing,
++	// and the Beast takes it as in the game: calmer with the power on, roused when it goes. Fuel is only ever added,
++	// none taken away, so after no power the generator's lever starts it again. A level whose fuse box has no fuse
++	// stays dark either way, as in the game.
++	void VRTrailerPower(bool abOn)
++	{
++		if(abOn)
++		{
++			// The tank filled: it holds five cans (more, as one of the game's settings gives, is left as it is). As
++			// when the player pours in fuel, so the pocket watch knows; but set straight while the game runs the
++			// generator for ever (its opening: the watch does not run then), as fuel poured into it running would start
++			// the pocket watch's lesson early.
++			if(Generator_GetFullness() < 1.0f)
++			{
++				if(Generator_GetRunForever())
++					Generator_SetFuelAmount(5, GameDifficulty_GetSettingValueByID_Float(eGameDifficultySetting_GeneratorRunTime));
++				else
++					Generator_AddFuel(5);
++			}
++			Generator_ChangeState(eGeneratorState_On);
++		}
++		else
++			Generator_ChangeState(eGeneratorState_Off);
++
++		bool bRuns = Generator_GetState() == eGeneratorState_On;
++		bool bReachesHere = Generator_GetState(true) == eGeneratorState_On;
++		Log("BunkerVR trailer: the generator " + (bRuns ? "runs" : "is off") + ", its tank " +
++			int(cMath_Min(Generator_GetFullness(), 1.0f) * 100.0f + 0.5f) + "% full" +
++			(bRuns && bReachesHere == false ? "; this level's fuse box has no fuse, so its lights stay off" : "") + "\n");
++	}
++
++	// The Beast the Trailer page directs: the level's own, a cScrAgentStalker placed in the level (only those have the
++	// AI's paths: the engine gives them out as the level loads, so one made later stands still); the one brought in
++	// before, else the first. Null if the level has none.
++	iLuxEntity@ VRTrailerBeast()
++	{
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		if(pMap is null) return null;
++		if(msVRTrailerTaken != "" && msVRTrailerTakenMap == pMap.GetName())
++		{
++			iLuxEntity@ pTaken = pMap.GetEntityByName(msVRTrailerTaken, eLuxEntityType_Agent);
++			if(pTaken !is null) return pTaken;
++		}
++		array<iLuxEntity@> vEnts;
++		pMap.GetEntityArray("*", eLuxEntityType_Agent, "cScrAgentStalker", vEnts);
++		for(uint i = 0; i < vEnts.length(); ++i)
++		{
++			if(vEnts[i] !is null && vEnts[i].GetName() != "VRTestBeast") return vEnts[i];
++		}
++		return null;
++	}
++
++	// The level's Beast brought in by the Trailer page, as the level scripts bring it in: switched on (the "Kept Away"
++	// switch then leaves it be), in active mode, its senses on, allowed out of its holes, and told its calm. The Tools
++	// page's Beast, if made, is taken away.
++	void VRTrailerTake(iLuxEntity@ apBeast)
++	{
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		if(pMap is null || apBeast is null) return;
++		VRRemoveTestBeast();
++		msVRTrailerTaken = apBeast.GetName();
++		msVRTrailerTakenMap = pMap.GetName();
++		if(apBeast.IsActive() == false) apBeast.SetActive(true);
++		cLuxAgent@ pAgent = cLux_ToAgent(apBeast);
++		if(pAgent !is null) pAgent.SetSensesActive(true);
++		cScript_SetGlobalArgInt(0, 0);     // (eStalkerMode_Active)
++		cScript_SetGlobalArgBool(1, true); // (its presence from nothing)
++		cScript_RunGlobalFunc(msVRTrailerTaken, "cScrAgentStalker", "_Global_SetMode");
++		cScript_SetGlobalArgBool(0, true);
++		cScript_RunGlobalFunc(msVRTrailerTaken, "cScrAgentStalker", "_Global_SetEmergeAllowed");
++		VRTrailerTell(0);
++	}
++
++	// The Beast the Trailer page brought in, put away ("Remove the Beast"): switched off, as the level scripts put it away.
++	void VRTrailerRelease()
++	{
++		mlVRTrailerWaits = 0;
++		mlVRTrailerHoleStep = 0;
++		mfVRTrailerWatch = -1.0f;
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		if(pMap !is null && msVRTrailerTaken != "" && msVRTrailerTakenMap == pMap.GetName())
++		{
++			iLuxEntity@ pBeast = pMap.GetEntityByName(msVRTrailerTaken, eLuxEntityType_Agent);
++			if(pBeast !is null && pBeast.IsActive())
++			{
++				pBeast.SetActive(false);
++				Log("BunkerVR trailer: " + msVRTrailerTaken + " put away (switched off)\n");
++			}
++		}
++		msVRTrailerTaken = "";
++	}
++
++	// The trailer's Beast told its calm and the speed it goes to a sound at (0 its own, 1 a walk, 2 a run).
++	void VRTrailerTell(int alSpeed)
++	{
++		iLuxEntity@ pBeast = VRTrailerBeast();
++		if(pBeast is null || pBeast.IsActive() == false) return;
++		cScript_SetGlobalArgBool(0, mbVRTrailerCalm);
++		cScript_SetGlobalArgInt(1, alSpeed);
++		if(cScript_RunGlobalFunc(pBeast.GetName(), "cScrAgentStalker", "_Global_VRTrailer") == false)
++			Log("BunkerVR trailer: " + pBeast.GetName() + " could not be told (its script is not running)\n");
++	}
++
++	// The hole of the trailer Beast's own network (its GhoulHole_ areas) nearest a place, as the level scripts find it;
++	// "" if none.
++	tString VRTrailerNearestHole(const cVector3f &in avNear)
++	{
++		iLuxEntity@ pBeast = VRTrailerBeast();
++		if(pBeast is null || cScript_RunGlobalFunc(pBeast.GetName(), "cScrAgentStalker", "_Global_VRTrailerHoleNetwork") == false) return "";
++		tID idHole = Blackboard_GetClosestGhoulHole(cScript_GetGlobalReturnInt(), avNear);
++		iLuxEntity@ pHole = idHole != tID_Invalid ? cLux_ID_Entity(idHole) : null;
++		return pHole !is null ? pHole.GetName() : "";
++	}
++
++	// Where the player looks: the floor there, along the real head's view; on a wall or a thing, the floor just in
++	// front of it. False: nothing within reach.
++	bool VRTrailerSpot(cVector3f &out avSpot)
++	{
++		avSpot = cVector3f(0.0f);
++		cLuxPlayer@ pPlayer = cLux_GetPlayer();
++		cMatrixf mtxHead;
++		if(pPlayer is null || BunkerVR_ReadRealHead(pPlayer.GetCamera(), mtxHead) == false) return false;
++		cVector3f vFrom = mtxHead.GetTranslation();
++		cVector3f vLook = cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxHead, cVector3f(0.0f, 0.0f, -1.0f)));
++		float fHit = 0.0f;
++		cVector3f vNormal = cVector3f(0.0f);
++		if(cLux_GetClosestBody(vFrom + vLook * 0.3f, vLook, gfVRTrailerLookFurthest, fHit, vNormal) is null) return false;
++		cVector3f vHit = vFrom + vLook * (0.3f + fHit);
++		cVector3f vAbove = vNormal.y > 0.7f ? vHit : vHit - vLook * 0.5f;
++		vAbove.y += 0.3f;
++		float fDrop = 0.0f;
++		if(cLux_GetClosestBody(vAbove, cVector3f(0.0f, -1.0f, 0.0f), 6.0f, fDrop, vNormal) is null) return false;
++		avSpot = vAbove - cVector3f(0.0f, fDrop, 0.0f);
++		return true;
++	}
++
++	// The trailer's Beast watched after a scene (VRUpdateTrailer), for hpl.log; abGoal: it was put at or sent to avGoal.
++	void VRTrailerWatch(bool abGoal, const cVector3f &in avGoal)
++	{
++		mbVRTrailerGoalSet = abGoal;
++		mvVRTrailerGoal = avGoal;
++		mfVRTrailerWatch = gfVRTrailerWatchMost;
++		mfVRTrailerLookIn = 0.0f;
++		msVRTrailerStateWas = "";
++	}
++
++	void VRUpdateTrailer(float afTimeStep)
++	{
++		// Out of a hole: put into the walls there at once, then out.
++		if(mlVRTrailerHoleStep > 0)
++		{
++			mfVRTrailerHoleIn -= afTimeStep;
++			iLuxEntity@ pHoleBeast = VRTrailerBeast();
++			if(pHoleBeast is null || pHoleBeast.IsActive() == false) mlVRTrailerHoleStep = 0;
++			else if(mfVRTrailerHoleIn < 0.0f && mlVRTrailerHoleStep == 1)
++			{
++				cScript_SetGlobalArgString(0, msVRTrailerHole);
++				cScript_SetGlobalArgBool(1, true);
++				cScript_SetGlobalArgBool(2, true); // (put there at once, out of sight)
++				cScript_SetGlobalArgInt(3, 0);
++				cScript_RunGlobalFunc(pHoleBeast.GetName(), "cScrAgentStalker", "_Global_GoToHole");
++				mlVRTrailerHoleStep = 2;
++				mfVRTrailerHoleIn = 0.5f;
++			}
++			else if(mfVRTrailerHoleIn < 0.0f && mlVRTrailerHoleStep == 2)
++			{
++				cScript_SetGlobalArgString(0, msVRTrailerHole);
++				cScript_SetGlobalArgBool(1, false);
++				cScript_RunGlobalFunc(pHoleBeast.GetName(), "cScrAgentStalker", "_Global_EmergeFromHole");
++				mlVRTrailerHoleStep = 0;
++				Log("BunkerVR trailer: " + pHoleBeast.GetName() + " comes out of " + msVRTrailerHole + "\n");
++			}
++		}
++
++		// The Beast after a scene, looked at four times a second for a while: each change of its state said in hpl.log,
++		// and, sent somewhere, when it is there or how far off it still is at the end.
++		if(mfVRTrailerWatch >= 0.0f)
++		{
++			mfVRTrailerWatch -= afTimeStep;
++			mfVRTrailerLookIn -= afTimeStep;
++			iLuxEntity@ pGoer = VRTrailerBeast();
++			if(pGoer is null) mfVRTrailerWatch = -1.0f;
++			else if(mfVRTrailerLookIn < 0.0f || mfVRTrailerWatch < 0.0f)
++			{
++				mfVRTrailerLookIn = 0.25f;
++				cVector3f vAt = pGoer.GetPosition();
++				tString sAt = " (at " + vAt.x + " " + vAt.y + " " + vAt.z + ")\n";
++				tString sState = "switched off";
++				if(pGoer.IsActive()) sState = cScript_RunGlobalFunc(pGoer.GetName(), "cScrAgentStalker", "_Global_VRTrailerState") ? cScript_GetGlobalReturnString() : "?";
++				if(sState != msVRTrailerStateWas) Log("BunkerVR trailer: " + pGoer.GetName() + " now " + sState + sAt);
++				msVRTrailerStateWas = sState;
++				cVector3f vOff = vAt - mvVRTrailerGoal;
++				vOff.y = 0.0f;
++				if(mbVRTrailerGoalSet && vOff.Length() < gfVRTrailerThere)
++				{
++					Log("BunkerVR trailer: " + pGoer.GetName() + " is there" + sAt);
++					mbVRTrailerGoalSet = false;
++				}
++				else if(mbVRTrailerGoalSet && mfVRTrailerWatch < 0.0f)
++				{
++					Log("BunkerVR trailer: " + pGoer.GetName() + " is still " + vOff.Length() + " m off" + sAt);
++				}
++			}
++		}
++
++		// A scene waiting for a spot: the right trigger pulled while looking at it.
++		if(mlVRTrailerWaits == 0) return;
++		mfVRTrailerWaitFor += afTimeStep;
++		bool bTrigger = cVR_HandTrigger(1) > 0.8f;
++		bool bPulled = bTrigger && mbVRTrailerTriggerWas == false;
++		mbVRTrailerTriggerWas = bTrigger;
++		if(mfVRTrailerWaitFor > gfVRTrailerWaitMost)
++		{
++			Log("BunkerVR trailer: scene " + mlVRTrailerWaits + " given up: no spot chosen within " + int(gfVRTrailerWaitMost) + " s\n");
++			mlVRTrailerWaits = 0;
++			return;
++		}
++		if(bPulled == false) return;
++		cVector3f vSpot;
++		if(VRTrailerSpot(vSpot) == false)
++		{
++			VRBuzzHand(1, 0.2f, 0.8f); // (nothing there: look at the floor and pull again)
++			Log("BunkerVR trailer: nothing where the player looks\n");
++			return;
++		}
++		int lScene = mlVRTrailerWaits;
++		mlVRTrailerWaits = 0;
++		VRBuzzHand(1, 0.06f, 0.5f);
++		iLuxEntity@ pBeast = VRTrailerBeast();
++		if(lScene == 200)
++		{
++			// Put there, facing the player.
++			if(pBeast is null) { VRTrailerNoBeast(); return; }
++			VRTrailerTake(pBeast);
++			cLuxPlayer@ pPlayer = cLux_GetPlayer();
++			cVector3f vToPlayer = pPlayer !is null && pPlayer.GetCharacterBody() !is null ? pPlayer.GetCharacterBody().GetFeetPosition() - vSpot : cVector3f(0.0f, 0.0f, 1.0f);
++			vToPlayer.y = 0.0f;
++			cScript_SetGlobalArgVector3f(0, vSpot);
++			cScript_SetGlobalArgFloat(1, vToPlayer.Length() > 0.01f ? cMath_GetAngleFromPoints3D(cVector3f(0.0f), cMath_Vector3Normalize(vToPlayer)).y : 0.0f);
++			if(cScript_RunGlobalFunc(pBeast.GetName(), "cScrAgentStalker", "_Global_VRTrailerPlace") == false || cScript_GetGlobalReturnBool() == false)
++			{
++				VRBuzzHand(1, 0.2f, 0.8f);
++				Log("BunkerVR trailer: " + pBeast.GetName() + " could not be put there (it is busy with the player)\n");
++				return;
++			}
++			Log("BunkerVR trailer: " + pBeast.GetName() + " put at " + vSpot.x + " " + vSpot.y + " " + vSpot.z + "\n");
++			VRTrailerWatch(true, vSpot);
++		}
++		else
++		{
++			cLuxMap@ pMap = cLux_GetCurrentMap();
++			if(pMap is null || pBeast is null || pBeast.IsActive() == false) { VRTrailerNoBeast(); return; }
++			VRTrailerTell(lScene == 202 ? 2 : 1);
++			pMap.BroadcastSoundHeardEvent("BunkerVRTrailer", vSpot, 200.0f, 5, false, false);
++			Log("BunkerVR trailer: " + pBeast.GetName() + " sent " + (lScene == 202 ? "running" : "walking") + " to " + vSpot.x + " " + vSpot.y + " " + vSpot.z + "\n");
++			VRTrailerWatch(true, vSpot);
++		}
++	}
++
++	//------------------------------------------------------------
++
 +	// BunkerVR: the Beast page's moves, counted down here: each
 +	// starts when its wait is over (VRBeastTestStart); a test kill then waits
 +	// for its animation and ends in the game's own death (VRBeastTestKillEnd).
 +	void VRUpdateBeastTest(float afTimeStep)
 +	{
++		VRUpdateTrailer(afTimeStep); // BunkerVR: the Trailer page's scenes
 +		// The Beast just put in front: a stand-in if it is switched off
 +		// (VRBeastStandIn). And a stand-in's throw over: it stands idle.
 +		if(mfVRBeastBodyCheck >= 0.0f)
@@ -10032,6 +11019,7 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +			for(uint i = 0; i < vEnts.length(); ++i)
 +			{
 +				if(vEnts[i] is null || vEnts[i].GetName() == "VRTestBeast" || vEnts[i].IsActive() == false) continue;
++				if(vEnts[i].GetName() == msVRTrailerTaken && msVRTrailerTakenMap == pMap.GetName()) continue; // (the Trailer page's)
 +				vEnts[i].SetActive(false);
 +				if(mvVRBeastAwayNames.find(vEnts[i].GetName()) < 0) mvVRBeastAwayNames.insertLast(vEnts[i].GetName());
 +				Log("BunkerVR: the Beast " + vEnts[i].GetName() + " is kept out of " + pMap.GetName() + " (switched off: the Places page)\n");
@@ -10475,6 +11463,36 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +	// (`mfVRHeadFade`, sent with the game's own fade): nothing can be seen
 +	// through walls. Black for `gfVRHeadReturnTime`, the view is brought back
 +	// to the body, as re-centering does.
++	// BunkerVR: is there ground under the game's body's feet at avFeet, within afStep below them (and 10 cm above,
++	// for a slope)? For following the real head (VRFollowHead): never onto nothing.
++	bool VRGroundUnder(const cVector3f &in avFeet, float afStep)
++	{
++		return VRGroundDrop(avFeet, afStep) > -0.5f;
++	}
++
++	// BunkerVR: how far below avFeet the ground is (as VRGroundUnder looks for it: from 10 cm above the feet to afStep
++	// below them; minus when it is above them, on a slope); -1 when there is none.
++	float VRGroundDrop(const cVector3f &in avFeet, float afStep)
++	{
++		float fHitAt = 0.0f;
++		cVector3f vNormal = cVector3f(0.0f, 1.0f, 0.0f);
++		if(cLux_GetClosestBody(avFeet + cVector3f(0.0f, 0.1f, 0.0f), cVector3f_Down, 0.1f + cMath_Max(afStep, 0.1f), fHitAt, vNormal) is null) return -1.0f;
++		return fHitAt - 0.1f;
++	}
++
++	// BunkerVR: how many times the VR mod has centred the view (special roll 7065, as Prop_PlayerBody.hps
++	// VRRecentreCount); -1 when it does not say.
++	int VRRecentreCountNow(cCamera@ apCam)
++	{
++		if(apCam is null) return -1;
++		float fRealRoll = apCam.GetRoll();
++		apCam.SetRoll(7065.0f);
++		cVector3f vAnswer = apCam.GetMatrix().GetTranslation();
++		apCam.SetRoll(fRealRoll);
++		if(vAnswer.x < 12344.0f || vAnswer.x > 12346.0f) return -1;
++		return int(vAnswer.y + 0.5f);
++	}
++
 +	void VRFollowHead(float afTimeStep)
 +	{
 +		if(afTimeStep <= 0.0f) return;
@@ -10496,10 +11514,31 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		mbVRFollowWasNormal = false;
 +		VRTeleportWatch(afTimeStep);
 +
-+		// In a camera animation the game places the body and the view itself.
++		// A re-centre (the left menu button held, Y held, the headset's own reset, the cutscene screen's end): the
++		// view is put over the body at the next update it can be, the body left where it is, as on a new map
++		// (mbVRFollowArrive). The room's offset from the game's body (mvVRFollow) is the old centre's: kept, the
++		// game's body would walk back by however far the player had walked in the room, through a doorway or into a
++		// shut door.
++		int lCentred = VRRecentreCountNow(pCam);
++		if(lCentred >= 0 && lCentred != mlVRFollowCentred)
++		{
++			if(mlVRFollowCentred >= 0)
++			{
++				mbVRFollowArrive = true;
++				mbVRFollowArriveCentred = true;
++			}
++			mlVRFollowCentred = lCentred;
++		}
++
++		// In a camera animation the game places the body and the view itself. Not the room's offset in a knockdown
++		// (VRRoughMoveKind 1): the drawn body keeps its slide under the head through it (UpdateOrientation), and
++		// with the offset taken away it, and the view on its animated head, jumped by the offset as it began (the
++		// head a meter from the play area's middle: a meter sideways, maybe into a wall), and the game's body was
++		// put there as it ended. In a kill or a death the Beast's hands are placed for the body where the game
++		// puts it: the offset goes.
 +		if(mbCameraAnimation_Active)
 +		{
-+			mvVRFollow = cVector3f(0);
++			if(VRRoughMoveKind() != 1) mvVRFollow = cVector3f(0);
 +			mfVRHeadFade = 0.0f;
 +			mfVRHeadBlackTime = 0.0f;
 +			return;
@@ -10579,7 +11618,16 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +			cVector3f vArriveOff = vNeck - vFeet;
 +			vArriveOff.y = 0.0f;
 +			mvVRFollow = mvVRFollow + vArriveOff;
-+			if(mlVRArriveNotes < 20)
++			// (A re-centre's line is counted on its own: the teleports' can use up the others' twenty.)
++			if(mbVRFollowArriveCentred && mbVRFollowArriveTeleport == false)
++			{
++				if(mlVRCentredNotes < 20)
++				{
++					mlVRCentredNotes++;
++					Log("BunkerVR: the view re-centred: it is put over the body, the body left where it is (the neck was " + int(vArriveOff.Length() * 100.0f + 0.5f) + " cm off it)\n");
++				}
++			}
++			else if(mlVRArriveNotes < 20)
 +			{
 +				mlVRArriveNotes++;
 +				cVector3f vLast = mvVRFollowLastMap;
@@ -10592,6 +11640,7 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +						" cm off it; the last map's offset, " + int(vLast.Length() * 100.0f + 0.5f) + " cm, cleared)\n");
 +			}
 +			mbVRFollowArriveTeleport = false;
++			mbVRFollowArriveCentred = false;
 +			mvVRWalkFeet = vFeet;
 +			return;
 +		}
@@ -10622,11 +11671,54 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +				vTo = vFeet + vStep * 0.5f;
 +				bFits = pCharBody.CheckCharacterFits(vTo, true, lSize, vPush);
 +			}
++			// Up a stair the real feet stand on: the step with the feet raised, half the game's own step height and
++			// then all of it (at most gfVRFollowStepUpMost). Level only, the body could not follow up real stairs:
++			// the view went on ahead of it, darkened, and was brought back.
++			float fRaise = 0.0f;
++			float fStepUp = cMath_Min(pCharBody.GetMaxStepSize(), gfVRFollowStepUpMost);
++			if(bFits == false && fStepUp > 0.01f)
++			{
++				for(int lTry = 1; lTry <= 2 && bFits == false; ++lTry)
++				{
++					fRaise = fStepUp * 0.5f * float(lTry);
++					vTo = vFeet + vStep + cVector3f(0.0f, fRaise, 0.0f);
++					bFits = pCharBody.CheckCharacterFits(vTo, true, lSize, vPush);
++				}
++				if(bFits == false) fRaise = 0.0f;
++				// Set down on the stair's top found under the raised feet, where that fits: left the rest of the
++				// raise above it, the body would drop onto it, and the view with it, at every stair.
++				if(bFits)
++				{
++					float fDrop = VRGroundDrop(vTo, fStepUp);
++					if(fDrop > 0.01f && fDrop < fRaise)
++					{
++						cVector3f vDown = vTo - cVector3f(0.0f, fDrop - 0.005f, 0.0f);
++						cVector3f vPushDown = cVector3f(0.0f);
++						if(pCharBody.CheckCharacterFits(vDown, true, lSize, vPushDown))
++						{
++							fRaise -= fDrop - 0.005f;
++							vTo = vDown;
++						}
++					}
++				}
++			}
++			// Never onto nothing: ground within a step below where the feet would go (VRGroundUnder). A lean over an
++			// unrailed edge had moved the body over it, and the player fell. (Not swimming: no ground is near then.)
++			bool bSwimming = pPlayer.GetCurrentMoveStateId() == eMoveState_Swim;
++			if(bFits && bSwimming == false && VRGroundUnder(vFeet + cVector3f(vTo.x - vFeet.x, fRaise, vTo.z - vFeet.z), fStepUp) == false)
++			{
++				bFits = false;
++				if(mlVRFollowNotes < 6)
++				{
++					mlVRFollowNotes++;
++					Log("BunkerVR: the game's body does not follow the head there: no ground within a step below\n");
++				}
++			}
 +			if(bFits)
 +			{
 +				cVector3f vMoved = vTo - vFeet;
 +				vMoved.y = 0.0f;
-+				vTo = vFeet + vMoved;
++				vTo = vFeet + vMoved + cVector3f(0.0f, fRaise, 0.0f);
 +				pCharBody.SetFeetPosition(vTo, false);
 +				// The drawn body's smoothing (in UpdateOrientation) is moved
 +				// with it, so that it does not see this as a movement.
@@ -10647,9 +11739,10 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		// the line from the game's body to the head, at the head's height...
 +		// (Where the head will be a moment from now, from how fast it moves
 +		// against the game's body: the real head's own movement, not walking
-+		// with the stick, which moves both. At most 3 m/s is believed.)
++		// with the stick, which moves both. At most 3 m/s is believed. Up and down, against the feet under the
++		// view: on stairs the view is eased after the character's, VRStairView.)
 +		cVector3f vHeadSoon = vHead;
-+		cVector3f vHeadOff = vHead - vFeet;
++		cVector3f vHeadOff = vHead - cVector3f(vFeet.x, VRViewFeetY(vFeet.y), vFeet.z);
 +		if(mbVRLastHeadKnown && afTimeStep > 0.0001f)
 +		{
 +			cVector3f vSpeed = (vHeadOff - mvVRLastHead) * (1.0f / afTimeStep);
@@ -10803,9 +11896,13 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		   pCam !is null && pCharBody !is null && VRReadRealHead(pCam, mtxHead))
 +		{
 +			float fFeet = pCharBody.GetFeetPosition().y;
++			// (Heights from the feet under the view: on stairs the view is eased after the character's, VRStairView.
++			// The creatures' sight takes the real head as high above the character's own feet.)
++			float fViewFeet = VRViewFeetY(fFeet);
++			cVector3f vSightHead = mtxHead.GetTranslation() + cVector3f(0.0f, fFeet - fViewFeet, 0.0f);
 +			float fRealRoll = pCam.GetRoll();
 +			pCam.SetRoll(7007.0f);
-+			float fGameEye = pCam.GetMatrix().GetTranslation().y - fFeet;
++			float fGameEye = pCam.GetMatrix().GetTranslation().y - fViewFeet;
 +			pCam.SetRoll(fRealRoll);
 +			if(Player_GetCrouching() == false && Player_GetCrawling() == false && GetCrouchTransitionActive() == false &&
 +			   pCharBody.IsOnGround() && fGameEye > 1.0f && fGameEye < 2.5f)
@@ -10815,12 +11912,12 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +			}
 +			if(mfVRStealthStandEye > 0.0f)
 +			{
-+				float fEye = mtxHead.GetTranslation().y - fFeet;
++				float fEye = mtxHead.GetTranslation().y - fViewFeet;
 +				fLow = cMath_Clamp((mfVRStealthStandEye - fEye) / (gvBodySize.y - gvBodyCrouchSize.y), 0.0f, gfVRStealthLowMost);
 +			}
 +			// The creatures' sight at the real head's height (gfVRSightEyeLowest).
-+			lSightWhy = VRSightWhyNot(pPlayer, pCharBody, mtxHead.GetTranslation());
-+			if(lSightWhy == 0) fSightUp = VRSightRise(pPlayer, pCharBody, mtxHead.GetTranslation().y);
++			lSightWhy = VRSightWhyNot(pPlayer, pCharBody, vSightHead);
++			if(lSightWhy == 0) fSightUp = VRSightRise(pPlayer, pCharBody, vSightHead.y);
 +		}
 +		mfVRStealthLow = fLow;
 +		cScript_SetGlobalVarFloat("BunkerVR_StealthLow", fLow);
@@ -11451,7 +12548,63 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +	}
 +	
 +	//------------------------------------------------------------
-+	
++
++	// BunkerVR: how far the body is moved this update to bring the middle of its shoulders to its place under the real
++	// neck, avOff away (see "the chest goes under the neck"): eased, with the time constant gfVRChestFixTime. Up and
++	// down it is never left more than gfVRChestLagMost behind: getting up or ducking, the body keeps up with the head,
++	// the easing only smoothing the small moves. While the body turns (abTurning) it is not moved sideways or forwards,
++	// as its shoulders were found where the last update's turn put them; a turn moves them round, never up or down.
++	cVector3f VRChestStep(const cVector3f &in avOff, float afTimeStep, bool abTurning)
++	{
++		cVector3f vStep = avOff * BunkerVR_EaseShare(afTimeStep, gfVRChestFixTime);
++		float fLeft = avOff.y - vStep.y;
++		if(fLeft > gfVRChestLagMost)		vStep.y += fLeft - gfVRChestLagMost;
++		else if(fLeft < -gfVRChestLagMost)	vStep.y += fLeft + gfVRChestLagMost;
++		if(abTurning)
++		{
++			vStep.x = 0.0f;
++			vStep.z = 0.0f;
++		}
++		return vStep;
++	}
++
++	//------------------------------------------------------------
++
++	// BunkerVR: a note in hpl.log each time the drawn body falls behind the real head up or down by more than
++	// gfVRChestLagNote (the middle of its shoulders as drawn this frame, avOff from its place under the real neck: see
++	// "the chest goes under the neck"): how far at most, for how long, how many updates its limit up or down held it
++	// (abAtLimit: gfVRChestFixUp, gfVRChestFixDown), and how many the game had it crawling or easing out of a crawl.
++	// The first 40; one lasting gfVRChestLagLongest is noted then and begun again.
++	void VRChestLagNote(const cVector3f &in avOff, bool abAtLimit, float afTimeStep)
++	{
++		float fOff = avOff.Length() < 1.0f ? avOff.y : 0.0f; // (a jump or a re-centre is no lag)
++		if(mfVRChestLagTime < 0.0f)
++		{
++			if(cMath_Abs(fOff) < gfVRChestLagNote) return;
++			mfVRChestLagTime = 0.0f;
++			mfVRChestLagWorst = 0.0f;
++			mlVRChestLagLimited = 0;
++			mlVRChestLagCrawl = 0;
++		}
++		mfVRChestLagTime += afTimeStep;
++		if(cMath_Abs(fOff) > cMath_Abs(mfVRChestLagWorst)) mfVRChestLagWorst = fOff;
++		if(abAtLimit) mlVRChestLagLimited++;
++		if(Player_GetCrawling() || mfCrawlTransitionT > 0.001f) mlVRChestLagCrawl++;
++		bool bLong = mfVRChestLagTime >= gfVRChestLagLongest;
++		if(cMath_Abs(fOff) > gfVRChestLagNote * 0.5f && bLong == false) return;
++		if(mlVRChestLagNotes < 40)
++		{
++			mlVRChestLagNotes++;
++			Log("BunkerVR: the body fell behind the head up or down: at most " + int(cMath_Abs(mfVRChestLagWorst) * 100.0f + 0.5f) + " cm " +
++				(mfVRChestLagWorst > 0.0f ? "below" : "above") + " its place under the neck, for " + int(mfVRChestLagTime * 1000.0f + 0.5f) +
++				" ms" + (bLong ? " and on" : "") + " (held at its limit " + mlVRChestLagLimited + " updates; crawling or easing out of a crawl " +
++				mlVRChestLagCrawl + "; " + (Player_GetCrouching() ? "crouched" : "standing") + ")\n");
++		}
++		mfVRChestLagTime = -1.0f;
++	}
++
++	//------------------------------------------------------------
++
 =5
 +		// BunkerVR: the game's body follows the real head (before it is read
 +		// below, so that the body is drawn from where it now is).
@@ -11461,7 +12614,20 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		VRTimeMark(7077);
 +		cScript_SetGlobalVarInt("BunkerVR_LegsOk", mbVRLegsOk ? 1 : 0);
 +		
-=24
+=12
++		// BunkerVR: the view's own ease up and down stairs, from the feet (the drawn body keeps the game's smoothing above).
++		VRStairView(vFeetPos.y, afTimeStep, abSmooth);
+=6
++		// BunkerVR: with comfort (cVR_ComfortOn), the view's drop into a crawl (gfPlayerBody_DefaultCrawlOffset over
++		// half a second) and its rise out of it are made in a blink held through them.
++		if(fCrawlTransitionGoal != mfVRCrawlGoalWas)
++		{
++			float fVRCrawlLeft = cMath_Abs(fCrawlTransitionGoal - mfCrawlTransitionT) * 0.5f; // (seconds of the ease left)
++			if(mfVRCrawlGoalWas >= 0.0f && mbVRSeen && fVRCrawlLeft > 0.01f && cVR_ComfortOn())
++				VRComfortBlink(fVRCrawlLeft + 0.05f, fCrawlTransitionGoal > 0.5f ? "the crawl lowers the view" : "the crawl's end raises the view");
++			mfVRCrawlGoalWas = fCrawlTransitionGoal;
++		}
+=6
 -1
 +		/////////////////////////////////////////////
 +		// BunkerVR: keep the body under the player's real head.
@@ -11531,14 +12697,20 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +						float fVRDiff = fVRHeadTurn - mfVRBodyTurn;
 +						if(fVRDiff > cMath_Pi)	fVRDiff -= cMath_Pi * 2.0f;
 +						if(fVRDiff < -cMath_Pi)	fVRDiff += cMath_Pi * 2.0f;
-+						
-+						if(fVRDiff > gfVRBodyTurnSlack)			mfVRBodyTurn += fVRDiff - gfVRBodyTurnSlack;
-+						else if(fVRDiff < -gfVRBodyTurnSlack)	mfVRBodyTurn += fVRDiff + gfVRBodyTurnSlack;
-+						
++
++						float fVRDrag = 0.0f;
++						if(fVRDiff > gfVRBodyTurnSlack)			fVRDrag = fVRDiff - gfVRBodyTurnSlack;
++						else if(fVRDiff < -gfVRBodyTurnSlack)	fVRDrag = fVRDiff + gfVRBodyTurnSlack;
++						mfVRBodyTurn += fVRDrag;
++						// The drag is drawn eased (gfVRBodyTurnEase): the body comes round after the head as a torso
++						// does, never jerked at the dead zone's edge. Only the drag: a snap turn or the stick turns
++						// the body with the view at once, and the walk's straightening (VRDoWalkTurn) leaves it where it is.
++						mfVRBodyTurnLag = cMath_Clamp((mfVRBodyTurnLag + fVRDrag) * (1.0f - BunkerVR_EaseShare(afTimeStep, gfVRBodyTurnEase)), -gfVRBodyTurnLagMost, gfVRBodyTurnLagMost);
++
 +						if(mfVRBodyTurn > cMath_Pi)		mfVRBodyTurn -= cMath_Pi * 2.0f;
 +						if(mfVRBodyTurn < -cMath_Pi)	mfVRBodyTurn += cMath_Pi * 2.0f;
 +					}
-+					fVRBodyTurn = mfVRBodyTurn;
++					fVRBodyTurn = mfVRBodyTurn - mfVRBodyTurnLag;
 +					
 +					// The way the body faces after that turn.
 +					cVector3f vVRBodyFwd = cMath_MatrixMul3x3(cMath_MatrixRotateY(fVRBodyTurn), vVRCamFwd);
@@ -11594,13 +12766,17 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +							// Kept as places in the world, they would be left behind
 +							// for a moment each time the body turns, and the shoulders,
 +							// and the arms with them, would swing round after it.
++							// (By time constants, the same at any update rate: gfVRLeanTime, gfVRLeanBackTime. Per update,
++							// at 45 updates a second it had leant and come back half as fast.)
 +							if(vVRShort.Length() < 0.6f)
 +							{
-+								mvVRReachLean.x = mvVRReachLean.x + cMath_Vector3Dot(vVRShort, vVRBodySide) * 0.25f;
-+								mvVRReachLean.z = mvVRReachLean.z + cMath_Vector3Dot(vVRShort, vVRBodyFwd) * 0.25f;
++								float fVRLeanShare = BunkerVR_EaseShare(afTimeStep, gfVRLeanTime);
++								mvVRReachLean.x = mvVRReachLean.x + cMath_Vector3Dot(vVRShort, vVRBodySide) * fVRLeanShare;
++								mvVRReachLean.z = mvVRReachLean.z + cMath_Vector3Dot(vVRShort, vVRBodyFwd) * fVRLeanShare;
 +							}
-+							mvVRReachLean.x = cMath_Clamp(mvVRReachLean.x * 0.985f, -0.15f, 0.15f);
-+							mvVRReachLean.z = cMath_Clamp(mvVRReachLean.z * 0.985f, -0.15f, 0.08f);
++							float fVRLeanKeep = 1.0f - BunkerVR_EaseShare(afTimeStep, gfVRLeanBackTime);
++							mvVRReachLean.x = cMath_Clamp(mvVRReachLean.x * fVRLeanKeep, -0.15f, 0.15f);
++							mvVRReachLean.z = cMath_Clamp(mvVRReachLean.z * fVRLeanKeep, -0.15f, 0.08f);
 +							mvVRReachLean.y = 0.0f;
 +							vVRLeanNow = vVRBodySide * mvVRReachLean.x + vVRBodyFwd * mvVRReachLean.z + cVector3f(0.0f, cMath_Max(mvVRReachLean.z, 0.0f) * -0.6f, 0.0f);
 +							vVRChestWanted = vVRChestWanted + vVRLeanNow;
@@ -11614,23 +12790,31 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +							if(fVRTurned > cMath_Pi)	fVRTurned -= cMath_Pi * 2.0f;
 +							if(fVRTurned < -cMath_Pi)	fVRTurned += cMath_Pi * 2.0f;
 +							mfVRChestLastYaw = fVRYawNow;
-+							if(vVRChestOff.Length() < 1.0f && cMath_Abs(fVRTurned) < 0.004f) vVRChestFixNow = vVRChestFixNow + vVRChestOff * 0.2f;
++							// ("Turning" by its speed, gfVRChestStillTurn, not by the turn per update.)
++							if(vVRChestOff.Length() < 1.0f)
++								vVRChestFixNow = vVRChestFixNow + VRChestStep(vVRChestOff, afTimeStep, cMath_Abs(fVRTurned) >= gfVRChestStillTurn * afTimeStep);
 +							// At most gfVRChestFixMax sideways and forwards; up and down from
 +							// gfVRChestFixDown below to gfVRChestFixUp above.
 +							cVector3f vVRFixLevel = cVector3f(vVRChestFixNow.x, 0.0f, vVRChestFixNow.z);
 +							if(vVRFixLevel.Length() > gfVRChestFixMax) vVRFixLevel = cMath_Vector3Normalize(vVRFixLevel) * gfVRChestFixMax;
-+							vVRChestFixNow = cVector3f(vVRFixLevel.x, cMath_Clamp(vVRChestFixNow.y, -gfVRChestFixDown, gfVRChestFixUp), vVRFixLevel.z);
++							float fVRFixUp = cMath_Clamp(vVRChestFixNow.y, -gfVRChestFixDown, gfVRChestFixUp);
++							// (What is left of the gap up or down once drawn this frame.)
++							VRChestLagNote(cVector3f(vVRChestOff.x, vVRChestOff.y - (fVRFixUp - mvVRChestFix.y), vVRChestOff.z), fVRFixUp != vVRChestFixNow.y, afTimeStep);
++							vVRChestFixNow = cVector3f(vVRFixLevel.x, fVRFixUp, vVRFixLevel.z);
 +							mvVRChestFix = cVector3f(cMath_Vector3Dot(vVRChestFixNow, vVRBodySide), vVRChestFixNow.y, cMath_Vector3Dot(vVRChestFixNow, vVRBodyFwd));
 +						}
 +						// (The lean is added straight on, and is in the wanted place above too, so the two do not chase each other.)
 +						mvVRBodyShift = mvVRBodyShift + vVRChestFixNow + vVRLeanNow;
 +					}
 +
-+					// Never further than a couple of steps (tracking glitches).
++					// Never further than a couple of steps from the game's body (tracking glitches): the slide less the
++					// room's offset (mvVRFollow), which grows as the player walks about the room and is not the body's
++					// own (limited whole, the drawn body fell behind the head past about 2.6 m from the centring spot).
 +					mvVRBodyShiftAsked = mvVRBodyShift;
-+					if(mvVRBodyShift.Length() > gfVRBodyShiftMax)
++					cVector3f vVRFromBody = mvVRBodyShift - mvVRFollow;
++					if(vVRFromBody.Length() > gfVRBodyShiftMax)
 +					{
-+						mvVRBodyShift = cMath_Vector3Normalize(mvVRBodyShift) * gfVRBodyShiftMax;
++						mvVRBodyShift = mvVRFollow + cMath_Vector3Normalize(vVRFromBody) * gfVRBodyShiftMax;
 +					}
 +				}
 +			}
@@ -11689,6 +12873,7 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +			// Facing the ladder.
 +			fVRBodyTurn = 0.0f;
 +			mfVRBodyTurn = 0.0f;
++			mfVRBodyTurnLag = 0.0f;
 +		}
 +
 +		cMatrixf mtxBodyOrientation = cMath_MatrixRotateY(cMath_Pi+mfYaw+fVRBodyTurn);
@@ -11732,7 +12917,11 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +			// BunkerVR: the body was slid to stay under the head; the view must not slide with it.
 +			// (Nor sway with it: the last move VRSteadyEyes made.)
 +			pPlayer.GetCamera().SetPosition(VRCameraPlace(pAttachNode.GetWorldPosition() + vCamPosAdd - mvVRBodyShift + cVector3f(0.0f, mfVRDuckLift, 0.0f) + mvVRSteadyLast, vCamPosAdd));
-=1247
+=342
++		mbVRStairOn = false; // BunkerVR: (and the view's ease on stairs: VRStairView)
++		mfVRStairLeft = 0.0f;
++		mbVRStairFeetKnown = false;
+=905
 +		// BunkerVR: playing standing, a crouch made by really crouching leaves
 +		// the body standing as it is (its legs follow the real crouch) and the
 +		// view where the real head is: only the game's own count of it changes
@@ -11747,10 +12936,13 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +		
 =542
 +
-+			// BunkerVR: the body slid under the head through a knockdown
-+			// (UpdateOrientation): the game's body goes where the animation
-+			// left it, not slid; play slides the drawn body again at once.
-+			vPos -= cVector3f(mvVRBodyShift.x, 0.0f, mvVRBodyShift.z);
++			// BunkerVR: the drawn body is placed by its slide under the head
++			// less the room's offset (UpdateOrientation; through a knockdown
++			// both kept from as it began): the game's body goes where the
++			// animation left the drawn one, less that, so that play draws it
++			// on from the same place.
++			cVector3f vVRDrawnOff = mvVRBodyShift - mvVRFollow;
++			vPos -= cVector3f(vVRDrawnOff.x, 0.0f, vVRDrawnOff.z);
 =22
 +
 +	// BunkerVR: a jump (MenuHandler.hps VRJumpStart, the Places page) ends a scene the body is playing as the scene's own
@@ -11793,6 +12985,17 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +	[nosave] cVector3f mvVRBodyShift = cVector3f(0); // BunkerVR: how far the body is slid to stay under the head
 +	[nosave] cVector3f mvVRBodyShiftAsked = cVector3f(0); // BunkerVR: the same, before the limit of gfVRBodyShiftMax (for the F9 notes)
 +	[nosave] cVector3f mvVRFollow = cVector3f(0);	// BunkerVR: all that the game's body has been moved to follow the real head (the drawn body and the camera are put back by it; see VRFollowHead)
++	[nosave] float mfVRStairY = 0.0f;		// BunkerVR: the height of the feet under the view, eased up and down stairs (VRStairView)...
++	[nosave] float mfVRStairSpeed = 0.0f;	// BunkerVR: ...how fast it moves (m/s)...
++	[nosave] float mfVRStairFeetWas = 0.0f;	// BunkerVR: ...the feet's height the update before...
++	[nosave] bool mbVRStairFeetKnown = false;	// BunkerVR: ...whether it is known...
++	[nosave] bool mbVRStairFalling = false;	// BunkerVR: ...whether a fall or a jump is being followed (until caught up after landing)...
++	[nosave] float mfVRStairFallFor = 0.0f;	// BunkerVR: ...for how long (seconds)...
++	[nosave] bool mbVRStairAir = false;		// BunkerVR: ...whether the feet have left the ground since (the engine says "on the ground" for some frames after a jump)...
++	[nosave] float mfVRStairFallRamp = 0.0f;	// BunkerVR: ...over what time the follow is tightened (seconds)...
++	[nosave] float mfVRStairLeft = 0.0f;	// BunkerVR: ...the lift left when the ease was switched off, being eased away...
++	[nosave] int mlVRStairJumps = -1;		// BunkerVR: ...and the player's jumps counted so far ("BunkerVR_Jumps"; -1 not read yet)
++	[nosave] bool mbVRStairOn = false;		// BunkerVR: ...and whether the view is placed by it (VRStairLift; cleared in a new map)
 +	[nosave] int mlVRLadderNotes = 0;				// BunkerVR: "BunkerVR ladder:" lines from here (VRLadderHead; the first 30)...
 +	[nosave] bool mbVRLadderFarNoted = false;		// ...and is the head noted as far from the body (half dark or more)?
 +	[nosave] int mlVRLadderCentreSteps = 0;			// BunkerVR: updates spent putting the view over the body on a ladder...
@@ -11805,12 +13008,24 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +	[nosave] float mfVRHeadFade = 0.0f;			// BunkerVR: how dark the view is made because the head is in a wall or too far from the body (0 to 1)
 +	[nosave] bool mbVRWatchTriggerWas = true;		// BunkerVR: the right trigger pulled at the last update (VRUpdateWatch; true at first, so a pull already on does not count)
 +	[nosave] bool mbVRBeastHoleMoved = false;		// BunkerVR: the Beast page's hole kill has just put the player beside the hole (VRBeastTestStart)
-+	[nosave] bool mbVRRoughVignette = false;		// BunkerVR: the knockdown, kill or death now is seen with the vignette (VRVignetteView)...
++	[nosave] bool mbVRRoughVignette = false;		// BunkerVR: the knockdown, kill or death now is seen with comfort (VRRoughComfort; its vignette: VRVignetteView)...
 +	[nosave] bool mbVRVignetteOn = false;			// ...its ring at work...
 +	[nosave] float mfVRVignetteRing = 0.0f;			// ...how far closed (0 to 1)...
 +	[nosave] float mfVRVignetteSpeed = 0.0f;		// ...the animated head's speed, smoothed...
-+	[nosave] cVector3f mvVRVignetteLastHead = cVector3f(0);	// ...and where it was
++	[nosave] cVector3f mvVRVignetteLastHead = cVector3f(0);	// ...and where it was...
++	[nosave] float mfVRVignetteFastAgo = 100.0f;	// ...and how long since it was last fast (seconds; the landing's blink)
++	[nosave] int mlVRComfortBlinkNotes = 0;			// BunkerVR: comfort's blinks noted in the log (the first 20; VRComfortBlink)
++	[nosave] int mlVRCrouchingWas = -1;			// BunkerVR: crouching at the last update (1), not (0), not known yet (-1) (VRCrouchComfort)...
++	[nosave] float mfVRCrouchViewWas = 0.0f;		// ...the view's height above the feet then...
++	[nosave] float mfVRCrouchBlinkFor = 100.0f;	// ...and how long since its blink began (seconds)
++	[nosave] bool mbVRCrouchWasReal = false;		// ...and whether the crouch now ending was the player's own (mbVRRealCrouch, latched)
++	[nosave] float mfVRCrawlGoalWas = -1.0f;		// BunkerVR: the crawl's view goal at the last update (0 or 1; -1 not known yet)
++	[nosave] int mlVRDeathDarkNotes = 0;			// BunkerVR: deaths darkened with comfort, noted in the log (the first 10)
++	[nosave] float mfVRRoughFor = 0.0f;				// BunkerVR: seconds since the knockdown, kill or death now began (or became a death)
 +	[nosave] bool mbVRFollowArrive = true;			// BunkerVR: a new map: the view is to be put over the body at the first update it can be (VRFollowHead)...
++	[nosave] int mlVRFollowCentred = -1;			// BunkerVR: the mod's count of view centrings, as last seen (a new one: mbVRFollowArrive)...
++	[nosave] bool mbVRFollowArriveCentred = false;	// ...and the view's putting over the body is for one (for the log)...
++	[nosave] int mlVRCentredNotes = 0;				// ...and its lines logged so far
 +	[nosave] cVector3f mvVRFollowLastMap = cVector3f(0);	// ...the last map's offset, for the log...
 +	[nosave] int mlVRArriveNotes = 0;				// ...and how many times noted
 +	[nosave] cVector3f mvVRFollowLastFeet = cVector3f(0);	// BunkerVR: where the game's body stood at the last update (to detect a teleport)...
@@ -11842,9 +13057,15 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +	[nosave] bool mbVRLegsOk = false;			// BunkerVR: may the drawn legs be placed (UpdateVRLegs in Prop_PlayerBody.hps; sent as BunkerVR_LegsOk)?
 +	[nosave] cVector3f mvVRChestFix = cVector3f(0); // BunkerVR: the part of that which brings the chest under the neck (in the body's own directions: sideways, up, forwards)
 +	[nosave] float mfVRChestLastYaw = 0.0f; // BunkerVR: which way the body faced last frame (radians)
++	[nosave] float mfVRChestLagTime = -1.0f;	// BunkerVR: how long the body has been behind the head up or down (VRChestLagNote; -1: it is not)
++	[nosave] float mfVRChestLagWorst = 0.0f;	// BunkerVR: ...the most so far (meters; + below its place)
++	[nosave] int mlVRChestLagLimited = 0;		// BunkerVR: ...the updates its limit up or down held it meanwhile
++	[nosave] int mlVRChestLagCrawl = 0;			// BunkerVR: ...the updates crawling or easing out of a crawl meanwhile
++	[nosave] int mlVRChestLagNotes = 0;			// BunkerVR: how many such notes so far
 +	[nosave] cVector3f mvVRReachLean = cVector3f(0); // BunkerVR: how far the body leans after a hand that is out of its arm's reach (sideways, -, forwards, in the body's own directions)
 +	[nosave] float mfVRBodyScaleApplied = 1.0f; // BunkerVR: how many times bigger the body is currently drawn
 +	[nosave] float mfVRBodyTurn = 0.0f; // BunkerVR: how far the body is turned to follow the head (radians)
++	[nosave] float mfVRBodyTurnLag = 0.0f; // BunkerVR: how far the drawn body is still behind that turn (radians; eased: gfVRBodyTurnEase)
 +	[nosave] bool mbVRFeetYawKnown = false; // BunkerVR: the game's body's yaw at the last update, for the drawn feet to turn with it (UpdateBones)...
 +	[nosave] float mfVRFeetCharYaw = 0.0f;
 +	[nosave] float mfVRGameTurnSum = 0.0f; // BunkerVR: those turns added up (radians, kept within a half turn either way; "BunkerVR_GameTurnSum")
@@ -11862,9 +13083,8 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +	[nosave] int mlVRTestMade = 0;			// BunkerVR: how many things the menu's Spawn page has made (for their names)
 +	[nosave] tString msVRTestLastOne = "";	// BunkerVR: the name of the last thing the Spawn page made one at a time (taken away when it makes the next)
 +	[nosave] int mlVRRoughKind = 0;			// BunkerVR: a knockdown (1), a kill or a death (2) playing on the body, or none (0) (VRUpdateRoughMove)
-+	[nosave] int mlVRRoughView = 0;			// BunkerVR: how it is seen, the menu's choice when it began: 0 through the eyes, level; 1 on the cutscene screen (2 faded to black and 3 through the eyes, gentle, are not offered by the menu)
++	[nosave] int mlVRRoughView = 0;			// BunkerVR: how it is seen, the menu's choice when it began: 0 through the eyes, level (with comfort or none: mbVRRoughVignette); 1 on the cutscene screen
 +	[nosave] float mfVRRoughYaw = 0.0f;		// BunkerVR: the way the player faced when it began (the camera's yaw), kept to its end
-+	[nosave] float mfVRRoughFade = 0.0f;		// BunkerVR: how dark it makes the view (faded to black; 0 to 1)
 +	[nosave] tID mVRKillBeastID = tID_Invalid;	// BunkerVR: the Beast doing the kill now, as it or the Beast page reports it (VRStartKillView)
 +	[nosave] float mfVRKillBlinkAgo = 100.0f;	// BunkerVR: seconds since the kill's blink began
 +	[nosave] float mfVRKillBlinkHold = 0.0f;	// BunkerVR: how long that blink is dark
@@ -11922,24 +13142,6 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +	[nosave] float mfVRBlowFastAgo = 100.0f;	// BunkerVR: ...seconds since it was fast
 +	[nosave] float mfVRBlowAgo = 100.0f;	// BunkerVR: ...seconds since the last blow's buzz
 +	[nosave] int mlVRBlowNotes = 0;	// BunkerVR: blows logged
-+	[nosave] bool mbVRGentle = false; // BunkerVR: is the gentle view at work (a knockdown, kill or death seen through the eyes, gentle, and its eased return; VRGentleView)
-+	[nosave] cVector3f mvVRGentlePos = cVector3f(0.0f); // BunkerVR: where it has the view (the spring's point)
-+	[nosave] cVector3f mvVRGentleVel = cVector3f(0.0f); // BunkerVR: how fast that goes (m/s)
-+	[nosave] cVector3f mvVRGentleLastHead = cVector3f(0.0f); // BunkerVR: where the animated head was a frame ago
-+	[nosave] float mfVRGentleHeadSpeed = 0.0f; // BunkerVR: the head's speed, smoothed over about 0.05 s (m/s)
-+	[nosave] float mfVRGentleFastAgo = 100.0f; // BunkerVR: how long since the head was last above gfVRGentleStopFast (s)
-+	[nosave] float mfVRGentleBlinkAgo = 100.0f; // BunkerVR: how long since the last blink (s)
-+	[nosave] float mfVRGentleDark = 0.0f; // BunkerVR: how dark the blink has the view now (0 to 1; sent with the fades, VRSendGunNews)
-+	[nosave] float mfVRGentleRing = 0.0f; // BunkerVR: how far the comfort ring is closed (0 to 1; cVR_ComfortRing)
-+	[nosave] float mfVRGentleBack = -1.0f; // BunkerVR: how far into the eased return (s), or -1 while the move plays
-+	[nosave] float mfVRGentleTime = 0.0f; // BunkerVR: how long it has been at work (s)
-+	[nosave] float mfVRGentleNoteWait = 0.0f; // BunkerVR: until its next line in the log (s)
-+	[nosave] int mlVRGentleCount = 0; // BunkerVR: how many it has done (the first three are logged in detail)
-+	[nosave] int mlVRGentleBlinks = 0; // BunkerVR: the blinks in this one
-+	[nosave] float mfVRGentleTopHead = 0.0f; // BunkerVR: the head's top speed in this one (m/s)
-+	[nosave] float mfVRGentleTopView = 0.0f; // BunkerVR: the view's (m/s)
-+	[nosave] float mfVRGentleMostLag = 0.0f; // BunkerVR: the most the view was behind the head (m)
-+	[nosave] array<tID> mvVRGentleHidden; // BunkerVR: what it hid (the body, what hangs on it), to show again
 +	[nosave] int mlVRBeastTest = 0;			// BunkerVR: a Beast page move waiting to start (its command), or 0 (VRUpdateBeastTest)
 +	[nosave] int mlVRBeastTries = 0;			// BunkerVR: how many times it has waited for a Beast to be made
 +	[nosave] float mfVRBeastTestWait = 0.0f;	// BunkerVR: seconds until it starts or, for a test kill, until its end
@@ -11948,6 +13150,20 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +	[nosave] float mfVRBeastBodyCheck = -1.0f;	// BunkerVR: seconds until the Beast just put in front is looked at for needing a stand-in (below 0: none waiting; VRBeastStandIn)
 +	[nosave] cVector3f mvVRBeastBodyPos = cVector3f(0.0f);	// BunkerVR: where that Beast was put, on the floor
 +	[nosave] float mfVRBeastBodyYaw = 0.0f;		// BunkerVR: and the way it was turned (the game's yaw)
++	[nosave] int mlVRTrailerWaits = 0;			// BunkerVR: the Trailer page's scene waiting for a spot (200 to 202; 0: none)
++	[nosave] float mfVRTrailerWaitFor = 0.0f;		// BunkerVR: how long it has waited (given up after gfVRTrailerWaitMost)
++	[nosave] bool mbVRTrailerTriggerWas = true;		// BunkerVR: the right trigger pulled at the last update (a pull counts as it starts)
++	[nosave] bool mbVRTrailerCalm = true;			// BunkerVR: the trailer's Beast takes no notice of the player (the page's two buttons)
++	[nosave] tString msVRTrailerTaken = "";			// BunkerVR: the level's Beast the Trailer page brought in ("" none)...
++	[nosave] tString msVRTrailerTakenMap = "";		// ...in this level
++	[nosave] int mlVRTrailerHoleStep = 0;			// BunkerVR: coming out of a hole: 1 put into it, 2 out of it, next (0: none)
++	[nosave] float mfVRTrailerHoleIn = 0.0f;		// BunkerVR: seconds until that next step
++	[nosave] tString msVRTrailerHole = "";			// BunkerVR: the hole it comes out of
++	[nosave] float mfVRTrailerWatch = -1.0f;		// BunkerVR: seconds left watching it after a scene, for hpl.log (below 0: none; VRTrailerWatch)...
++	[nosave] float mfVRTrailerLookIn = 0.0f;		// ...until it is next looked at...
++	[nosave] tString msVRTrailerStateWas = "";		// ...the state it was in...
++	[nosave] bool mbVRTrailerGoalSet = false;		// ...whether it was sent to a spot...
++	[nosave] cVector3f mvVRTrailerGoal = cVector3f(0.0f);	// ...that spot
 +	[nosave] float mfVRBeastBodyAnimLeft = -1.0f;	// BunkerVR: seconds until the stand-in's throw is over and it stands idle again (below 0: none playing)
 +	[nosave] bool mbVRBeastBodyMissingLogged = false;	// BunkerVR: hpl.log has said the stand-in cannot be made in this map
 +	[nosave] int mlVRSway = 0;					// BunkerVR: the menu's "Body sway in the view": 0 reduced, 1 none, 2 as the game (VRSteadyEyes)
@@ -11971,7 +13187,6 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +	[nosave] bool mbVRDuckWas = false;		// BunkerVR: was the real head ducked at the last update?
 +	[nosave] bool mbVRDuckCrouched = false;	// BunkerVR: the present crouch was started by ducking
 +	[nosave] bool mbVRRealCrouch = false;	// BunkerVR: and it is the player's own (playing standing): the body and the view are left as they are
-+	[nosave] int mlVRBandageTurn = 0;		// BunkerVR: how many times the bandage has gone round the arm
 +	[nosave] float mfVRPutAwayWait = 0.0f;	// BunkerVR: a put-away asked for with X waits this many seconds more at most (VRDoPutAwayWait)
 +	[nosave] bool mbVRLighterLit = false;	// BunkerVR: is the lighter in the right hand lit by its trigger (commands 13, 14)...
 +	[nosave] float mfVRLighterLookWait = 0.0f;	// ...and seconds until the flames are next looked at against what burns (VRUpdateFlames)
@@ -11996,7 +13211,6 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +	[nosave] bool mbVRScreenWas = false; // BunkerVR: was the cutscene screen asked for at the last news
 +	[nosave] bool mbVRCutsceneBridging = false; // BunkerVR: held still straight after one: the screen stays...
 +	[nosave] float mfVRCutsceneBridgeStart = 0.0f; // ...since this game time
-+	[nosave] bool mbVRGentleBlinkNow = false; // BunkerVR: a blink asked of the gentle view (the view turned to a cutscene's facing)
 +	[nosave] float mfVRClothFlameTime = 0.0f;	// BunkerVR: how long a flame has been at the cloth of the molotov in the right hand (seconds)
 +	[nosave] tID m_idVRMolotovLit = tID_Invalid;	// BunkerVR: the molotov in the right hand whose cloth burns, or invalid
 +	[nosave] tID m_idVRPourVessel = tID_Invalid;	// BunkerVR: the fuel can or bottle in the right hand (VRUpdatePour)...
@@ -12199,6 +13413,7 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +	[nosave] bool mbVRMaskGripped = false;		// ...held by the grip (let go of, it goes back), not yet (from the inventory)...
 +	[nosave] bool mbVRMaskFar = false;			// ...has it been gfBunkerVR_MaskBackOn from the face since it came into the hand...
 +	[nosave] tString msVRMaskReEquip = "";		// ...and what the right hand held before, put away meanwhile ("" nothing)
++	[nosave] bool mbVRMaskGiveBackOnArrival = false;	// BunkerVR: the mask was in the hand as the last level was left: give that back in play (VRUpdateMask)
 +	[nosave] int mlVRMaskOnHand = -1;			// BunkerVR: the hand holding the mask on the face, to pull it off (-1 none)
 +	[nosave] array<bool> mvVRMaskSqueezeWas = {false, false};	// BunkerVR: was each hand squeezed at the last update (the mask's)
 +	[nosave] int mlVRMasksMade = 0;				// (the masks made for the hand, for their names)
@@ -12224,18 +13439,29 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +	[nosave] bool mbVRSlotCheckedTakes = false;	// ...and whether it may go in (VRChestSlotTakes)
 +	[nosave] int mlVRSlotNotes = 0;				// BunkerVR: "BunkerVR chest slot:" lines logged so far
 +	[nosave] float mfVRHipWait = 0.0f;			// BunkerVR: the revolver at the hip waits this much longer for the normal state (VRDoBodySlotWait)
++	[nosave] float mfVRLightWait = 0.0f;		// BunkerVR: the lantern switched at the chest waits this much longer for the normal state (VRDoBodySlotWait)
++	[nosave] tString msVRFlareCarryItem = "";	// BunkerVR: a flare's item carried burning out of the last level, to be lit again (VRFlareAtLeave)...
++	[nosave] float mfVRFlareCarryBurnt = 0.0f;	// ...how long it had burned (seconds)...
++	[nosave] float mfVRFlareCarryWait = 0.0f;	// ...and how long the new level's hand has been waited for
 +	[nosave] float mfVRShoulderWait = 0.0f;		// ...and the shotgun behind the shoulder
 +	[nosave] int mlVRShoulderNotes = 0;			// BunkerVR: "BunkerVR shoulder:" lines logged so far
 +	[nosave] int mlVRHipNotes = 0;				// BunkerVR: "BunkerVR hip:" lines logged so far
++	[nosave] int mlVRLightNotes = 0;			// BunkerVR: "BunkerVR chest light:" lines logged so far
 +	[nosave] float mfVRMolotovBurn = 0.0f;		// BunkerVR: how long it has burned in the hand (seconds)
 +	[nosave] float mfVRTorchFlameTime = 0.0f;	// BunkerVR: how long a flame has been at the head of the unlit torch in the right hand (seconds)
 +	[nosave] bool mbVRTorchHeldOut = false;		// BunkerVR: is the torch in the right hand held out (commands 18, 19)
 +	[nosave] bool mbVRBrandishing = false;		// BunkerVR: is it brandished (held out and burning; VRUpdateBrandish)
 +	[nosave] bool mbVRDuckLifting = false;	// BunkerVR: the view is being raised to make up for such a crouch
 +	[nosave] float mfVRDuckMaxLift = 0.0f;	// BunkerVR: the most it may be raised (game meters)
-+	[nosave] float mfVRDuckLift = 0.0f;		// BunkerVR: how far it is raised right now
++	[nosave] float mfVRDuckLift = 0.0f;		// BunkerVR: how far it is raised right now (game meters)
 +	[nosave] float mfVRDuckIdle = 0.0f;		// BunkerVR: seconds since that crouch ended
++	[nosave] bool mbVRPlayStanding = false;	// BunkerVR: playing standing (the duck's answer, VRDoDuck): the game's lowering and the real head's never added up (VRUpdateDuckLift)
++	[nosave] bool mbVRDuckOwn = false;		// BunkerVR: playing standing, the game's lowering now is under the player's own crouch (VRUpdateDuckLift: the view stays the real head)
++	[nosave] int mlVRDuckWay = 0;			// BunkerVR, for the stand-in headset's report: how VRUpdateDuckLift last raised the view (0 easing back, 1 seated duck, 2 standing)...
++	[nosave] float mfVRDuckRealLast = 0.0f;	// ...the real head's drop it last took playing standing...
++	[nosave] float mfVRDuckEyesLast = 0.0f;	// ...and the game's eyes above the feet it was given
 +	[nosave] float mfVRStandEye = -1.0f;	// BunkerVR: how high the eyes are above the feet when standing (-1 = not measured yet)
++	[nosave] float mfVRStandCam = -1.0f;	// BunkerVR: and the camera, with the game's additions and the steadying (VRUpdateDuckLift; -1 the same)
 +	[nosave] float mfVRStealthLow = 0.0f;	// BunkerVR: how low the player really is, for the Beast's sight (VRUpdateStealthLow)...
 +	[nosave] float mfVRStealthStandEye = -1.0f;	// ...and the game's own camera's height above the feet standing (-1 = not known yet)
 +	[nosave] bool mbVRSightOn = false;	// BunkerVR: the creatures see the player at the real head's height now (cVR_BeastSight)...
@@ -12261,6 +13487,8 @@ to 70784d577fda8295d6545a689ce9caa0ce212b8b0fad3a113ba2b5abc4a8ea96 771953
 +	[nosave] int mlVRRoomWait = 0; // BunkerVR: updates left until the room in front is worked out again (VRSendGunNews)
 +	[nosave] array<tID> mvVRPullList; // BunkerVR: the map's pick-ups, for the pull's look (VRFindPullTarget)...
 +	[nosave] float mfVRPullListTime = -100.0f; // ...as listed at this game time (-100: list again)
++	[nosave] array<tID> mvVRSpillList; // BunkerVR: the map's spilled fuel, for the flames (VRUpdateFlames)...
++	[nosave] float mfVRSpillListTime = -100.0f; // ...as listed at this game time (-100: list again)
 +	[nosave] int mlVRLayerNotes = 0;
 +	[nosave] float mfVRBodyTurnApplied = 0.0f; // BunkerVR: the turn the body was last placed with
 =181

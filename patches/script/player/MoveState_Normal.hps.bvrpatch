@@ -1,13 +1,18 @@
 BunkerVR patch 1
 file script/player/MoveState_Normal.hps
 from e7a8e39f034e0aa9a94bc0d8cd17382ba22ff46c89a6d195eaabb28ce8db7216 55277
-to 82b9422e278c9b006233cbb55a353844e757aa17b3cea1b2afdfe3134966c749 58914
+to ecff2f1c6b03e9105142372a0ac08fd01c0983c249d1c106c7eb37bbdb10ef75 59206
 =46
 +// BunkerVR: how loud a quieter step is (see _Global_VRQuietFootSound): a share
 +// of the volume, on top of the soft "sneak" sound it uses. Low enough that the
 +// steps for turning on the spot don't sound as loud as walking.
 +const float gfVRQuietStepVolume = 0.45f;
-=1542
+=110
+-1
++		mlSprintMode = (cVR_Running() ? 0 : cLux_GetUserConfig().GetInt("Accessibility", "SprintMode", 0)); // BunkerVR: Hold while VR runs (the mod holds the game's buttons as long as a hand does)
+=993
++		cScript_SetGlobalVarInt("BunkerVR_Jumps", cScript_GetGlobalVarInt("BunkerVR_Jumps") + 1); // BunkerVR: a jump begun (the view follows it closely: PlayerBodyHandler VRStairView)
+=438
 +
 +	// BunkerVR: a quieter footstep, for a step the drawn feet take because the
 +	// player turned on the spot in the room (see VRFootstepSound in

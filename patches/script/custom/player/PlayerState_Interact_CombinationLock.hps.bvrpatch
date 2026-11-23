@@ -1,7 +1,7 @@
 BunkerVR patch 1
 file script/custom/player/PlayerState_Interact_CombinationLock.hps
 from 0c1225cb293a3b81e5e04256d3366d3c7e001b56b1cdb39d18316d502f6b5e2a 21819
-to 6b125fc23677ccc0cc5e0b0f2dd5918bab3547c5f0c08a06e9954d127c147c0d 38250
+to 876ef98598be51f2bfb0c080d1d486a0806b2a04da55dd6ea15ebfc376a92db8 39408
 =11
 +#include "custom/helpers/helper_bunkervr_hints.hps" // BunkerVR: the hints on the objects
 =19
@@ -11,6 +11,7 @@ to 6b125fc23677ccc0cc5e0b0f2dd5918bab3547c5f0c08a06e9954d127c147c0d 38250
 +const float gfVRRollerIn = 0.015f;		// a fingertip on a roller: from this far inside its front...
 +const float gfVRRollerOut = 0.045f;		// ...to this far out in front of it...
 +const float gfVRRollerAbove = 0.012f;	// ...and this much above and below its front's height
++const float gfVRRollerHoldTrigger = 0.2f;	// a hand's trigger pulled past this: the roller under its finger stays until it is let go
 +const float gfVRRollerKeep = 0.5f;		// the roller under the finger stays picked until another is nearer by this share of their spacing (so it changes three quarters of the way to the next)
 +const float gfVRRollerSpacing = 0.0174f;	// the bunker's lock: its rollers' centers this far apart (its model's points; used if they cannot be read)
 +const float gfVRLockAwayDistance = 0.25f;	// (meters, real) no fingertip this near the lock...
@@ -70,7 +71,11 @@ to 6b125fc23677ccc0cc5e0b0f2dd5918bab3547c5f0c08a06e9954d127c147c0d 38250
 +		// the lock (see OnAction); walking away leaves it (VRUpdateFingers).
 +		if(mbVR) return true;
 +
-=102
+=93
++		// BunkerVR: in VR no roller is lit until a fingertip is on one (mlRollerIndex -1): a mouse wheel turned before
++		// that turns nothing.
++		if(mbForceFace == false && mlRollerIndex < 0) return;
+=9
 +
 +	//------------------------------------------------------------
 +
@@ -91,8 +96,10 @@ to 6b125fc23677ccc0cc5e0b0f2dd5918bab3547c5f0c08a06e9954d127c147c0d 38250
 +	// (see OnAction). Left as the game's cancel and menu buttons leave it, and
 +	// also once a fingertip has been on it and none has been near it for
 +	// gfVRLockAwayTime, or with the head gfVRLockHeadAway from it.
-+	// A press curls the drawn finger off the roller, so the roller stays lit
-+	// after the finger leaves it.
++	// A hand whose fingertip is near a lock points (its first finger straight
++	// whatever the trigger does: Prop_PlayerBody.hps), so a press does not
++	// move the fingertip onto the next roller. A roller stays lit after the
++	// finger leaves it.
 +	//
 +	// The rollers' places are read from the lock as it is (each one's points'
 +	// center and their axle, the roller's own x, in the lock's own terms), so
@@ -138,7 +145,7 @@ to 6b125fc23677ccc0cc5e0b0f2dd5918bab3547c5f0c08a06e9954d127c147c0d 38250
 +		if(mvVRRollerX.length() != mvRollerIds.length() || mvVRRollerX.length() == 0)
 +		{
 +			mvVRRollerX.resize(0);
-+			Log("BunkerVR: the number lock " + pProp.GetName() + ": its rollers were not all found; the sticks only\n");
++			VRNote("the number lock " + pProp.GetName() + ": its rollers were not all found; the sticks only");
 +			return;
 +		}
 +		mfVRSpacing = gfVRRollerSpacing;
@@ -147,7 +154,7 @@ to 6b125fc23677ccc0cc5e0b0f2dd5918bab3547c5f0c08a06e9954d127c147c0d 38250
 +		// row along x about the middle, the first at -x as its model has it.
 +		if(mfVRSpacing < gfVRRollerSpacing * 0.5f || mfVRSpacing > gfVRRollerSpacing * 2.0f)
 +		{
-+			Log("BunkerVR: the number lock " + pProp.GetName() + ": its rollers read " + int(mfVRSpacing * 1000.0f + 0.5f) + " mm apart; its model's layout used\n");
++			VRNote("the number lock " + pProp.GetName() + ": its rollers read " + int(mfVRSpacing * 1000.0f + 0.5f) + " mm apart; its model's layout used");
 +			mfVRSpacing = gfVRRollerSpacing;
 +			float fFirst = -0.5f * gfVRRollerSpacing * float(mvVRRollerX.length() - 1);
 +			for(uint i = 0; i < mvVRRollerX.length(); ++i) mvVRRollerX[i] = fFirst + gfVRRollerSpacing * float(i);
@@ -160,8 +167,11 @@ to 6b125fc23677ccc0cc5e0b0f2dd5918bab3547c5f0c08a06e9954d127c147c0d 38250
 +		if(vFront.Length() < 0.001f) vFront = cVector3f(0.0f, 0.0f, 1.0f);
 +		mvVRFront = cMath_Vector3Normalize(vFront);
 +		mvVRUp = cVector3f(0.0f, mvVRFront.z, -mvVRFront.y); // (the front crossed with its own x)
-+		Log("BunkerVR: the number lock " + pProp.GetName() + " (" + int(mfVRLockScale * 100.0f + 0.5f) + "% size): " + mvVRRollerX.length() +
-+			" rollers " + int(mfVRSpacing * 1000.0f + 0.5f) + " mm apart, " + int(mfVRRadius * 1000.0f + 0.5f) + " mm round their axle; a fingertip lights one, the trigger turns it\n");
++		// None lit until a fingertip is on one (the game starts with the first lit, for its sticks): the first touch
++		// lights its roller with a tick, the first roller too, and until then the hint says how one is taken.
++		mlRollerIndex = -1;
++		VRNote("the number lock " + pProp.GetName() + " (" + int(mfVRLockScale * 100.0f + 0.5f) + "% size): " + mvVRRollerX.length() +
++			" rollers " + int(mfVRSpacing * 1000.0f + 0.5f) + " mm apart, " + int(mfVRRadius * 1000.0f + 0.5f) + " mm round their axle; a fingertip lights one, the trigger turns it");
 +	}
 +
 +	// Each update in the headset: which roller a fingertip is on (it is lit).
@@ -193,6 +203,9 @@ to 6b125fc23677ccc0cc5e0b0f2dd5918bab3547c5f0c08a06e9954d127c147c0d 38250
 +			}
 +			int lRoller = -1;
 +			if(VRRollerAt(cMath_MatrixMul(mtxToLock, vTipWorld), lHand, lRoller) == false) continue;
++			// (While that hand's trigger is down, the roller under its finger stays: a real pull jerks the
++			// controller a little, and the rollers are under 2 cm apart.)
++			if(lHand == mlVRFingerHand && mlVRFingerRoller >= 0 && cVR_HandTrigger(lHand) > gfVRRollerHoldTrigger) lRoller = mlVRFingerRoller;
 +			// (The finger already on it first; else the first found.)
 +			if(lHandOn < 0 || lHand == mlVRFingerHand)
 +			{
@@ -218,7 +231,7 @@ to 6b125fc23677ccc0cc5e0b0f2dd5918bab3547c5f0c08a06e9954d127c147c0d 38250
 +				if(mlVRTurnLogs < 40)
 +				{
 +					mlVRTurnLogs++;
-+					Log("BunkerVR: a fingertip lights roller " + (lRollerOn + 1) + " of the number lock " + pProp.GetName() + "\n");
++					VRNote("a fingertip lights roller " + (lRollerOn + 1) + " of the number lock " + pProp.GetName());
 +				}
 +			}
 +			mbVRFingerUsed = true;
@@ -243,8 +256,8 @@ to 6b125fc23677ccc0cc5e0b0f2dd5918bab3547c5f0c08a06e9954d127c147c0d 38250
 +		bool bHeadAway = mfVRHeadAwayTime > gfVRLockHeadAwayTime;
 +		if(mbExit == false && (mfVRAwayTime > gfVRLockAwayTime || bHeadAway))
 +		{
-+			Log("BunkerVR: the number lock " + pProp.GetName() + " is left (" + (bHeadAway ? "the head is away from it" : "no fingertip near it") + ", the head " +
-+				int(fHeadFrom * 100.0f + 0.5f) + " cm from it)\n");
++			VRNote("the number lock " + pProp.GetName() + " is left (" + (bHeadAway ? "the head is away from it" : "no fingertip near it") + ", the head " +
++				int(fHeadFrom * 100.0f + 0.5f) + " cm from it)");
 +			Exit();
 +		}
 +	}
@@ -262,7 +275,7 @@ to 6b125fc23677ccc0cc5e0b0f2dd5918bab3547c5f0c08a06e9954d127c147c0d 38250
 +		if(mlVRTurnLogs < 40)
 +		{
 +			mlVRTurnLogs++;
-+			Log("BunkerVR: the trigger turns roller " + (mlRollerIndex + 1) + " a digit on (to " + ((mlForceFace % 10 + 10) % 10) + ")\n");
++			VRNote("the trigger turns roller " + (mlRollerIndex + 1) + " a digit on (to " + ((mlForceFace % 10 + 10) % 10) + ")");
 +		}
 +	}
 +
@@ -281,6 +294,13 @@ to 6b125fc23677ccc0cc5e0b0f2dd5918bab3547c5f0c08a06e9954d127c147c0d 38250
 +			pSubMesh.SetMatrix(cMath_MatrixMul(pSubMesh.GetLocalMatrix(), cMath_MatrixRotateX(cMath_GetAngleDistanceRad(fRotation, fTarget))));
 +		}
 +		mbForceFace = false;
++	}
++
++	// A line for both logs: the game's, and the mod's, which can be read while the game runs.
++	void VRNote(const tString &in asLine)
++	{
++		Log("BunkerVR: " + asLine + "\n");
++		cVR_Say(asLine);
 +	}
 +
 +	// Is a fingertip (avTip, in the lock's own terms) on the front of a

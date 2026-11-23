@@ -1,8 +1,11 @@
 BunkerVR patch 1
 file script/player/Player.hps
 from add166b8b97d6349dbb17bd551a114adfdc92df1a28da80c3230a34abc8c78fe 71399
-to 37895545780271d093979c5c935cb2cef76e7b1bb6f8f0837a85a1ee3eceaae8 72172
-=2062
+to 510e061ead706347dd39b1c481ee02c6206f19ef4c49ae7812b7208de064efe8 72284
+=195
+-1
++		mbLeanToggleModeActive = (cVR_Running() ? 0 : pConfig.GetInt("Accessibility", "LeanMode", 0)) == 1; // BunkerVR: Hold while VR runs (the mod holds the game's buttons as long as a hand does)
+=1866
 -1
 +			// BunkerVR: real-body stealth. In VR how low the player's real head is counts, not only whether the game
 +			// has them crouched: "BunkerVR_StealthLow" (PlayerBodyHandler.hps VRUpdateStealthLow) is 0 standing up,

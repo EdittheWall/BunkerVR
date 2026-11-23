@@ -1,60 +1,125 @@
 BunkerVR patch 1
 file script/custom/player/PlayerState_UsingHealthItem.hps
 from 5c286e1ebaaa7a009ea8b2e687cd73a0a951fcbdac45b8ef815992c0670c77bc 8568
-to 042fe19955c95baeaa212491f8b3d1498973f9704f1a0ee4487864cad14040d5 10763
-=137
-+	// BunkerVR: use the bandage or medkit in the right hand at once, with no
-+	// animation. The game's own way plays a long animation that takes over the
-+	// view, which is no good in a headset. The VR mod requests this when the
-+	// bandage has been wound around the left forearm (through the body script,
-+	// command 4), which is the only way to heal in the headset.
+to 361e7e6b67b03db40bbd7b82a619a43d7065357c188198b79ae429b84119f954 13971
+=10
++#include "custom/helpers/helper_bunkervr_items.hps" // BunkerVR: the medkit's drunk state
+=127
++	// BunkerVR: use the bandage in the right hand at once, with no animation.
++	// The game's own way plays a long animation that takes over the view,
++	// which is no good in a headset. The VR mod requests this when the bandage
++	// has been wound around the left forearm (through the body script,
++	// command 4), which is the only way to heal with it in the headset.
 +	void VRUseNow()
 +	{
 +		iScrItemHandler_Interface@ pHandler = cast<iScrItemHandler_Interface>( cLux_GetUserModuleFromID(eModuleType_Custom_ItemHandler) );
 +		if (pHandler is null) return;
 +		if (!pHandler.CanUseHeldItemOnSelf(eItemHandlerHand_Right)) return;
-+		
++
 +		tString sType = Item_GetHeldType(eItemHandlerHand_Right);
-+		if (sType != "Bandage" && sType != "Medkit") return;
++		if (sType != "Bandage") return;
 +		tString sItem = Item_GetHeld(eItemHandlerHand_Right);
 +		if (sItem == "") return;
-+		
++
 +		bool bHardcoreHealthSystemActive = GameDifficulty_GetSettingValueByID_Bool(eGameDifficultySetting_HardcoreHealthSystem);
-+		if (sType == "Medkit")
-+		{
-+			// The game heals twice over the length of the medkit's animation.
-+			Player_ApplyHeal(false);
-+			Player_ApplyHeal(false);
-+		}
-+		else
-+		{
-+			Player_ApplyHeal(false, bHardcoreHealthSystemActive);
-+		}
++		Player_ApplyHeal(false, bHardcoreHealthSystemActive);
 +		if (bHardcoreHealthSystemActive)
 +		{
 +			Player_StopBleeding();
 +		}
 +		GameStats_IncreaseEntryAmount(eHeroStats_HealthItemsUsed);
-+		
-+		// The sound of it being put on (the animation that normally plays it is left out).
-+		Sound_PlayGui(sType == "Medkit" ? "player/tools/medkit/health_pack" : "player/tools/bandage/bandage", 1.f, eSoundEntryType_GuiWorld);
-+		
++
++		// The sound of it being put on (the animation that normally plays it is left out), heard as the player's own,
++		// as the mod's other hand sounds are.
++		Sound_CreateAtEntity("BunkerVR_BandageOn", "player/tools/bandage/bandage", "player", 0.0f, false);
++
 +		Item_SetPlayUnequipAnim(sItem, false);
 +		Item_Unequip(sItem, true);
 +		Item_RemoveFromInventory(sItem);
 +	}
-+	
++
 +	void _Global_VRUseNow()
 +	{
 +		VRUseNow();
++	}
++
++	// BunkerVR: the health item in the right hand would not be used now: the
++	// game's own check says why, with its own words ("not injured"). The VR
++	// mod asks this when a bandage is pulled open then (command 95).
++	void _Global_VRSayWhyNot()
++	{
++		iScrItemHandler_Interface@ pHandler = cast<iScrItemHandler_Interface>( cLux_GetUserModuleFromID(eModuleType_Custom_ItemHandler) );
++		if (pHandler !is null) pHandler.CanUseHeldItemOnSelf(eItemHandlerHand_Right);
++	}
++
++	// BunkerVR: the medkit worked by hand (VRUpdateMedkit in Prop_PlayerBody.hps),
++	// in two halves as the game's own medkit heals twice: its bottle drunk from,
++	// then its dressing wound round the right forearm. These do the game's part.
++
++	// The medkit in the right hand as an item, or null.
++	iScrItem@ VRHeldMedkit()
++	{
++		if (Item_GetHeldType(eItemHandlerHand_Right) != "Medkit") return null;
++		iScrItemHandler_Interface@ pHandler = cast<iScrItemHandler_Interface>( cLux_GetUserModuleFromID(eModuleType_Custom_ItemHandler) );
++		return pHandler !is null ? pHandler.GetItemByID(Item_GetHeld(eItemHandlerHand_Right)) : null;
++	}
++
++	// Has the medkit in the right hand had its bottle drunk already (its own health)?
++	void _Global_VRMedkitDrunk()
++	{
++		iScrItem@ pKit = VRHeldMedkit();
++		cScript_SetGlobalReturnBool(pKit !is null && BunkerVR_MedkitDrunk(pKit.GetHealth()));
++	}
++
++	// May the medkit in the right hand be opened: would the game use it now? Its
++	// own check, which shows its own words when not ("not injured").
++	void _Global_VRMedkitCanOpen()
++	{
++		iScrItemHandler_Interface@ pHandler = cast<iScrItemHandler_Interface>( cLux_GetUserModuleFromID(eModuleType_Custom_ItemHandler) );
++		cScript_SetGlobalReturnBool(VRHeldMedkit() !is null && pHandler !is null && pHandler.CanUseHeldItemOnSelf(eItemHandlerHand_Right));
++	}
++
++	// Its bottle drunk: the first half of its healing, and the medkit marked
++	// drunk (a medkit put away now keeps its dressing for later): the item and
++	// the medkit in the hand both, as the game copies the one in the hand back
++	// onto the item as it is put away (ItemHandler.hps CopyEntityToItemData).
++	void _Global_VRMedkitDrink()
++	{
++		iScrItem@ pKit = VRHeldMedkit();
++		if (pKit is null || BunkerVR_MedkitDrunk(pKit.GetHealth())) return;
++		pKit.SetHealth(gfBunkerVR_MedkitDrunk);
++		tString sEntity = Item_GetHeldEntity(eItemHandlerHand_Right);
++		if (sEntity != "") Item_SetEntityHealth(sEntity, gfBunkerVR_MedkitDrunk);
++		Player_ApplyHeal(false);
++	}
++
++	// Its dressing held to the forearm: the second half of its healing (whatever
++	// the health now: this medkit has been opened to be used), the bleeding
++	// stopped with the hardcore health system, as the game's own medkit does,
++	// and the medkit used up.
++	void _Global_VRMedkitDress()
++	{
++		iScrItem@ pKit = VRHeldMedkit();
++		if (pKit is null) return;
++		tString sItem = pKit.GetID();
++		Player_ApplyHeal(false);
++		if (GameDifficulty_GetSettingValueByID_Bool(eGameDifficultySetting_HardcoreHealthSystem))
++		{
++			Player_StopBleeding();
++		}
++		GameStats_IncreaseEntryAmount(eHeroStats_HealthItemsUsed);
++		Item_SetPlayUnequipAnim(sItem, false);
++		Item_Unequip(sItem, true);
++		Item_RemoveFromInventory(sItem);
 +	}
 +	
 +	//------------------------------------------------------------
 +	
 =2
 +		/////////////////
-+		// BunkerVR: in the headset the trigger does not use it. It is used by
-+		// winding it around the left forearm (the mod then requests VRUseNow above).
++		// BunkerVR: in the headset the trigger does not use it. A bandage is used
++		// by winding it around the left forearm (the mod then requests VRUseNow
++		// above), a medkit by its steps by hand (_Global_VRMedkitDrink, _Dress).
 +		// Otherwise any press of the trigger would use it up on the spot, even
 +		// one that only answered a hint, so it would seem to vanish from the hand.
 +		if (VRUsingItemModActive())

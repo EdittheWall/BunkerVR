@@ -1,10 +1,16 @@
 BunkerVR patch 1
 file script/custom/player/PlayerState_UsingShotgun_Aim.hps
 from a2e94747987d7dad1823aa957be143b55ee55e126594abc5b3e5c81828c2d111 11260
-to e54a74d6321f933edb1ab41a15f3384dc191810f61e70037e57bfb995622046c 13454
+to 42a1b92807fd26ba35b6f13798c6e6f1defbccc7eabc92c72030df28b927f362 13752
 =2
 +#include "custom/helpers/helper_bunkervr_shotgun.hps" // BunkerVR: the shotgun worked by hand
-=207
+=49
+-1
++		// BunkerVR: in VR the shot leaves a spent shell that only the pump, worked by hand, throws out (Prop_Shotgun.hps):
++		// the next shot waits for that anyway, and the game's cooldown swallowed a pull after a quick pump. A short one
++		// is kept against a doubled pull.
++		mfShootCooldown = cVR_Running() ? 0.25f : 0.85f;
+=157
 +		// BunkerVR: in the headset the shotgun is worked by hand
 +		// (Prop_Shotgun.hps, VRUpdateShotgun): the trigger does nothing with the
 +		// action open or the hammer down (pump it), clicks on an empty chamber,

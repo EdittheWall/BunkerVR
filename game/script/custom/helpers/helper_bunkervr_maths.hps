@@ -2,6 +2,92 @@
 // helper_bunkervr.hps (props\Prop_PlayerBody.hps) have it too. Included by helper_bunkervr.hps; a
 // second include of it is skipped.
 
+// BunkerVR: the share of the way a smoothed value goes in afTimeStep (seconds) towards where it is wanted, with the
+// time constant afTau (seconds): 1 - e^(-t/tau). The same at any update rate; a fixed share each update is not (at 45
+// updates a second it eases half as fast as at 90). 0 for no time, 1 for no time constant.
+float BunkerVR_EaseShare(float afTimeStep, float afTau)
+{
+	if(afTau <= 0.0f) return 1.0f;
+	if(afTimeStep <= 0.0f) return 0.0f;
+	return 1.0f - cMath_Pow(2.718281828f, -afTimeStep / afTau);
+}
+
+// BunkerVR: 0 at or below afLow, 1 at or above afHigh, and between them an S
+// with no sudden start or stop (3t^2 - 2t^3). For the comfort ring, the kills'
+// darkening and the eased moves of knockdowns (PlayerBodyHandler.hps), and the
+// medkit's case opening and its dressing winding on (Prop_PlayerBody.hps).
+float BunkerVR_SmoothStep(float afLow, float afHigh, float afX)
+{
+	if(afHigh <= afLow) return afX >= afHigh ? 1.0f : 0.0f;
+	float fT = cMath_Clamp((afX - afLow) / (afHigh - afLow), 0.0f, 1.0f);
+	return fT * fT * (3.0f - 2.0f * fT);
+}
+
+// BunkerVR: the fastest a hand moves a heavy pushed thing (a crate or a barrel) weighing afMass kilograms: 2 m/s
+// weighing nothing, less the heavier it is (gone at 30 kg, as the game's own push's gfMaxMass in
+// PlayerState_Interact_Push.hps), never under 0.4 m/s. The same for a hand that holds it (VRPushTopSpeed there) and
+// open hands pushing anything of 10 kg or more (VRHandBlock in Prop_PlayerBody.hps), so it weighs the same however it
+// is moved.
+float BunkerVR_PushTopSpeed(float afMass)
+{
+	return cMath_Max(2.0f * (1.0f - cMath_Clamp(afMass / 30.0f, 0.0f, 0.95f)), 0.4f);
+}
+
+// BunkerVR: soft reach (the "soft IK" of animation tools): a two-bone limb's reach afDist eased towards its straightest,
+// afLongest, over the last afSoft of it, never quite there: below afLongest - afSoft as it is; above it,
+// (afLongest - afSoft) + afSoft (1 - e^(-(afDist - (afLongest - afSoft)) / afSoft)). Solved straight to the reach, the
+// joint's angle changes ever faster as the limb straightens, and the joint snaps straight at the end of a reach.
+float BunkerVR_SoftReach(float afDist, float afLongest, float afSoft)
+{
+	if(afSoft <= 0.0001f) return cMath_Min(afDist, afLongest);
+	float fStart = afLongest - afSoft;
+	if(afDist <= fStart) return afDist;
+	return fStart + afSoft * (1.0f - cMath_Pow(2.718281828f, -(afDist - fStart) / afSoft));
+}
+
+// BunkerVR: how far the turn a_mtxTurn (a rotation; any translation is left out) twists about the unit line avAxis:
+// its swing-twist split (the turn = a swing square to the line after a twist about it), the twist's angle in
+// radians, -pi to pi, right-handed about the line. Exact whatever the swing (a wrist bent far), where measuring one of
+// the hand's own directions about the line is not: that changes with the swing, and must switch directions when the
+// one it uses comes near the line. Through the turn's quaternion (Shepperd's way, safe at any angle).
+float BunkerVR_TwistAbout(const cMatrixf &in a_mtxTurn, const cVector3f &in avAxis)
+{
+	// The true entries (for "turned = turn x vector"), from where the turn takes the three axes.
+	cVector3f vX = cMath_MatrixMul3x3(a_mtxTurn, cVector3f(1.0f, 0.0f, 0.0f));
+	cVector3f vY = cMath_MatrixMul3x3(a_mtxTurn, cVector3f(0.0f, 1.0f, 0.0f));
+	cVector3f vZ = cMath_MatrixMul3x3(a_mtxTurn, cVector3f(0.0f, 0.0f, 1.0f));
+	float m00 = vX.x, m10 = vX.y, m20 = vX.z;
+	float m01 = vY.x, m11 = vY.y, m21 = vY.z;
+	float m02 = vZ.x, m12 = vZ.y, m22 = vZ.z;
+	float fW = 0.0f, fQX = 0.0f, fQY = 0.0f, fQZ = 0.0f;
+	float fTrace = m00 + m11 + m22;
+	if(fTrace > 0.0f)
+	{
+		float fS = cMath_Sqrt(fTrace + 1.0f) * 2.0f;
+		fW = 0.25f * fS; fQX = (m21 - m12) / fS; fQY = (m02 - m20) / fS; fQZ = (m10 - m01) / fS;
+	}
+	else if(m00 > m11 && m00 > m22)
+	{
+		float fS = cMath_Sqrt(cMath_Max(1.0f + m00 - m11 - m22, 0.000001f)) * 2.0f;
+		fW = (m21 - m12) / fS; fQX = 0.25f * fS; fQY = (m01 + m10) / fS; fQZ = (m02 + m20) / fS;
+	}
+	else if(m11 > m22)
+	{
+		float fS = cMath_Sqrt(cMath_Max(1.0f + m11 - m00 - m22, 0.000001f)) * 2.0f;
+		fW = (m02 - m20) / fS; fQX = (m01 + m10) / fS; fQY = 0.25f * fS; fQZ = (m12 + m21) / fS;
+	}
+	else
+	{
+		float fS = cMath_Sqrt(cMath_Max(1.0f + m22 - m00 - m11, 0.000001f)) * 2.0f;
+		fW = (m10 - m01) / fS; fQX = (m02 + m20) / fS; fQY = (m12 + m21) / fS; fQZ = 0.25f * fS;
+	}
+	float fAlong = fQX * avAxis.x + fQY * avAxis.y + fQZ * avAxis.z;
+	float fTwist = 2.0f * cMath_ATan2(fAlong, fW);
+	if(fTwist > cMath_Pi) fTwist -= cMath_PiMul2;
+	if(fTwist < -cMath_Pi) fTwist += cMath_PiMul2;
+	return fTwist;
+}
+
 // BunkerVR: is this a number (not NaN, not infinite)? In this game's script engine a comparison with NaN
 // can't be trusted: built with fast floating-point math, NaN compares as equal to anything (so
 // "fLength < 0.001f" lets a NaN length through, and the division after it is then treated as a division

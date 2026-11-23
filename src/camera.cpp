@@ -931,6 +931,15 @@ bool CameraGamePaused()
     return g_pausedNewsTime != 0 && GetTickCount64() - g_pausedNewsTime < 400;
 }
 
+// Which came last: the pause's news (roll 7021) or the body script's update
+// (roll 7020). Counted, not timed: both can come within one tick of the clock.
+static unsigned long long g_newsCount = 0, g_pausedNewsCount = 0, g_runningNewsCount = 0;
+
+bool CameraGamePausedNow()
+{
+    return CameraGamePaused() && g_pausedNewsCount > g_runningNewsCount;
+}
+
 // When the body script last reported the game's inventory open (roll 7092);
 // 0 once it reports it shut.
 static unsigned long long g_inventoryNewsTime = 0;
@@ -1076,6 +1085,7 @@ static bool AnswerScriptQuestion(void* camera)
         g_shotgunHeld = numbers[0] > 1.5f;
         g_stateNormal = numbers[1] > 0.5f;
         g_gunNewsTime = GetTickCount64();
+        g_runningNewsCount = ++g_newsCount;
         if (g_cutscenePlaying != (numbers[2] > 0.5f))
             Log("CAMERA: the game reports that a cutscene %s.", numbers[2] > 0.5f ? "has started" : "is over");
         g_cutscenePlaying = numbers[2] > 0.5f;
@@ -1099,6 +1109,7 @@ static bool AnswerScriptQuestion(void* camera)
     {
         if (g_pausedNewsTime == 0) Log("CAMERA: the game reports that it is paused; the last pictures stay up meanwhile.");
         g_pausedNewsTime = GetTickCount64();
+        g_pausedNewsCount = ++g_newsCount;
         *roll = 0.0f;
         g_realUpdateViewMatrix(camera);
         *roll = question;
@@ -1150,8 +1161,8 @@ static bool AnswerScriptQuestion(void* camera)
             if (logsLeft > 0)
             {
                 --logsLeft;
-                Log("CAMERA: the game reports the hands hold: right %d, left %d (0 nothing special, 1 flashlight, 2 bandage or medkit, 3 grenade, "
-                    "4 lighter, 5 bottle, 6 torch, 9 anything else).",
+                Log("CAMERA: the game reports the hands hold: right %d, left %d (0 nothing special, 1 flashlight, 2 bandage, 3 grenade, "
+                    "4 lighter, 5 bottle, 6 torch, 7 medkit, 9 anything else).",
                     right, left);
             }
         }
@@ -1781,6 +1792,24 @@ static bool AnswerScriptQuestion(void* camera)
     }
 
     if (question < 7000.0f || question > 7014.0f) return false;
+
+    // VR not started, failed or given up on: these questions are left
+    // unanswered, as without the mod, and the scripts play the flat game's way
+    // (roll 7006, "is the VR mod here?", decides it for most of them).
+    bool running = VrModRunning();
+    static int answering = -1, logsLeft = 10;
+    if ((running ? 1 : 0) != answering)
+    {
+        answering = running ? 1 : 0;
+        if (logsLeft > 0)
+        {
+            --logsLeft;
+            Log(running ? "CAMERA: VR is running: the scripts' head and hand questions are answered (they play the VR way)."
+                        : "CAMERA: VR is not running (not started yet, failed or given up on): the scripts' head and hand "
+                          "questions are left unanswered, and they play the flat game's way.");
+        }
+    }
+    if (!running) return false;
 
     int code = (int)(question + 0.5f); // 7001 .. 7012
     bool aboutHead = code == (int)kAskHeadMatrix || code == (int)kAskHeadStatus;

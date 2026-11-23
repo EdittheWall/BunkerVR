@@ -1,12 +1,17 @@
 BunkerVR patch 1
 file script/custom/player/PlayerState_UsingGun_Aim.hps
 from 8d45ccc988f6e4e35d515e2521b99a41a4834b3fc4fef11e4e3e6c002c63333a 7864
-to f15f5a6f956345affc54eb290449bac9f34589c67ddd890d1b4c07524f6f08ce 8301
-=125
+to ee07b8cbdadf93c28bf4ca2dcc3af6f64e67404edff371f3196134b31a93ac90 8641
+=2
++#include "custom/helpers/helper_bunkervr_shotgun.hps" // BunkerVR: BunkerVR_GunBuzz
+=123
 +		// BunkerVR: the kick in both hands (Prop_PlayerBody.hps VRRevolverKicked): a full one for a
 +		// shot, a small one for the hammer's snap on an empty chamber. The game's own kick is in the
 +		// arm's animation, which the hands on the controllers leave out.
 +		cScript_SetGlobalVarFloat("BunkerVR_RevolverKickAt", float(cEngine_GetGameTime()));
 +		cScript_SetGlobalVarFloat("BunkerVR_RevolverKickSize", bCanFire ? 1.0f : 0.15f);
-+		
++		// ...and felt in the hand that holds it: a shot's jolt, or the hammer's small click on an empty chamber
++		// (the shotgun's: PlayerState_UsingShotgun_Aim.hps).
++		if (cVR_Active()) BunkerVR_GunBuzz(1, bCanFire ? 0.12f : 0.02f, bCanFire ? 0.9f : 0.3f);
++
 end

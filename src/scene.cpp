@@ -12,6 +12,7 @@
 #include "gl_helpers.h"
 #include "log.h"
 #include "pattern.h"
+#include "player_build.h"
 #include "scene.h"
 #include "settings.h"
 #include "vr.h"
@@ -954,9 +955,11 @@ static void HookedRenderViewport(void* scene, void* viewport, float frameTime, i
     }
 
     // One frame in every 450 (every five seconds) is measured to the end (see above). That frame
-    // is a little slower for it, which is why it is not done more often.
+    // is a little slower for it (the processor waits for the card), which is why it is not done
+    // more often, and only in the developer build: in the player's it would be a stall every five
+    // seconds. (The card's own times, from its timer queries, are logged in both.)
     ++g_frameCounter;
-    bool toTheEnd = (g_frameCounter % 450) == 225;
+    bool toTheEnd = !kPlayerBuild && (g_frameCounter % 450) == 225;
 
     bool stereo = GetSettings().stereoFrame && VrStereoCanStart();
     if (GetSettings().stereoFrame && !stereo) ++g_statStereoRefused;

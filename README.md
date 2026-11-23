@@ -64,7 +64,7 @@ game's original files back, and BunkerVR will tell you when it needs this.
 
 | | Left controller | Right controller |
 |---|---|---|
-| **Thumbstick** | Move. Click: sprint | Turn. Up: jump or stand up. Down: crouch. Click: flashlight |
+| **Thumbstick** | Move. Click: sprint | Turn. Up: jump or stand up. Down: crouch |
 | **Grip** | Grab | Grab |
 | **Trigger** | Use held item | Fire or use held item |
 | **Buttons** | X: put away. Y: menu (hold: recenter) | A (hold, flick): open revolver. B: inventory |
@@ -94,13 +94,13 @@ Everything else is done with your hands, and small hints show you how the first 
 - Keys, fuses and combination locks used by hand
 - A wrench you crank and bolt cutters you squeeze with both hands
 - Fuel you pour, a lighter you flick, a watch you wind and a gas mask you pull over your face
-- Healing by wrapping a bandage around your forearm
+- Healing by wrapping a bandage around your forearm, or with a medkit you open, drink from and dress by hand
 
 **Comfort**
 - Smooth and snap turning
 - Comfort vignette and reduced or no head bob
 - Seated and standing modes with height calibration
-- Knockdowns and deaths in first person, on a screen or behind a vignette
+- Knockdowns and deaths in first person, softened for comfort or not, or on a screen
 - Cutscenes on a virtual cinema screen
 - The game pauses when you take off the headset or open its menu
 - Adjustable world scale, grab reach, throw assist and haptics

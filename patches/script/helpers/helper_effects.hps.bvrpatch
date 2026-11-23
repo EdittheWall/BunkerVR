@@ -1,0 +1,7 @@
+BunkerVR patch 1
+file script/helpers/helper_effects.hps
+from 9da3cb5531eb18e289a363a913e1ce0a35c6eddc8205920e88d96021667d67fa 47745
+to e78bb42dc939adadb9b4da1da81911be292ef794497b487d64156d56b1aa8cba 47861
+=1025
++	cVR_Rumble(afAmount, afTime); // BunkerVR: felt in the controllers too (the mod decides when: VrRumble in vr.cpp)
+end

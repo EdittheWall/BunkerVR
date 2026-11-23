@@ -5,6 +5,7 @@
 
 #include "font_data.h"
 #include "grips.h"
+#include "player_build.h"
 #include "settings.h"
 #include "testlist.h"
 #include "vrmenu.h"
@@ -181,7 +182,7 @@ bool VrBeastAway()
     return g_beastAway && TestJumpedThisRun();
 }
 
-static const int kPageCount = 16;
+static const int kPageCount = 17;
 // The pages, in two sets of tabs: the settings a player changes, named and
 // grouped as VR games name and group them (Player, Comfort, Movement,
 // Accessibility...), and behind the last of their tabs, Debug, the pages for
@@ -189,12 +190,14 @@ static const int kPageCount = 16;
 // them), so a new page goes at the end. Each tab is as wide as its name, with
 // an even share of what is left over: see Draw, and VrMenuLayoutProblems for
 // the room.
-static const char* const kPageNames[kPageCount] = { "Comfort", "Movement", "Hands", "Tuning", "Tools", "Test List", "Spawn", "Beast", "Bandage", "Physics", "Grips", "Holsters", "Player", "Accessibility", "System", "Places" };
+static const char* const kPageNames[kPageCount] = { "Comfort", "Movement", "Hands", "Tuning", "Tools", "Test List", "Spawn", "Beast", "Bandage", "Physics", "Grips", "Holsters", "Player", "Accessibility", "System", "Places", "Trailer" };
 // (kPageStartup has no tab: the start-up page is shown in their place. Nor has
 // kPageControls, the whole layout of the controls: a button in the title line
-// opens it, as VR games have their controls behind a button.)
+// opens it, as VR games have their controls behind a button. Nor kPageTrailer,
+// a Debug page opened from the Beast page, whose tab stays lit: a tenth Debug
+// tab does not fit the row.)
 enum { kPageComfort = 0, kPageMovement = 1, kPageGun = 2, kPageDeveloper = 3, kPageTesting = 4, kPageChecks = 5, kPageSpawn = 6, kPageBeast = 7, kPageWrap = 8, kPageFeel = 9, kPageGrips = 10, kPageBody = 11,
-       kPagePlayer = 12, kPageAccess = 13, kPageSystem = 14, kPagePlaces = 15, kPageStartup = 16, kPageControls = 17 };
+       kPagePlayer = 12, kPageAccess = 13, kPageSystem = 14, kPagePlaces = 15, kPageTrailer = 16, kPageStartup = 17, kPageControls = 18 };
 static const int kSettingsTabs[] = { kPagePlayer, kPageBody, kPageComfort, kPageMovement, kPageGun, kPageAccess, kPageSystem };
 static const int kDebugTabs[] = { kPageDeveloper, kPageTesting, kPageChecks, kPageSpawn, kPageBeast, kPagePlaces, kPageWrap, kPageFeel, kPageGrips };
 static const int kSettingsTabCount = (int)(sizeof(kSettingsTabs) / sizeof(kSettingsTabs[0]));
@@ -210,6 +213,7 @@ static int g_pageItemCount[kPageCount + 2] = {};
 
 static bool IsDebugPage(int page)
 {
+    if (page == kPageTrailer) return true;
     for (int i = 0; i < kDebugTabCount; ++i)
         if (kDebugTabs[i] == page) return true;
     return false;
@@ -351,7 +355,7 @@ static void BuildPages()
     // and VR players didn't recognize the term "vignette".)
     AddCycle4(kPageComfort, "Movement Vignette (Darkens Edges)", &s.moveVignette, "Off", "Weak", "Medium", "Strong");
     AddCycle2(kPageComfort, "Head Bob", &s.viewSway, "Default", "Off"); // (see Settings::viewSway)
-    AddCycle(kPageComfort, "Knockdown and Death View", &s.roughView, "No Comfort", "Cutscene Screen", "Vignette"); // (see Settings::roughView)
+    AddCycle(kPageComfort, "Knockdown and Death View", &s.roughView, "No Comfort", "Cutscene Screen", "Comfort"); // (see Settings::roughView)
     AddCycle4(kPageComfort, "Knockdown Vignette Strength", &s.vignetteStrength, "None", "Weak", "Medium", "Strong"); // ("Knockdown" tells it from the movement vignette)
     // (There is no cutscene view choice: the game's cutscenes are always on the cinema screen,
     // Settings::cutsceneView.)
@@ -458,7 +462,7 @@ static void BuildPages()
     // --- looks in VR (the body script plays each the game's own way,
     // --- VRBeastTestStart; the menu closes itself and it starts at once). How
     // --- they are seen is the first line (also on the Comfort page).
-    AddCycle(kPageBeast, "Knockdown and Death View", &s.roughView, "No Comfort", "Cutscene Screen", "Vignette");
+    AddCycle(kPageBeast, "Knockdown and Death View", &s.roughView, "No Comfort", "Cutscene Screen", "Comfort");
     AddButton(kPageBeast, "Spawn the Beast in Front of You", kMenuActionTestBeast);
     AddButton(kPageBeast, "Remove the Beast", kMenuActionTestRemoveBeast);
     AddButton(kPageBeast, "Knockdown (Facing the Beast)", kMenuActionBeastThrown);
@@ -471,6 +475,7 @@ static void BuildPages()
     AddButton(kPageBeast, "Beast Kill (Through a Hole)", kMenuActionBeastKillHole); // (the nearest hole)
     AddButton(kPageBeast, "Beast Kill (While Hiding)", kMenuActionBeastKillHiding);
     AddButton(kPageBeast, "Beast Kill (On a Ladder)", kMenuActionBeastKillLadder);
+    if (!kPlayerBuild) AddButton(kPageBeast, "Trailer Scenes >", kMenuActionTrailerPage);
 
     // --- Places: for visiting parts of the game's own levels safely, to show or try a mechanic
     // --- there: the Beast kept out of the level (VrBeastAway: the body script switches it off,
@@ -482,6 +487,28 @@ static void BuildPages()
     AddButton(kPagePlaces, "Give All Items and Ammo", kMenuActionTestGiveAll);
     for (int i = 0; i < VrPlaceCount() && kMenuActionPlaceFirst + i <= kMenuActionPlaceLast; ++i)
         AddButton(kPagePlaces, VrPlaceName(i), kMenuActionPlaceFirst + i);
+
+    // --- Trailer: the level's own Beast directed for filming (one made later has no paths to walk). "Where you
+    // --- look": the menu closes, then the player looks at a spot and pulls the right trigger (VRTrailer in
+    // --- PlayerBodyHandler.hps). Each scene can be played again. The Places page's switch keeps it switched off
+    // --- until this page brings it in. And the power: the game's own generator filled and started, or stopped
+    // --- (VRTrailerPower). The developer build only: the player build has neither the page nor the Beast page's
+    // --- button to it (and vr.cpp sends none of its commands).
+    if (!kPlayerBuild)
+    {
+        AddSwitch(kPageTrailer, "The Beast Until Spawned", &g_beastAway, "In the Level", "Kept Away");
+        AddButton(kPageTrailer, "Spawn the Beast Where You Look", kMenuActionTrailerSpawn);
+        AddButton(kPageTrailer, "Walk to Where You Look", kMenuActionTrailerWalk);
+        AddButton(kPageTrailer, "Run to Where You Look", kMenuActionTrailerRun);
+        AddButton(kPageTrailer, "Come Out of the Nearest Hole", kMenuActionTrailerEmerge);
+        AddButton(kPageTrailer, "Go Into the Nearest Hole", kMenuActionTrailerIntoHole);
+        AddButton(kPageTrailer, "The Beast Ignores You", kMenuActionTrailerCalm);
+        AddButton(kPageTrailer, "The Beast Notices You", kMenuActionTrailerNotice);
+        AddButton(kPageTrailer, "Hunt Me", kMenuActionTrailerHunt);
+        AddButton(kPageTrailer, "Remove the Beast", kMenuActionTestRemoveBeast);
+        AddButton(kPageTrailer, "Full Power", kMenuActionTrailerPowerFull);
+        AddButton(kPageTrailer, "No Power", kMenuActionTrailerPowerNone);
+    }
 
     // --- Physics: how held things feel, tried while holding them (the
     // --- game's scripts read these on every update; see Settings).
@@ -763,6 +790,7 @@ static const char* PageFooter(int page)
     case kPageTesting:
     case kPageSpawn: return "Close the menu to see the result.";
     case kPageBeast: return "The menu closes and the sequence starts immediately.";
+    case kPageTrailer: return "The level's own Beast and the game's generator. \"Where You Look\": look at a spot and pull the right trigger.";
     case kPageFeel: return "Applies immediately to held objects. Saved automatically.";
     case kPageGrips: return GripsFooter();
     case kPageBody: return g_comfortInfo[0] ? g_comfortInfo : "The markers at your hips show the holster and the ammo pouch.";
@@ -969,7 +997,6 @@ static int ControlLines(int part, bool pull, ControlLine* out)
         add("Stick", "Turn");
         add("Stick up", "Jump, stand up");
         add("Stick down", "Crouch");
-        add("Click stick", "Flashlight");
         add("Grip, Trigger", "Grab, use, fire");
         add("Hold A, flick", "Open revolver");
         add("B", "Inventory");
@@ -1086,7 +1113,7 @@ static void Draw()
         tabX += tabWidth + tabs.gap;
         int item = tabs.items[i];
         bool hot = g_hoverItem == item;
-        bool current = item == -1 - g_page;
+        bool current = item == -1 - g_page || (g_page == kPageTrailer && item == -1 - kPageBeast);
         FillRect(x0, kTabsTop, x0 + tabWidth, kTabsBottom, hot ? kButtonHot : (current ? kRowB : kBackground));
         if (current) FillRect(x0, kTabsBottom - 4, x0 + tabWidth, kTabsBottom, kAccent);
         DrawStringCentred(x0, x0 + tabWidth, (kTabsTop + kTabsBottom - kFontHeight) / 2 - 2, tabs.names[i],
@@ -1351,6 +1378,10 @@ static void Press(int itemIndex, int direction)
         *item.number = value;
         SaveSettings();
         if (item.action && g_actionHandler) g_actionHandler(item.action);
+    }
+    else if (item.action == kMenuActionTrailerPage)
+    {
+        g_page = kPageTrailer;
     }
     else if (g_actionHandler)
     {

@@ -277,14 +277,18 @@ struct Settings
 
     // How knockdowns, the Beast's kills and deaths are seen (the body script; saved as knockdown_view):
     // 0 no comfort: through your eyes (the view goes where the animation takes the head, level, facing the
-    //   way you faced);
+    //   way you faced; in some kills the real head's turn is held, and the view tips with the animated head
+    //   once the Beast's hand is over the eyes), nothing softened;
     // 1 the cutscene screen (the game's own view);
-    // 2 the vignette: through your eyes, with the view's edges darkened while it moves fast (VRVignetteView
-    //   in the body script; the ring is drawn by the mod, VrSetComfortRing).
-    // An older file's rough_view (0 through the eyes, 1 the cutscene screen, 2 faded to black, 3 through the
-    // eyes, gentle: VRGentleView) is read instead when there is no knockdown_view, and taken as 0, 1, 1
-    // and 2.
-    int roughView = 0;
+    // 2 comfort: through your eyes, with a blink as each begins and as the body lands, the view's edges
+    //   darkened while it moves fast (VRVignetteView in the body script; the ring is drawn by the mod,
+    //   VrSetComfortRing), the real head's turn never held, dark once the Beast's hand is over the eyes, and
+    //   any other death dark from its start.
+    // Comfort for a new player; a settings file keeps its own choice (one saved with the old default, no
+    // comfort, keeps it: settings are never changed for a player). An older file's rough_view (0 through the
+    // eyes, 1 the cutscene screen, 2 faded to black, 3 through the eyes, gentle) is read instead when there is
+    // no knockdown_view, and taken as 0, 1, 1 and 2.
+    int roughView = 2;
 
     // How strong the knockdown vignette is: 0 none, 1 weak, 2 medium, 3 strong, how far the ring may close
     // (kVignetteStrengths in vr.cpp). VR option 42.

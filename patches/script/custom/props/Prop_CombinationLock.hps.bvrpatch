@@ -1,13 +1,22 @@
 BunkerVR patch 1
 file script/custom/props/Prop_CombinationLock.hps
 from 6156e0126ab45cddf7a8e0e331477636b63365b16290540fbaa3d1a39d0111c5 12405
-to 70cf58f81e73ab93150977bf8f68761d7fa6bd08cc4d51466d07386c803be803 12881
+to ce34c4b3fc5c44ca546367fcda3242c359963c77a64fbd8e2b9b9d4695d0e512 13149
 =61
 -1
 +				// BunkerVR: 0 for a roller with no start face given. A lock created by
 +				// a script (as on the BunkerVR test map) has none.
 +				float fFace = cMath_Wrap(i < int(vStartFaces.size()) ? vStartFaces[i] : 0, -fHalfTotalSteps, fHalfTotalSteps);
-=295
+=288
++
++	//------------------------------------------------------------
++
++	// BunkerVR, for testing (PlayerBodyHandler.hps VRStandInThingThere): the code, as set for this playthrough.
++	void _Global_VRCombination()
++	{
++		cScript_SetGlobalReturnString(msCombination);
++	}
+=7
 +
 +	//------------------------------------------------------------
 +

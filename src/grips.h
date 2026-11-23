@@ -39,12 +39,14 @@ enum
     kSlotBandageRoll,                 // the right hand holding the bandage's roll while winding (it has a placement too)
     kSlotDogtag,                      // a hand holding a dogtag pinched to read it (the tag goes where the pose's thumb and first finger meet, or where its own placement puts it)
     kSlotShotgunPump,                 // the left hand holding the shotgun's pump (its placement is where the fore-end sits in the hand: the hand is drawn fixed on it)
+    kSlotMedkitBottle,                // the left hand holding the medkit's bottle, out of its bag (it has a placement too)
+    kSlotMedkitRoll,                  // the left hand holding the medkit's dressing roll, wrapping it (it has a placement too)
     kGripSlotCount
 };
 
 const char* GripItemName(int slot);  // its name in the file ("Fuel", "GunSupport"); "" if out of range
 const char* GripItemTitle(int slot); // its everyday name ("Fuel can", "Steadying the gun"), for people
-bool GripSlotHasPlace(int slot);     // can it be moved in the hand (items, and the bandage's roll)
+bool GripSlotHasPlace(int slot);     // can it be moved in the hand (items, the bandage's roll, the medkit's bottle and roll...)
 bool GripSlotHasHand(int slot, int hand); // can that hand (0 left, 1 right) be in it
 
 struct HandPose

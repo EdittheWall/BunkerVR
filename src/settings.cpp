@@ -207,16 +207,18 @@ void LoadSettings()
     ReadNumber(text, "pull_mode=", 0.0f, 2.0f, pullMode);
     g_settings.pullMode = (int)(pullMode + 0.5f);
     // (The view of knockdowns and kills is one of three, "knockdown_view": 0 no comfort, 1 the cutscene screen,
-    // 2 the vignette. An older file has "rough_view" instead: 0 through the eyes, 1 the cutscene screen, 2 faded
-    // to black, 3 gentle, taken as 0, 1, 1 (the calmest of the three) and 2.)
+    // 2 comfort. An older file has "rough_view" instead: 0 through the eyes, 1 the cutscene screen, 2 faded
+    // to black, 3 gentle, taken as 0, 1, 1 (the calmest of the three) and 2. A file with neither keeps the
+    // default.)
     float roughView = -1.0f;
     ReadNumber(text, "knockdown_view=", 0.0f, 2.0f, roughView);
     if (roughView < 0.0f)
     {
-        float oldView = (float)g_settings.roughView;
+        float oldView = -1.0f;
         ReadNumber(text, "rough_view=", 0.0f, 3.0f, oldView);
         int old = (int)(oldView + 0.5f);
-        roughView = old == 3 ? 2.0f : (old == 2 ? 1.0f : (float)old);
+        if (oldView >= 0.0f) roughView = old == 3 ? 2.0f : (old == 2 ? 1.0f : (float)old);
+        else roughView = (float)g_settings.roughView;
     }
     g_settings.roughView = (int)(roughView + 0.5f);
     float vignetteStrength = (float)g_settings.vignetteStrength;

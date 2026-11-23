@@ -1,8 +1,18 @@
 BunkerVR patch 1
 file script/custom/modules/ItemHandler.hps
 from 587c5c3dca7b2191b548be4e64a1ba0c9f89d845fbd4b630ad2c8e533ef4b4ff 133743
-to ce836e5abe32c9e936b8bb09279bf5e5c07c68f2f5068164a80d6af6a0937672 135060
-=3715
+to 15a52bd20d66a97037a413533739854936df019cb50de82955e521c24d160755 135374
+=1095
++		{
++			// BunkerVR: said here, as the item is not added (GetWillItemTypeFit is only asked, by the game's own
++			// pick-ups every frame one is looked at, and by the VR hands every frame they are near one).
++			AddInventoryErrorMsg("Didn't add item type '"+asType+"' - it wouldn't fit.");
+=1
++		}
+=73
+-2
++		// BunkerVR: "Didn't add item type ... - it wouldn't fit" is said by AddItem, which adds, not here.
+=2544
 +	// BunkerVR: is the VR mod running? It answers through the camera: after
 +	// setting a special roll value, reading the camera's matrix returns the
 +	// mod's data (12345 as its first number) instead. Without the mod the

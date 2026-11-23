@@ -143,8 +143,11 @@ static bool KeyPressed(int key, bool& wasDown)
     return pressed;
 }
 
-// Keys:
+// Keys (only while the game's window is in front: they are read from the
+// whole PC, and with another program in front they are that program's, F9
+// being a common recording key):
 //   Home  re-centers the view: wherever the headset faces becomes "straight ahead".
+// Developer keys (not in the player build, kPlayerBuild, player_build.h):
 //   F2    opens or closes the BunkerVR menu (the same as Y on the left controller).
 //   F3    switches between drawing the game's body at your size and at its own.
 //   F4    switches between the game's own arms and plain blocks for the hands.
@@ -154,8 +157,7 @@ static bool KeyPressed(int key, bool& wasDown)
 //   F8    makes the world look bigger (one 5% step of the World Scale row).
 //   F9    saves what each eye sees to picture files (a testing aid).
 //   F11   opens the hand poses tool on the PC's screen in front, or brings it
-//         to the front (only while the game's window is in front:
-//         the tool itself closes on F11 when it is in front).
+//         to the front (the tool itself closes on F11 when it is in front).
 //   End   switches "both eyes every frame" on or off.
 static void CheckKeys()
 {
@@ -170,14 +172,18 @@ static void CheckKeys()
     // plain blocks for the hands.
     if ((GetAsyncKeyState(VK_MENU) & 0x8000) || (GetAsyncKeyState(VK_CONTROL) & 0x8000)) return;
 
+    // (A key pressed in another program is that program's. Its press is still
+    // taken above, so it does not act once the game comes to the front.)
+    HWND inFront = GetForegroundWindow();
+    if (inFront == nullptr || inFront != (HWND)VrGameWindow()) return;
+
     if (pressed[kHome]) VrRecenter();
+    if (kPlayerBuild) return;
     if (pressed[kF9])
     {
         CaptureRequest();
         VrRequestArmNotes();
     }
-    // Development keys: not in the tester build (kPlayerBuild, player_build.h).
-    if (kPlayerBuild) return;
     if (pressed[kF2]) VrToggleMenu();
     if (pressed[kF3]) VrToggleBigBody();
     if (pressed[kF4]) VrToggleGameHands();
@@ -186,12 +192,7 @@ static void CheckKeys()
     if (pressed[kF7]) VrStepWorldScale(1);
     if (pressed[kF8]) VrStepWorldScale(-1);
     if (pressed[kEnd]) VrToggleBothEyes();
-    if (pressed[kF11])
-    {
-        // (Not while another program is in front: F11 is that program's.)
-        HWND inFront = GetForegroundWindow();
-        if (inFront != nullptr && inFront == (HWND)VrGameWindow()) PoseToolFromKey();
-    }
+    if (pressed[kF11]) PoseToolFromKey();
 }
 
 static void HookedSwapWindow(void* window)

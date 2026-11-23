@@ -433,6 +433,21 @@ static void ScriptRightFitted()
     VrRightFitted();
 }
 
+// void cVR_LeftAtWork(): the body script reports, every update while the left
+// hand's squeeze belongs to the medkit in the right hand (its case in reach of
+// the left hand, or held open in it: VRUpdateMedkit in Prop_PlayerBody.hps):
+// a left squeeze is then the medkit's own (VrLeftAtWork).
+static void ScriptLeftAtWork()
+{
+    static bool logged = false;
+    if (!logged)
+    {
+        logged = true;
+        Log("SCRIPT FUNCTIONS: the left hand's squeeze was first claimed for the medkit by the direct line (cVR_LeftAtWork).");
+    }
+    VrLeftAtWork();
+}
+
 // void cVR_LeftAtPump(bool abAt): the shotgun's script reports, every update
 // while the shotgun is held (Prop_Shotgun.hps): is the left palm at
 // its fore-end? A left squeeze there then takes the pump (VrLeftAtPump).
@@ -593,6 +608,62 @@ static bool ScriptHeadsetAway()
     return VrHeadsetAway();
 }
 
+// bool cVR_HandsInMenu(): are the hands working the mod's own menu (it is open)? Its squeezes and trigger pulls
+// click there and reach nothing in the game, so the body script's own work by hand (the medkit) holds as it is
+// meanwhile, and takes no squeeze or let-go from them.
+static bool ScriptHandsInMenu()
+{
+    return VrMenuIsOpen();
+}
+
+// bool cVR_ComfortOn(): are forced view moves to be softened? While VR runs, unless the menu's "Knockdown and
+// Death View" is No Comfort (the cutscene screen counts as comfort too): the game's sway (Effect_Sway.hps),
+// the crawl's drop and a seated duck's crouch (PlayerBodyHandler.hps) are then left out or made in a blink.
+static bool ScriptComfortOn()
+{
+    return VrModRunning() && GetSettings().roughView != 0;
+}
+
+// bool cVR_Running(): is VR on for this run (being started, running, or being won back after a loss)? Unlike
+// cVR_Active, also on the cutscene screen, while loading, and while the headset is still connecting as the game sets
+// itself up: for settings the scripts read once, such as the game's Accessibility input modes, which are taken as
+// Hold while VR is on (the mod holds the game's buttons for as long as a hand does). Should VR fail after that, they
+// stay Hold until the game is restarted.
+static bool ScriptRunning()
+{
+    return VrModOn();
+}
+
+// void cVR_LetGoOfReady(): the body script has the mod let go of the item kept ready in the right hand for half a
+// second, so the game goes back to its normal state (the lantern switched with an item in hand: VrLetGoOfReadyItem).
+static void ScriptLetGoOfReady()
+{
+    VrLetGoOfReadyItem();
+}
+
+// void cVR_LeftLetsGoOfGun(): the shotgun's script says the real left hand holding the pump has come well off the
+// fore-end (Prop_Shotgun.hps): the left hand lets go of the gun (VrLeftLetsGoOfGun).
+static void ScriptLeftLetsGoOfGun()
+{
+    VrLeftLetsGoOfGun();
+}
+
+// void cVR_Rumble(float afAmount, float afSeconds): the game's own rumble, as Effect_Rumble_Start asks it of a
+// gamepad (helper_effects.hps): felt in the controllers (VrRumble decides when and how).
+static void ScriptRumble(float amount, float seconds)
+{
+    VrRumble(amount, seconds);
+}
+
+// void cVR_KeyBound(const tString &in asAction, const tString &in asPrimary, const tString &in asSecondary): the keys a
+// game action is bound to, as its key bindings name them, said by the game's input script each time it binds them
+// (LoadKeyConfig in InputHandler.hps: at the start and after the player changes them). The controllers press the
+// key that types the bound one on the player's keyboard layout (VrKeyBound).
+static void ScriptKeyBound(const GameString* action, const GameString* primary, const GameString* secondary)
+{
+    VrKeyBound(GameStringText(action), GameStringText(primary), GameStringText(secondary));
+}
+
 // bool cVR_QuitAsked(): has the headset software asked the game to close (its
 // own Quit, or it closing)? The menu script then exits the game as its Exit
 // button does (VRQuitWhenAsked in MenuHandler.hps).
@@ -635,6 +706,7 @@ static const ScriptFunction kFunctions[] = {
     { "float cVR_HandSqueeze(int alHand)", (void*)&ScriptHandSqueeze },
     { "float cVR_HandTrigger(int alHand)", (void*)&ScriptHandTrigger },
     { "void cVR_RightFitted()", (void*)&ScriptRightFitted },
+    { "void cVR_LeftAtWork()", (void*)&ScriptLeftAtWork },
     { "void cVR_LeftAtPump(bool abAt)", (void*)&ScriptLeftAtPump },
     { "void cVR_Hint(int alHand, const tString &in asKey, float afX, float afY, float afZ)", (void*)&ScriptHint },
     { "bool cVR_HintWanted(const tString &in asKey)", (void*)&ScriptHintWanted },
@@ -649,7 +721,14 @@ static const ScriptFunction kFunctions[] = {
     { "void cVR_Hurt(float afAmount, int alKind, float afX, float afY, float afZ)", (void*)&ScriptHurt },
     { "bool cVR_RecommendedGraphicsOnce()", (void*)&ScriptRecommendedGraphicsOnce },
     { "bool cVR_HeadsetAway()", (void*)&ScriptHeadsetAway },
+    { "bool cVR_HandsInMenu()", (void*)&ScriptHandsInMenu },
+    { "bool cVR_ComfortOn()", (void*)&ScriptComfortOn },
+    { "void cVR_Rumble(float afAmount, float afSeconds)", (void*)&ScriptRumble },
+    { "bool cVR_Running()", (void*)&ScriptRunning },
+    { "void cVR_LetGoOfReady()", (void*)&ScriptLetGoOfReady },
     { "bool cVR_QuitAsked()", (void*)&ScriptQuitAsked },
+    { "void cVR_LeftLetsGoOfGun()", (void*)&ScriptLeftLetsGoOfGun },
+    { "void cVR_KeyBound(const tString &in asAction, const tString &in asPrimary, const tString &in asSecondary)", (void*)&ScriptKeyBound },
 };
 
 // ---------------------------------------------------------------------------

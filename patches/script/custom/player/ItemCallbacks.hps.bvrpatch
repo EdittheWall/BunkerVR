@@ -1,8 +1,11 @@
 BunkerVR patch 1
 file script/custom/player/ItemCallbacks.hps
 from 8c842857501e09a04f2a1f0d58e800638ee71b99cc6fd3b886f202b8174a134a 16669
-to af833d3854b1e82faa796d09e0e32f70b11144c7474df11cd2c2a6a18f0325c7 18045
-=225
+to ad24c1d3b229e80a58bb0c661ae301a86cd1f2d2dd4dadfbeb834b4f17085c53 18605
+=40
+-1
++				if ((cVR_Running() ? 0 : cLux_GetUserConfig().GetInt("Accessibility", "ReloadWeaponMode", 0)) == 1 && Hint_IsGiven("Hints", sHint) == false) // BunkerVR: Hold while VR runs (the mod holds the game's buttons as long as a hand does)
+=184
 +			// BunkerVR: in the headset the mask is taken into the hand and put
 +			// on by bringing it to the face: requested here, done by VRUpdateMask
 +			// in PlayerBodyHandler.hps (in a hand: put back; on the face: left
@@ -12,7 +15,19 @@ to af833d3854b1e82faa796d09e0e32f70b11144c7474df11cd2c2a6a18f0325c7 18045
 +				cScript_SetGlobalVarInt("BunkerVR_MaskAsked", 1);
 +				return true;
 +			}
-=225
+=109
+-1
++			if ((cVR_Running() ? 0 : cLux_GetUserConfig().GetInt("Accessibility", "UseItemMode", 0)) == 1 && Hint_IsGiven("Hints", sHint) == false) // BunkerVR: Hold while VR runs (the mod holds the game's buttons as long as a hand does)
+=13
+-1
++			if ((cVR_Running() ? 0 : cLux_GetUserConfig().GetInt("Accessibility", "ChargeFlashlightMode", 0)) == 1 && Hint_IsGiven("Hints", sHint) == false) // BunkerVR: Hold while VR runs (the mod holds the game's buttons as long as a hand does)
+=10
+-1
++			if ((cVR_Running() ? 0 : cLux_GetUserConfig().GetInt("Accessibility", "UseItemMode", 0)) == 1 && Hint_IsGiven("Hints", sHint) == false) // BunkerVR: Hold while VR runs (the mod holds the game's buttons as long as a hand does)
+=29
+-1
++			if ((cVR_Running() ? 0 : cLux_GetUserConfig().GetInt("Accessibility", "UseItemMode", 0)) == 1 && Hint_IsGiven("Hints", sHint) == false) // BunkerVR: Hold while VR runs (the mod holds the game's buttons as long as a hand does)
+=60
 +
 +		// BunkerVR: when the flare burning in the hand (lit by its cord,
 +		// PlayerState_UsingFlare.hps) is dropped from the inventory, the burning

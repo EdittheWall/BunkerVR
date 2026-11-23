@@ -8,7 +8,7 @@ hands can reach tells you what to do with it, until you've done it three times. 
 
 | | Left controller | Right controller |
 |---|---|---|
-| **Thumbstick** | Move. Click: sprint | Turn. Up: jump, or stand up from a crouch. Down: crouch. Click: flashlight |
+| **Thumbstick** | Move. Click: sprint | Turn. Up: jump, or stand up from a crouch. Down: crouch |
 | **Grip** | Grab, hold, take | Grab, hold, take |
 | **Trigger** | Use what the hand holds, such as the lighter | Use what the hand holds, fire |
 | **X / A** | X: put away what you're holding | Hold A and flick: open the revolver. Hold A with the shotgun: check its shells |
@@ -51,20 +51,21 @@ the left controller's two face buttons are X and Y, the right's are A and B.
 | Load the revolver | With your left hand, grip at your left hip to take a bullet, then push it into a chamber |
 | Close the revolver | Flick it back |
 | Draw or holster the shotgun | Grip over your right shoulder |
-| Pump the shotgun | Grip the pump with your left hand, pull back, push forward |
+| Pump the shotgun | Grip the pump with your left hand, pull back, push forward. Open your hand or pull it away to let go |
 | Load the shotgun | Take a shell from your left hip and push it into the port under the gun |
 | Throw a grenade | Pull the pin with your left hand, then swing and let go |
 | Light the lighter | Trigger |
 | Light a torch, molotov or the like | Hold a flame to it |
 | Light a flare | Pull its cord with your left hand |
-| Heal | Pull the bandage open with your left hand, then wrap it around your left forearm three times with your right |
+| Heal with a bandage | Pull the bandage open with your left hand, then wrap it around your left forearm three times with your right |
+| Heal with a medkit | Hold it in your right hand and lift its flap with your left. Take the bottle, pull the cork with the left trigger and drink at your lips. Then take the dressing and wrap it around your right forearm three times |
 | Put on the gas mask | Hold it to your face. To take it off, grip it and pull it away |
 | Use a key or a fuse | Push it in, then turn your wrist (a fuse needs Grip held while you twist) |
-| Open a combination lock | Touch a wheel with your fingertip, then use the trigger to turn it |
-| Undo a bolt | Push the wrench onto the bolt, hold Grip and crank it anticlockwise |
+| Open a combination lock | Bring your hand to it (it points by itself), touch a wheel with your fingertip and pull the trigger to turn it |
+| Undo a bolt | Push the wrench onto the bolt, hold Grip and crank it counterclockwise |
 | Cut a chain or padlock | Hold both handles of the cutters, open the jaws around it, bring your hands together |
 | Pour fuel | Open the lid with your left hand, then tip the can over the opening |
 | Read a dog tag | Take it and turn it over |
 | Wind the pocket watch | Pull the trigger to wind and start it, or press the crown |
-| Use the flashlight | Take it from your chest, or click the right thumbstick |
+| Use the flashlight | Take it from the left side of your chest |
 | Store an item on your chest | Hold it to the right side of your chest and let go. Grip there with an empty hand to take it back |

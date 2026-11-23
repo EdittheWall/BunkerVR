@@ -1,7 +1,8 @@
 // BunkerVR: the hands-on items. Each item's profile: which of the mod's hand
 // moves it takes part in, and what they do with it. Read by the body script
 // (PlayerBodyHandler.hps, which tells the mod and acts on what the mod
-// detects) and by the item states (PlayerState_UsingThrowable.hps). The moves
+// detects) and by the item states (PlayerState_UsingThrowable.hps,
+// PlayerState_UsingHealthItem.hps). The moves
 // are detected by the mod (vr.cpp) and acted on in the scripts, so an item is
 // given a move, or what a move does with it, by changing this file and the
 // scripts that act on it (reload them in the headset: Y, Testing, "Reload
@@ -169,8 +170,10 @@ cMatrixf BunkerVR_TurnOnto(const cVector3f &in avFrom, const cVector3f &in avTo,
 // (PlayerState_UsingFuel.hps) splashes it three times, each a spill on the
 // ground up to 4 m ahead of the eyes, at least 0.75 m from the one before,
 // then the can is used up. By hand, each shove of the open can splashes once,
-// the way the can was going, as far as it was fast; after
-// glBunkerVR_FuelSplashes the can is empty, as in the game.
+// on the arc the fuel makes from the can's opening the way the can was going
+// (BunkerVR_FuelSplashDistance): further the harder it is thrown, nearer aimed
+// down, down to the feet; after glBunkerVR_FuelSplashes the can is empty, as in
+// the game.
 // The can is held in both hands, the left on its bottom or its end
 // (VRUpdateFuelHands in PlayerBodyHandler.hps; the game's own throw has the
 // left palm flat on the spout's end), pushed out 15 cm or more at 1.8 m/s or
@@ -183,8 +186,10 @@ cMatrixf BunkerVR_TurnOnto(const cVector3f &in avFrom, const cVector3f &in avTo,
 // gfBunkerVR_FuelSwingStart and ends as it slows to gfBunkerVR_FuelThrowStop of
 // its fastest: as a pushed can is stopped, the fuel flies on. It throws, the
 // way the can was going fastest, if at its fastest it was
-// gfBunkerVR_FuelThrowSpeed or more, going mostly level (not just lifted or
-// dropped), and the can ended gfBunkerVR_FuelThrowTravel or more from where the
+// gfBunkerVR_FuelThrowSpeed or more, going no steeper than
+// gfBunkerVR_FuelThrowSteepest up or down (not just lifted or dropped: a throw at
+// the feet is aimed down, not straight down), and the can ended
+// gfBunkerVR_FuelThrowTravel or more from where the
 // shove began (a straight distance, not a path length, which a shake back and
 // forth or a tracking slip could add up). A shove shorter than
 // gfBunkerVR_FuelSwingShortest or longer than gfBunkerVR_FuelSwingLongest throws
@@ -198,10 +203,17 @@ const float gfBunkerVR_FuelSwingShortest = 0.08f;	// a shove shorter than this (
 const float gfBunkerVR_FuelSwingLongest = 0.6f;	// a shove this long (seconds) throws nothing: a carry
 const float gfBunkerVR_FuelLidCalm = 0.3f;			// no throw this long (seconds) after the lid comes off
 const float gfBunkerVR_FuelThrowGap = 0.6f;		// at most one throw in this long (seconds)
-const float gfBunkerVR_FuelSplashNear = 1.5f;		// a throw at gfBunkerVR_FuelThrowSpeed lands this far from the can (meters)...
-const float gfBunkerVR_FuelSplashFar = 4.0f;		// ...at most this far (the game's gfUsingFuel_MaxThrowDist)...
-const float gfBunkerVR_FuelSplashPerSpeed = 1.5f;	// ...this much further for each meter a second faster
+const float gfBunkerVR_FuelThrowSteepest = 0.35f;	// a throw goes level at least this share of its speed (about 70 degrees up or down at most)
+const float gfBunkerVR_FuelSplashLaunch = 1.2f;	// the fuel leaves the opening this many times as fast as the can went at its fastest (it flies on as the can stops)...
+const float gfBunkerVR_FuelGravity = 9.8f;			// ...falls this fast (meters a second, each second)...
+const float gfBunkerVR_FuelSplashFar = 4.0f;		// ...and lands at most this far (meters: the game's gfUsingFuel_MaxThrowDist)
 const int glBunkerVR_FuelSplashes = 3;				// splashes in a can (the game's three)
+
+// The cloth from a dressing being wound to the roll in the hand (Prop_PlayerBody.hps VRBandageMakePieces, VRWrapStrip):
+// how many flat pieces it can be made of (two for the rest of the slice being wound round the arm, up to sixteen through
+// the air), each its own thing named "vr_bandage_piece_<n>" (taken out of a level as it is left: VRMadeThingsAtLeave in
+// PlayerBodyHandler.hps).
+const int glVRBandagePieces = 20;
 
 // The fuel can's left-hand hold (VRUpdateFuelHands): the can's box in the hand model's terms
 // (25.5 x 31.2 x 15.7 cm, its bottom at 0); the left palm this near its side, end or bottom (not
@@ -251,13 +263,21 @@ cVector3f BunkerVR_FuelNearestOnCan(const cVector3f &in avAt, cVector3f &out avO
 bool BunkerVR_FuelThrown(float afPeak, float afTravel, const cVector3f &in avPeakVelocity)
 {
 	float fLevel = cVector3f(avPeakVelocity.x, 0.0f, avPeakVelocity.z).Length();
-	return afPeak >= gfBunkerVR_FuelThrowSpeed && afTravel >= gfBunkerVR_FuelThrowTravel && fLevel >= 0.5f * afPeak;
+	return afPeak >= gfBunkerVR_FuelThrowSpeed && afTravel >= gfBunkerVR_FuelThrowTravel && fLevel >= gfBunkerVR_FuelThrowSteepest * afPeak;
 }
 
-// How far a throw at afSpeed lands (meters).
-float BunkerVR_FuelSplashReach(float afSpeed)
+// How far from the can's opening, level, a throw lands (meters): on the arc the fuel makes, leaving the opening
+// gfBunkerVR_FuelSplashLaunch times as fast as the can went at its fastest (avVelocity, meters a second) and falling
+// afHeight to the ground below the opening. From a can held at the waist (1.1 m up), thrown level: a gentle shove
+// (2 m/s) lands about 1.1 m away, a hard one (7 m/s) 4 m; aimed down it lands nearer, aimed up further; never past
+// gfBunkerVR_FuelSplashFar.
+float BunkerVR_FuelSplashDistance(const cVector3f &in avVelocity, float afHeight)
 {
-	return cMath_Clamp(gfBunkerVR_FuelSplashNear + (afSpeed - gfBunkerVR_FuelThrowSpeed) * gfBunkerVR_FuelSplashPerSpeed, gfBunkerVR_FuelSplashNear, gfBunkerVR_FuelSplashFar);
+	float fLevel = cVector3f(avVelocity.x, 0.0f, avVelocity.z).Length() * gfBunkerVR_FuelSplashLaunch;
+	float fUp = avVelocity.y * gfBunkerVR_FuelSplashLaunch;
+	float fHeight = cMath_Max(afHeight, 0.0f);
+	float fFlight = (fUp + cMath_Sqrt(fUp * fUp + 2.0f * gfBunkerVR_FuelGravity * fHeight)) / gfBunkerVR_FuelGravity;
+	return cMath_Min(fLevel * fFlight, gfBunkerVR_FuelSplashFar);
 }
 
 // Tracks the can's shove, update by update (see above).
@@ -338,6 +358,49 @@ class cBunkerVRFuelShove
 		avThrow = mvPeakVelocity;
 		return true;
 	}
+}
+
+//------------------------------------------------------------
+
+// The medkit worked by hand (VRUpdateMedkit in Prop_PlayerBody.hps): held in
+// the right hand, its flap lifted by the left hand, its bottle taken out by
+// the left hand, uncorked and drunk from, as the game's own medkit is (the
+// first half of its healing), then its dressing wound round the right forearm
+// (the second half). A medkit drunk from and put away keeps that in its own
+// health (the inventory item's, which a dropped one and a saved game keep): it
+// then opens with its dressing left.
+const float gfBunkerVR_MedkitDrunk = 0.5f;			// a medkit's own health once its bottle is drunk (a new one's is 0)
+const float gfBunkerVR_MedkitDrinkTip = 0.4f;		// the bottle is drunk from with its neck no higher than this (its line's rise, one long: 66 degrees from upright)...
+const float gfBunkerVR_MedkitDrinkFacing = -0.2f;	// ...turned back towards the face (its line along the head's forward no more than this)...
+const float gfBunkerVR_MedkitMouthReach = 0.09f;	// ...and its opening this near the mouth (meters)
+const float gfBunkerVR_MouthBelow = 0.07f;			// the mouth: this far below the middle of the eyes...
+const float gfBunkerVR_MouthAhead = 0.015f;		// ...and this far ahead of them (meters)
+
+// Is this medkit's bottle drunk already, by its own health?
+bool BunkerVR_MedkitDrunk(float afItemHealth)
+{
+	return cMath_Abs(afItemHealth - gfBunkerVR_MedkitDrunk) < 0.1f;
+}
+
+// The mouth, from the real head (a_mtxHead: the middle of the eyes, its
+// forward its -z and its up its y), at the body's size (afBig).
+cVector3f BunkerVR_Mouth(const cMatrixf &in a_mtxHead, float afBig)
+{
+	cVector3f vUp = cMath_Vector3Normalize(cMath_MatrixMul3x3(a_mtxHead, cVector3f(0.0f, 1.0f, 0.0f)));
+	cVector3f vAhead = cMath_Vector3Normalize(cMath_MatrixMul3x3(a_mtxHead, cVector3f(0.0f, 0.0f, -1.0f)));
+	return a_mtxHead.GetTranslation() + (vAhead * gfBunkerVR_MouthAhead - vUp * gfBunkerVR_MouthBelow) * afBig;
+}
+
+// Is the bottle being drunk from: its opening (avOpening) at the mouth
+// (avMouth), its line from base to neck (avNeck, one long) tipped up to within
+// gfBunkerVR_MedkitDrinkTip of level or past it, and turned back towards the
+// face (avFacing: the head's forward, one long)? Lengths times afBig, as the
+// body is drawn.
+bool BunkerVR_MedkitDrinking(const cVector3f &in avOpening, const cVector3f &in avNeck, const cVector3f &in avMouth, const cVector3f &in avFacing, float afBig)
+{
+	if(avNeck.y > gfBunkerVR_MedkitDrinkTip) return false;
+	if(cMath_Vector3Dot(avNeck, avFacing) > gfBunkerVR_MedkitDrinkFacing) return false;
+	return (avOpening - avMouth).Length() <= gfBunkerVR_MedkitMouthReach * afBig;
 }
 
 //------------------------------------------------------------

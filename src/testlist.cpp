@@ -7,9 +7,9 @@
 #include "log.h"
 #include "testlist.h"
 
-static const int kMostChecks = 200;
-static TestCheck g_checks[kMostChecks];
+static TestCheck g_checks[kTestListMostChecks];
 static int g_checkCount = 0;
+static int g_checksLeftOut = 0;
 static int g_at = 0;
 static bool g_loadedOnce = false;
 static bool g_askingWhy = false;
@@ -86,6 +86,7 @@ static char* NextLine(char*& text)
 static void ReadList()
 {
     g_checkCount = 0;
+    g_checksLeftOut = 0;
     char path[MAX_PATH];
     FilePath(path, sizeof(path), "test_list.txt");
     char* whole = ReadWholeFile(path);
@@ -102,10 +103,10 @@ static void ReadList()
             Log("TEST LIST: a line without its two bars was left out: %.60s", line);
             continue;
         }
-        if (g_checkCount >= kMostChecks)
+        if (g_checkCount >= kTestListMostChecks)
         {
-            Log("TEST LIST: only the first %d checks were read.", kMostChecks);
-            break;
+            g_checksLeftOut++;
+            continue;
         }
         char* thirdBar = strchr(secondBar + 1, '|');
         *firstBar = '\0';
@@ -119,6 +120,7 @@ static void ReadList()
         check.result = kCheckNotDone;
     }
     free(whole);
+    if (g_checksLeftOut > 0) Log("TEST LIST: only the first %d checks were read; %d left out.", kTestListMostChecks, g_checksLeftOut);
 }
 
 // The answers so far; the last one for a check counts. A line is
@@ -195,6 +197,11 @@ void TestListLoad()
 int TestListCount()
 {
     return g_checkCount;
+}
+
+int TestListLeftOut()
+{
+    return g_checksLeftOut;
 }
 
 int TestListAt()

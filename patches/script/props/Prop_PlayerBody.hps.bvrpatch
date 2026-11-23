@@ -1,7 +1,7 @@
 BunkerVR patch 1
 file script/props/Prop_PlayerBody.hps
 from ba36bdf8d3d2fa9de890ddce0c8df64ccd18782dc68bb4da635903418c3b6dff 20897
-to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
+to 4a5ce9c63bb4326b2f2578d3e238433015709d3dbbd79f3ed086bef4bc6275bd 521353
 =7
 +#include "custom/helpers/helper_bunkervr_shotgun.hps" // BunkerVR: the shotgun worked by hand
 +#include "custom/helpers/helper_bunkervr_hints.hps" // BunkerVR: hints shown on objects
@@ -105,16 +105,63 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +// the mod's grips.h): posed and placed as that, the hand drawn fixed on the
 +// fore-end (see VRLeftOnPump).
 +const int glVRWorkShotgunPump = 40;
++// BunkerVR: the left hand holding the medkit's bottle out of its bag, and its
++// dressing roll while it is wound (kSlotMedkitBottle, kSlotMedkitRoll in the
++// mod's grips.h): posed and placed as those (see VRAskPlacement and
++// VRUpdateMedkit).
++const int glVRWorkMedkitBottle = 41;
++const int glVRWorkMedkitRoll = 42;
 +// BunkerVR: the bandage wound round the left forearm (see VRUpdateBandage).
 +const float gfVRBandageRadius = 0.045f;	// how thick the forearm is taken to be (meters from its center), if the mod doesn't say
-+const float gfVRBandagePitch = 0.03f;	// how far each turn lies further up the arm
-+const float gfVRBandageWidth = 0.6f;	// how wide the cloth is drawn (1 = 10 cm)
++// BunkerVR: the medkit worked by hand (see VRUpdateMedkit). Lengths at the body's size.
++const float gfVRMedkitFlapReach = 0.12f;		// the left palm this near the flap's edge takes hold of it...
++const float gfVRMedkitFlapLift = 0.09f;			// ...lifted this far (up out of the bag and a little out from its front) it is open...
++const float gfVRMedkitFlapStays = 0.7f;			// ...let go of past this much of that, it falls open; before, shut...
++const float gfVRMedkitFlapFall = 0.25f;			// ...in this long (seconds)
++const float gfVRMedkitOpenAt = 2.1f;			// the game's own use of it (medkit_usage) has the flap up, its string undone, this far in (seconds)
++const float gfVRMedkitPartReach = 0.12f;		// the left palm this near the bottle or the dressing in the open bag takes it
++const float gfVRMedkitDrinkTime = 1.0f;			// drunk from this long: the first half of its healing...
++const float gfVRMedkitGulpGap = 0.3f;			// ...a gulp felt in the hand this often
++const float gfVRMedkitHintAway = 0.25f;			// its hint is not shown while the bottle's opening is this near the mouth (it would stand in the face)
++const float gfVRMedkitGlowRise = 0.6f;			// the part to take next glows with the game's own pickup glow, rising this long (seconds)...
++const float gfVRMedkitGlowFall = 0.6f;			// ...falling this long...
++const float gfVRMedkitGlowRest = 0.8f;			// ...then none for this long...
++const float gfVRMedkitGlowMost = 0.6f;			// ...at most this strong (1: the glow at full)...
++const cColor gVRMedkitGlowColor = cColor(0.9f, 0.9f, 0.9f, 1.0f);	// ...in the pickups' own color (HighlightEffectHandler.hps)
++const float gfVRMedkitReachTickGap = 0.3f;		// the left hand coming within reach of that part ticks, at most this often (seconds)
++const int glVRMedkitWrapTurns = 3;				// the dressing wrapped round the right forearm this many times: the second half (as many as the bandage's)...
++const float gfVRMedkitWrapAway = 1.0f;			// ...the left hand away from the forearm longer than this: the wrapping starts again (seconds, as the bandage's)
++const float gfVRMedkitRollRadius = 0.0365f;		// the dressing's roll's radius in its model (7.3 cm across): the cloth leaves it there
++const float gfVRMedkitSqueeze = 0.6f;			// a squeeze takes hold past this...
++const float gfVRMedkitLetGo = 0.35f;			// ...and lets go below it
++const cVector3f gvVRMedkitFlapAt = cVector3f(0.0f, 4.6f, -4.5f);	// the flap's edge by its press-stud (j_Button), in the bag's own terms (its bone's, centimetres: its front +y, its top -z)...
++const cVector3f gvVRMedkitFlapUp = cVector3f(0.0f, 0.45f, -0.9f);	// ...and the way it lifts (the same terms)
++const cVector3f gvVRMedkitBagBack = cVector3f(0.0f, -3.9f, 0.0f);	// the bag's back (the same terms): a dropped bag lies on it
++const cVector3f gvVRMedkitBottleGrip = cVector3f(0.035f, -0.045f, 0.0f);	// the bottle's base (j_bottle) in the left palm, its line along the palm's y
++const cVector3f gvVRMedkitRollGrip = cVector3f(0.04f, 0.0f, 0.0f);		// the dressing's roll (j_Bandage_Roll) in the left palm, its axle along the palm's y
++const tString gsVRMedkitDrinkSound = "player/tools/fuel/bottle_refill";	// the liquid heard while drinking (the game's own drinking sound is only in its opening level's sounds)
++// BunkerVR: the dressing wound onto a forearm by a bandage or the medkit (see VRPlaceWrap), as make_dressing.ps1 makes
++// its model: in glVRWrapSlices slices, an eighth of a turn each.
++const int glVRWrapSlices = 32;
++const float gfVRWrapSliceTurn = 0.7853982f;		// a slice's turn (radians)
++const float gfVRWrapTuckTime = 0.35f;			// once it heals, the rest winds itself on at this long a turn
++const float gfVRDressingFrom = 0.03f;			// it starts this far up from the wrist (at the body's size)
++const float gfVRDressingRadius = 0.051f;		// its model is wound round this (the arm's 4.5 cm and 6 mm of air)...
++const float gfVRDressingPitch = 0.022f;			// ...each turn this much further up the arm...
++const float gfVRDressingRisingTurns = 3.0f;		// ...for this many turns, then one more level...
++const float gfVRDressingWidth = 0.05f;			// ...its cloth this wide...
++const float gfVRDressingLayer = 0.0013f;		// ...and this thick
 +const float gfVRArmNearest = 0.35f;	// the hand is never nearer the shoulder than this fraction of the arm's length (the arm backs away at its collar bone)
 +const float gfVRArmStretch = 1.15f;	// a reaching arm may be stretched to this much of its own length, spread evenly along it, before the shoulder has to move
++const float gfVRClavicleRate = 0.52f;	// the clavicle turns up or forward this much (radians) for each arm's length the hand is past half an arm's reach up or ahead...
++const float gfVRClavicleMost = 0.52f;	// ...at most this much each way (radians, 30 degrees)
++const float gfVRArmSoftShare = 0.08f;	// the arm's bend is eased out over this much of its length before it is straight (soft reach: BunkerVR_SoftReach)
++const float gfVRArmSlideMost = 0.25f;	// past the stretch, the arm slides out from the shoulder at most this far (meters; the body leans for more)
++const float gfVRElbowGlideTime = 0.053f;	// the elbow glides to its new side with this time constant (seconds; as a tenth of the way each of a frame's two passes at 90 a second was)
 +const float gfVRBarTurnMax = 1.2f;	// a hand on a door's pull bar turns about it at most this far (radians, about 70 degrees) either side of facing the door
 +
 +// BunkerVR: empty hands that stop at things and push loose things (see
-+// VRHandBlock). Sizes in meters at the arms' own size (they scale with them).
++// VRHandBlock). Sizes in meters at the hands' own size (they scale with the hands as drawn: the body's size).
 +// The balls are small so the hand gets down to small things on a table. Steps
 +// are never longer than gfVRHandStep, and a step that can't be pushed clear
 +// isn't taken, so the hand never goes through anything.
@@ -122,7 +169,7 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +const float gfVRFingerRadius = 0.025f;	// the ball around the fingers
 +const float gfVRFingerReach = 0.06f;	// how far ahead of the palm the fingers' ball is with the hand open (half that in a fist)
 +const float gfVRHandStep = 0.015f;	// the balls move at most this far between checks
-+const int glVRHandSteps = 10;		// and are checked at most this many times a frame (then they catch up next frame)
++const int glVRHandSteps = 10;		// and are checked at most this many times a frame, plus enough for the player's own move that frame (then they catch up next frame)
 +const float gfVRHandClear = 0.002f;	// a ball still this deep in something after being pushed out has not come clear, and that step isn't taken
 +const float gfVRHandJump = 0.3f;	// a palm that moves further than this in one frame has jumped (a snap turn, the view moved): the balls go along with it
 +const float gfVRHandFromHeldMost = 1.0f;	// a hand let go of a handle or a rung starts from where it was held if the real hand is within this of it (meters)
@@ -133,6 +180,7 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +const float gfVRHandPressRate = 5.0f;	// pressed on a thing that holds still, it is pushed to close the gap in about 1/this of a second
 +const float gfVRHandPushAccel = 20.0f;	// and a pushed thing gains speed at most this fast (m/s per second; giving it the hand's speed at once feels rigid)
 +const float gfVRHandPushReach = 0.003f;	// a thing this close ahead of a moving hand counts as touched (meters; so a hand going along with a thing keeps pushing it)
++const float gfVRHandHeavyMass = 10.0f;	// a thing this heavy or more is pushed by open hands no faster than a hand holding it drags it (kilograms: the most the player's own body shoves, Player.hps SetMaxPushMass)
 +const float gfVRDoorPushForce = 30.0f;	// the most an open hand pushes a door, hatch, lid or drawer with (newtons; see VRPushPart)...
 +const float gfVRDoorShoveForce = 90.0f;	// ...and this much more for each m/s the palm moves into it, up to 3 m/s (a shove; see VRHandPushForce)
 +const float gfVRDoorBraceForce = 250.0f;	// a door coming at a hand is held back with up to this (newtons, or the push if more: a hand held out braces; without it a heavy door swung at a still hand passes through it)
@@ -140,6 +188,7 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +const float gfVRDoorFeltDensity = 15.0f;	// a door is pushed as if it weighed this much per square meter at the Feel page's "Weight" 100% (kg; the game's 1.35 x 2.4 m wooden door weighs 5, pushed as 49)
 +const float gfVRDrawerFeltMass = 3.0f;	// and a drawer as if it weighed at least this (kg, at "Weight" 100%)
 +const float gfVRHandLost = 1.0f;	// a hand held back further than this (beyond an arm's reach) for two seconds starts again at the real hand
++const float gfVRHandReturnFar = 0.3f;	// a hand held back further than this goes to the real hand at once, where that is clear and in sight (VRHandBlock)
 +const float gfVRHandBuzzGap = 0.3f;	// a touch buzzes only after the hand has touched nothing for this long (seconds)
 +const float gfVRHandTouchRoom = 0.025f;	// a thing this close to a hand's balls is touched: it can be taken hold of (meters; see VRHandTouchFind)
 +const float gfVRHandNearReach = 0.05f;	// and, when nothing is, a pick-up or a small thing this much further off (small things such as bullets are hard to grab otherwise)
@@ -154,7 +203,9 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +const float gfVRThumbPadBeyond = 0.45f;	// the thumb's pad: beyond its last joint by this much of the bone before (see VRNoteTagPinch)
 +const float gfVRIndexPadBeyond = 0.45f;	// the first finger's tip pad: beyond its last joint by this much of the bone before
 +const float gfVRTagPadOff = 0.008f;		// a dogtag lies this far from that fingertip's bone towards the thumb (its pad's thickness; meters)
-+const float gfVRLockHintNear = 0.25f;	// a fingertip this near a number lock gets the hint on how to use it (meters)
++const float gfVRLockHintNear = 0.25f;	// a fingertip this near a number lock gets the hint on how to use it, and the hand points (meters)...
++const float gfVRLockPointKeep = 0.32f;	// ...and goes on pointing until it is this far (see VRHandPointsAtLock)
++const cVector3f gvVRPointFingers = cVector3f(0.75f, 0.0f, 0.9f);	// a pointing hand: the thumb, the first finger and the rest (0 open to 1 closed)
 +const float gfVRLockTipRadius = 0.01f;	// a number lock is touched by a ball this big around the index fingertip (meters)...
 +const float gfVRLockStill = 0.3f;		// ...with the player walking no faster than this (meters per second)
 +const float gfVRHandleBar = 0.015f;	// a door's handle bar, as thick each side of its center line (meters; see VRDoorHandleNear)
@@ -213,7 +264,6 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +const float gfVRCarryPushMost = 0.4f;	// ...moved off by at most this much (meters)...
 +const float gfVRCarryRoom = 0.05f;	// ...and, once the eyes are further away than that by this much, moved back...
 +const float gfVRCarryBack = 0.3f;	// ...at this speed (meters per second)
-+const int glVRBandagePieces = 80;		// how many flat pieces the cloth can be made of (sixteen per turn around the arm, and up to sixteen through the air)
 +// BunkerVR: the legs (see UpdateVRLegs). A planted foot steps once it is this
 +// far (meters) from where the body wants it...
 +const float gfVRStepStart = 0.22f;
@@ -250,9 +300,30 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +const float gfVRSnapTurnLeast = 0.35f;
 +// The shortest the legs may be made (a fraction of their length) to fit under the hips.
 +const float gfVRLegFitMin = 0.55f;
++// The legs are fitted only while standing on flat ground: the floor found under each foot within this of the game's
++// body's own floor (meters; a foot over a lower step or a ledge's edge reaches further and drew the legs too long)...
++const float gfVRLegFitFlat = 0.03f;
++// ...and after a re-centre or at a level's start, from this much standing (seconds; the time waits while the body
++// does not stand: arriving from a jump it falls or settles first)...
++const float gfVRLegFitTime = 0.6f;
++// ...the hips settled: within this of their height eased over gfVRLegFitSteadyTime seconds (meters; after a level's
++// jump the character drops onto the floor and the drawn body comes back up over some seconds, and a fit taken
++// meanwhile was short; measured as a drift, not frame to frame, which a headset's tracking tremor alone exceeds)...
++const float gfVRLegFitSteady = 0.01f;
++const float gfVRLegFitSteadyTime = 0.5f;
++// ...and, for the fit to grow, the head about level, looking no further up or down than this (the sine of the angle:
++// 30 degrees; the neck, and the body under it, are worked out from the eyes, and a head bowed or tipped back far can
++// lift them; a fresh fit is taken looking down too, the player looking at their legs).
++const float gfVRLegFitLevel = 0.5f;
 +// Out of reach, a leg may be stretched to this much of that length (as the
 +// arms are) before its foot leaves its place.
 +const float gfVRLegStretch = 1.12f;
++// BunkerVR: the feet ease from where they stand into the walk's places over this long as walking starts (seconds; a
++// step's swing is 0.3-0.4 s) ...
++const float gfVRWalkBlendTime = 0.15f;
++// ...and a leg's bend is eased out over this much of its length before it is straight (soft reach, as the arms':
++// BunkerVR_SoftReach; a standing leg is nearly straight, and the knee snapped as the head bobbed).
++const float gfVRLegSoftShare = 0.04f;
 +
 =255
 -1
@@ -465,9 +536,9 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +
 +		// The left thumb and first finger (as the shotgun's VRLeftPinch).
 +		cMeshEntity@ pBodyMesh = mBaseObj.GetMeshEntity();
-+		cBoneState@ pIndexA = pBodyMesh !is null ? pBodyMesh.GetBoneStateFromName("j_L_Index_3") : null;
-+		cBoneState@ pIndexB = pBodyMesh !is null ? pBodyMesh.GetBoneStateFromName("j_L_Index_4") : null;
-+		cBoneState@ pThumb = pBodyMesh !is null ? pBodyMesh.GetBoneStateFromName("j_L_Thumb_3") : null;
++		cBoneState@ pIndexA = pBodyMesh !is null ? VRFingerBone(pBodyMesh, true, 0, 3) : null;
++		cBoneState@ pIndexB = pBodyMesh !is null ? VRFingerBone(pBodyMesh, true, 0, 4) : null;
++		cBoneState@ pThumb = pBodyMesh !is null ? VRFingerBone(pBodyMesh, true, 4, 3) : null;
 +		if(pIndexA is null || pIndexB is null || pThumb is null) return;
 +		cVector3f vIndexPad = pIndexA.GetWorldPosition() + (pIndexB.GetWorldPosition() - pIndexA.GetWorldPosition()) * 0.6f;
 +		cVector3f vPinch = (vIndexPad + pThumb.GetWorldPosition()) * 0.5f;
@@ -890,16 +961,18 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +					// (The same for a hand's own hold: the mod says which hands
 +					// squeeze for it, the body handler which of them hold something.)
 +					lVRLooseHeld = int(vVRHandUse.y + 0.5f) & cScript_GetGlobalVarInt("BunkerVR_FreeHolding");
++					// (Bits: 1 the revolver open, 2 the left hand on the gun, 4 a bullet in the left hand, 8 the
++					// shotgun's press-check: VrGetGunHandFlags in vr.cpp.)
 +					int lVRGunFlags = int(vVRHandUse.z + 0.5f);
-+					bVRLeftOnGunWanted = lVRGunFlags == 2 || lVRGunFlags == 3;
++					bVRLeftOnGunWanted = (lVRGunFlags & 2) != 0;
 +					bool bVRReloadWasOpen = mbVRReloadOpen;
-+					mbVRReloadOpen = lVRGunFlags == 1 || lVRGunFlags == 3;
++					mbVRReloadOpen = (lVRGunFlags & 1) != 0;
 +
 +					// +4: the left hand is carrying a bullet to the open revolver.
 +					// Its fingers are then half closed whatever the squeeze, so
 +					// that the bullet sits between the thumb and the first finger
 +					// (the revolver's script puts it there, see VRUpdateGunBullet).
-+					mbVRBulletInHand = lVRGunFlags >= 4 && lVRGunFlags <= 7;
++					mbVRBulletInHand = (lVRGunFlags & 4) != 0;
 +					if(mbVRBulletInHand)
 +					{
 +						fVRCurlLeft = gfVRBulletCurl;
@@ -909,7 +982,6 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +							lVRFingersLeft = 1;
 +							vVRFingersLeft = cVector3f(0.8f, 0.6f, 0.9f);
 +						}
-+						mbVRReloadOpen = lVRGunFlags == 5 || lVRGunFlags == 7;
 +					}
 +
 +					// The revolver has just been flicked shut: its "close"
@@ -977,12 +1049,17 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		// Where the real head is (special roll values 7006, then 7005): the
 +		// shoulders are put under it (see UpdateVRArm).
 +		mbVRHeadKnown = false;
++		// (And how big the body is drawn, the hands with it: the third number. The hands' balls, their reach for
++		// things and their fingertips at buttons are sized by it, as the drawn hands are: sized by the arms' own scale
++		// alone, always 1, the drawn hands went 16% into a wall before the balls stopped them.)
++		float fVRHandSize = fVRArmScale;
 +		if(lVRPalms != 0)
 +		{
 +			pVRCam.SetRoll(7006.0f);
 +			cVector3f vVRHeadStatus = pVRCam.GetMatrix().GetTranslation();
 +			if(vVRHeadStatus.x > 12344.0f && vVRHeadStatus.x < 12346.0f && vVRHeadStatus.y > 0.5f)
 +			{
++				if(vVRHeadStatus.z > 0.5f && vVRHeadStatus.z < 3.0f) fVRHandSize = fVRArmScale * vVRHeadStatus.z;
 +				pVRCam.SetRoll(7005.0f);
 +				m_mtxVRHead = pVRCam.GetMatrix();
 +				mbVRHeadKnown = true;
@@ -1097,8 +1174,8 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +				// is drawn where the thing can be: the holding code says how far
 +				// that is from where the real hand wants it ("BunkerVR_HoldBack").
 +				VRTimeMark(7080);
-+				mvVRBlockShift[0] = (lVRPalms == 1 || lVRPalms == 3) ? VRHandBlock(0, mtxVRLeft, fVRCurlLeft, fVRArmScale, bVRLeftBusy || bVRLeftHolds, bVRLeftHolds, bVRLeftFixed) : cVector3f(0.0f);
-+				mvVRBlockShift[1] = (lVRPalms == 2 || lVRPalms == 3) ? VRHandBlock(1, mtxVRRight, fVRCurlRight, fVRArmScale, bVRRightBusy || bVRRightHolds, bVRRightHolds, bVRRightFixed) : cVector3f(0.0f);
++				mvVRBlockShift[0] = (lVRPalms == 1 || lVRPalms == 3) ? VRHandBlock(0, mtxVRLeft, fVRCurlLeft, fVRHandSize, bVRLeftBusy || bVRLeftHolds, bVRLeftHolds, bVRLeftFixed) : cVector3f(0.0f);
++				mvVRBlockShift[1] = (lVRPalms == 2 || lVRPalms == 3) ? VRHandBlock(1, mtxVRRight, fVRCurlRight, fVRHandSize, bVRRightBusy || bVRRightHolds, bVRRightHolds, bVRRightFixed) : cVector3f(0.0f);
 +				VRTimeMark(7081);
 +
 +				// How far each empty hand is held back, for the code that picks
@@ -1152,15 +1229,15 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +			if(mbVRFreshPose)
 +			{
 +				VRTimeMark(7084);
-+				if(lVRPalms == 1 || lVRPalms == 3) VRHandTouchFind(0, mtxVRLeft, fVRCurlLeft, fVRArmScale, bVRLeftHolds, bVRLeftBusy == false && fVRCurlLeft < 0.5f);
-+				if(lVRPalms == 2 || lVRPalms == 3) VRHandTouchFind(1, mtxVRRight, fVRCurlRight, fVRArmScale, bVRRightHolds, bVRRightBusy == false && fVRCurlRight < 0.5f);
++				if(lVRPalms == 1 || lVRPalms == 3) VRHandTouchFind(0, mtxVRLeft, fVRCurlLeft, fVRHandSize, bVRLeftHolds, bVRLeftBusy == false && fVRCurlLeft < 0.5f);
++				if(lVRPalms == 2 || lVRPalms == 3) VRHandTouchFind(1, mtxVRRight, fVRCurlRight, fVRHandSize, bVRRightHolds, bVRRightBusy == false && fVRCurlRight < 0.5f);
 +				VRTimeMark(7085);
 +				// Buttons and door locks pushed in by an empty hand. (From the
 +				// real hand, not the drawn one: the drawn hand stops at the
 +				// knob's face, so it would never go in.)
 +				VRTimeMark(7086);
-+				if(lVRPalms == 1 || lVRPalms == 3) VRPushButtons(0, mtxVRLeftReal, fVRCurlLeft, fVRArmScale, bVRLeftHolds == false && bVRLeftBusy == false);
-+				if(lVRPalms == 2 || lVRPalms == 3) VRPushButtons(1, mtxVRRightReal, fVRCurlRight, fVRArmScale, bVRRightHolds == false && bVRRightBusy == false);
++				if(lVRPalms == 1 || lVRPalms == 3) VRPushButtons(0, mtxVRLeftReal, fVRCurlLeft, fVRHandSize, bVRLeftHolds == false && bVRLeftBusy == false);
++				if(lVRPalms == 2 || lVRPalms == 3) VRPushButtons(1, mtxVRRightReal, fVRCurlRight, fVRHandSize, bVRRightHolds == false && bVRRightBusy == false);
 +				VRTimeMark(7087);
 +			}
 +		}
@@ -1303,6 +1380,19 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +				vVRFingersRight = vVRAskedFingers;
 +			}
 +		}
++		// A free hand at a number lock points (VRHandPointsAtLock); never over fingers the game animates round something held (2).
++		if(VRHandPointsAtLock(0, fVRFinaleNow) && lVRFingersLeft != 2)
++		{
++			lVRFingersLeft = 1;
++			vVRFingersLeft = gvVRPointFingers;
++			fVRCurlLeft = gvVRPointFingers.y;
++		}
++		if(VRHandPointsAtLock(1, fVRFinaleNow) && lVRFingersRight != 2)
++		{
++			lVRFingersRight = 1;
++			vVRFingersRight = gvVRPointFingers;
++			fVRCurlRight = gvVRPointFingers.y;
++		}
 +		
 +		// (Don't lean the spine to put the chest under the real head: the game
 +		// places the whole body by a point on its head, "CameraSocket", so moving
@@ -1359,6 +1449,22 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +			mbVRBandageRollGrip = false;
 +			mbVRBandageRollSend = false;
 +		}
++		// The medkit's bottle, and its dressing roll, in the left hand (VRUpdateMedkit): "The medkit's bottle" and "The
++		// medkit's dressing roll", their placements and their fingers.
++		bool bVRMedkitBottleLeft = mlVRMedkitStep == 3 && (lVRPalms == 1 || lVRPalms == 3);
++		bool bVRMedkitRollLeft = mlVRMedkitStep == 4 && (lVRPalms == 1 || lVRPalms == 3);
++		if(bVRMedkitBottleLeft) VRAskPlacement(pVRCam, 0, glVRWorkMedkitBottle, mbVRMedkitBottleGrip, m_mtxVRMedkitBottleGrip, mbVRMedkitBottleSend);
++		else
++		{
++			mbVRMedkitBottleGrip = false;
++			mbVRMedkitBottleSend = false;
++		}
++		if(bVRMedkitRollLeft) VRAskPlacement(pVRCam, 0, glVRWorkMedkitRoll, mbVRMedkitRollGrip, m_mtxVRMedkitRollGrip, mbVRMedkitRollSend);
++		else
++		{
++			mbVRMedkitRollGrip = false;
++			mbVRMedkitRollSend = false;
++		}
 +		// A dogtag pinched to be read (the reading state says which hand, see
 +		// VRTagHand): that pose, and the pinch reported (VRNoteTagPinch).
 +		int lVRTagHand = VRTagHand();
@@ -1367,7 +1473,9 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		// pump", its placement (VRLeftOnPump) and its fingers, its own or else
 +		// the helper's (gvBunkerVR_PumpGrip..., gvBunkerVR_PumpCurls...).
 +		bool bVRLeftPump = mbVRShotgunInHand && mbVRLeftOnGun;
-+		int lVRWorkLeft = lVRTagHand == 0 ? glVRWorkDogtag : (mbVRLeftOnGun ? (bVRLeftPump ? glVRWorkShotgunPump : glVRWorkGunSupport) : (bVRTinLeft ? glVRItemBandage : (mbVRBulletInHand ? glVRWorkBullet : (bVRLeftDoorPose ? glVRWorkDoor : (bVRLeftLoosePose ? glVRWorkLoose : -1)))));
++		int lVRWorkLeft = lVRTagHand == 0 ? glVRWorkDogtag : (mbVRLeftOnGun ? (bVRLeftPump ? glVRWorkShotgunPump : glVRWorkGunSupport) : (bVRTinLeft ? glVRItemBandage :
++						  (bVRMedkitBottleLeft ? glVRWorkMedkitBottle : (bVRMedkitRollLeft ? glVRWorkMedkitRoll :
++						  (mbVRBulletInHand ? glVRWorkBullet : (bVRLeftDoorPose ? glVRWorkDoor : (bVRLeftLoosePose ? glVRWorkLoose : -1)))))));
 +		int lVRWorkRight = lVRTagHand == 1 ? glVRWorkDogtag : (bVRRollRight ? glVRWorkBandageRoll : (mbVRCordHeld ? glVRWorkCord : (bVRRightDoorPose ? glVRWorkDoor : (bVRRightLoosePose ? glVRWorkLoose : -1))));
 +		bool bVRPoseLeft = (lVRPalms == 1 || lVRPalms == 3) && VRWorkPose(pVRCam, 0, lVRWorkLeft);
 +		bool bVRPoseRight = (lVRPalms == 2 || lVRPalms == 3) && mbVRGunInHand == false && VRWorkPose(pVRCam, 1, lVRWorkRight);
@@ -1438,23 +1546,23 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +			// first, which carries the gun, then the left hand on the fore-end
 +			// as the gun now is (VRLeftOnPump). (Both hands are followed:
 +			// mbVRLeftOnGun.)
-+			UpdateVRArm(pVRMesh, false, "j_R_Arm_1", "j_R_Arm_3", "j_R_Wrist", mtxVRRight, fVRArmScale, fVRCurlRight, lVRFingersRight, vVRFingersRight, bVRPoseRight, bVRPalmAsEmptyRight);
-+			UpdateVRArm(pVRMesh, true, "j_L_Arm_1", "j_L_Arm_3", "j_L_Wrist", VRLeftOnPump(pVRMesh, mtxVRLeft), fVRArmScale, fVRCurlLeft, lVRFingersLeft, vVRFingersLeft, bVRPoseLeft, bVRPalmAsEmptyLeft);
++			UpdateVRArm(pVRMesh, false, mtxVRRight, fVRArmScale, fVRCurlRight, lVRFingersRight, vVRFingersRight, bVRPoseRight, bVRPalmAsEmptyRight);
++			UpdateVRArm(pVRMesh, true, VRLeftOnPump(pVRMesh, mtxVRLeft), fVRArmScale, fVRCurlLeft, lVRFingersLeft, vVRFingersLeft, bVRPoseLeft, bVRPalmAsEmptyLeft);
 +		}
 +		else if(mbVRLeftOnGun && mbVRGunInHand && mbVRShotgunInHand == false && lVRPalms == 3)
 +		{
 +			// The left hand steadying the revolver: the right arm first, then the left hand
 +			// carried by the gun's own kick in the right hand (VRGunKickMotion), so that it
 +			// follows the gun at each shot.
-+			UpdateVRArm(pVRMesh, false, "j_R_Arm_1", "j_R_Arm_3", "j_R_Wrist", mtxVRRight, fVRArmScale, fVRCurlRight, lVRFingersRight, vVRFingersRight, bVRPoseRight, bVRPalmAsEmptyRight);
-+			UpdateVRArm(pVRMesh, true, "j_L_Arm_1", "j_L_Arm_3", "j_L_Wrist", cMath_MatrixMul(VRGunKickMotion(pVRMesh), mtxVRLeft), fVRArmScale, fVRCurlLeft, lVRFingersLeft, vVRFingersLeft, bVRPoseLeft, bVRPalmAsEmptyLeft);
++			UpdateVRArm(pVRMesh, false, mtxVRRight, fVRArmScale, fVRCurlRight, lVRFingersRight, vVRFingersRight, bVRPoseRight, bVRPalmAsEmptyRight);
++			UpdateVRArm(pVRMesh, true, cMath_MatrixMul(VRGunKickMotion(pVRMesh), mtxVRLeft), fVRArmScale, fVRCurlLeft, lVRFingersLeft, vVRFingersLeft, bVRPoseLeft, bVRPalmAsEmptyLeft);
 +		}
 +		else
 +		{
 +			if(lVRPalms == 1 || lVRPalms == 3)
-+				UpdateVRArm(pVRMesh, true, "j_L_Arm_1", "j_L_Arm_3", "j_L_Wrist", mtxVRLeft, fVRArmScale, fVRCurlLeft, lVRFingersLeft, vVRFingersLeft, bVRPoseLeft, bVRPalmAsEmptyLeft);
++				UpdateVRArm(pVRMesh, true, mtxVRLeft, fVRArmScale, fVRCurlLeft, lVRFingersLeft, vVRFingersLeft, bVRPoseLeft, bVRPalmAsEmptyLeft);
 +			if(lVRPalms == 2 || lVRPalms == 3)
-+				UpdateVRArm(pVRMesh, false, "j_R_Arm_1", "j_R_Arm_3", "j_R_Wrist", mtxVRRight, fVRArmScale, fVRCurlRight, lVRFingersRight, vVRFingersRight, bVRPoseRight, bVRPalmAsEmptyRight);
++				UpdateVRArm(pVRMesh, false, mtxVRRight, fVRArmScale, fVRCurlRight, lVRFingersRight, vVRFingersRight, bVRPoseRight, bVRPalmAsEmptyRight);
 +		}
 +		VRTimeMark(7089);
 +		VRArmsComeBack(pVRMesh); // (after a knockdown, a kill or a death)
@@ -1601,10 +1709,10 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		pCam.SetRoll(fRealRoll);
 +		if(bHead == false) return;
 +		VRLadderPutBack(apMesh);
-+		cBoneState@ pSpine = apMesh.GetBoneStateFromName("j_Spine_1");
-+		cBoneState@ pChest = apMesh.GetBoneStateFromName("j_Spine_3");
-+		cBoneState@ pLeftHip = apMesh.GetBoneStateFromName("j_L_Hip");
-+		cBoneState@ pRightHip = apMesh.GetBoneStateFromName("j_R_Hip");
++		cBoneState@ pSpine = VRTrunkBone(apMesh, 0);
++		cBoneState@ pChest = VRTrunkBone(apMesh, 3);
++		cBoneState@ pLeftHip = VRTrunkBone(apMesh, 1);
++		cBoneState@ pRightHip = VRTrunkBone(apMesh, 2);
 +		if(pSpine is null || pChest is null || pLeftHip is null || pRightHip is null) return;
 +		// (Which way the body faces, level: at the ladder; and its right.)
 +		cVector3f vFwd = cMath_MatrixMul3x3(mBaseObj.GetMatrix(), cVector3f(0.0f, 0.0f, 1.0f));
@@ -1630,10 +1738,9 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +			bool bLegs = true;
 +			for(int lSide = 0; lSide < 2; ++lSide)
 +			{
-+				tString sSide = lSide == 0 ? "j_L_" : "j_R_";
-+				cBoneState@ pThigh = apMesh.GetBoneStateFromName(sSide + "Leg_1");
-+				cBoneState@ pKnee = apMesh.GetBoneStateFromName(sSide + "Leg_3");
-+				cBoneState@ pFoot = apMesh.GetBoneStateFromName(sSide + "Foot");
++				cBoneState@ pThigh = VRLegBone(apMesh, lSide, 0);
++				cBoneState@ pKnee = VRLegBone(apMesh, lSide, 2);
++				cBoneState@ pFoot = VRLegBone(apMesh, lSide, 6);
 +				if(pThigh is null || pKnee is null || pFoot is null)
 +				{
 +					bLegs = false;
@@ -1662,17 +1769,16 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +				mfVRLegFit = 1.0f;
 +				for(int lSide = 0; lSide < 2; ++lSide)
 +				{
-+					tString sSide = lSide == 0 ? "j_L_" : "j_R_";
-+					cBoneState@ pThigh = apMesh.GetBoneStateFromName(sSide + "Leg_1");
-+					cBoneState@ pKnee = apMesh.GetBoneStateFromName(sSide + "Leg_3");
-+					cBoneState@ pFoot = apMesh.GetBoneStateFromName(sSide + "Foot");
++					cBoneState@ pThigh = VRLegBone(apMesh, lSide, 0);
++					cBoneState@ pKnee = VRLegBone(apMesh, lSide, 2);
++					cBoneState@ pFoot = VRLegBone(apMesh, lSide, 6);
 +					cVector3f vHip = pThigh.GetWorldPosition();
 +					float fLeg = (pKnee.GetWorldPosition() - vHip).Length() + (pFoot.GetWorldPosition() - pKnee.GetWorldPosition()).Length();
 +					// (Out of reach: the foot lifts, the leg no longer than it is.)
 +					cVector3f vTarget = vFoot[lSide].GetTranslation();
 +					cVector3f vReach = vTarget - vHip;
 +					if(vReach.Length() > fLeg * 0.995f) vTarget = vHip + cMath_Vector3Normalize(vReach) * (fLeg * 0.995f);
-+					VRBendLeg(apMesh, sSide, vTarget, vFoot[lSide], vKneeSide[lSide]);
++					VRBendLeg(apMesh, lSide, vTarget, vFoot[lSide], vKneeSide[lSide]);
 +				}
 +				mfVRLegFit = fFitWas;
 +			}
@@ -1731,7 +1837,7 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +			mvVRLadderNotedMove = vHipsMove;
 +			mfVRLadderNotedBend = fBend;
 +			// (And how near the drawn neck is to the real one: the head on the body.)
-+			cBoneState@ pDrawnNeck = apMesh.GetBoneStateFromName("j_Neck");
++			cBoneState@ pDrawnNeck = VRTrunkBone(apMesh, 4);
 +			tString sNeck = "";
 +			if(pDrawnNeck !is null) sNeck = "; the drawn neck " + VRLadderCm(pDrawnNeck.GetWorldPosition() - vNeck, vFwd, vSide) + " of the real one";
 +			Log("BunkerVR ladder: the body fitted under the real head: the shoulders as climbing has them " + VRLadderCm(vNeed * -1.0f, vFwd, vSide) +
@@ -1815,7 +1921,7 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		bool bSetKnown = mbVRLadderFreshKnown && mbVRLadderSetKnown && mvVRLadderSet.length() >= uint(glVRLadderBones);
 +		for(int i = 0; i < glVRLadderBones; ++i)
 +		{
-+			cBoneState@ pBone = apMesh.GetBoneStateFromName(VRLadderBoneName(i));
++			cBoneState@ pBone = VRLadderBone(apMesh, i);
 +			if(pBone is null)
 +			{
 +				mbVRLadderFreshKnown = false;
@@ -1834,7 +1940,7 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		if(mbVRLadderFreshKnown == false || mvVRLadderFresh.length() < uint(glVRLadderBones)) return;
 +		for(int i = 0; i < glVRLadderBones; ++i)
 +		{
-+			cBoneState@ pBone = apMesh.GetBoneStateFromName(VRLadderBoneName(i));
++			cBoneState@ pBone = VRLadderBone(apMesh, i);
 +			if(pBone !is null) pBone.SetMatrix(mvVRLadderFresh[i]);
 +		}
 +	}
@@ -1846,7 +1952,7 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		if(mvVRLadderSet.length() < uint(glVRLadderBones)) mvVRLadderSet.resize(glVRLadderBones);
 +		for(int i = 0; i < glVRLadderBones; ++i)
 +		{
-+			cBoneState@ pBone = apMesh.GetBoneStateFromName(VRLadderBoneName(i));
++			cBoneState@ pBone = VRLadderBone(apMesh, i);
 +			if(pBone is null)
 +			{
 +				mbVRLadderSetKnown = false;
@@ -2407,10 +2513,12 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		return true;
 +	}
 +
-+	// BunkerVR: a thing a hand holds that the game doesn't know of, while
-+	// the bandage is wound (made by the winding: the bandage's tin in the left
++	// BunkerVR: a thing a hand holds that the game doesn't know of: while the
++	// bandage is wound (made by the winding: the bandage's tin in the left
 +	// hand, alSlot glVRItemBandage; its roll in the right hand,
-+	// glVRWorkBandageRoll). The hand is asked about as holding it (the asking
++	// glVRWorkBandageRoll), or the medkit's bottle or dressing roll in the left
++	// hand (glVRWorkMedkitBottle, glVRWorkMedkitRoll: VRUpdateMedkit places
++	// them by it). The hand is asked about as holding it (the asking
 +	// itself tells the mod: the hand poses tool shows that pose as the hand's
 +	// current one). abHas: that pose has a placement of its own (a_mtxGrip, in
 +	// the palm's space; VRUpdateBandage then places the thing by it); abSend:
@@ -2762,7 +2870,10 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		cMatrixf mtxToPalm = cMath_MatrixInverse(alHand == 0 ? m_mtxVRPalmLeft : m_mtxVRPalmRight);
 +		tString sLine = "BunkerVR: held " + (alHand == 0 ? "left" : "right") + ": " + apProp.GetName() + " (item " +
 +						cScript_GetGlobalVarInt("BunkerVR_HeldItem" + alHand) + "; the mod: " + sModSays + "; " + sState + (VRHeldIsLoose(idProp) ? "; off the socket" : "") + "): " + sHow +
-+						". In the palm's terms (cm): the model's origin " + VRCmText(cMath_MatrixMul(mtxToPalm, apProp.GetMatrix().GetTranslation()));
++						". In the palm's terms (cm): the model's origin " + VRCmText(cMath_MatrixMul(mtxToPalm, apProp.GetMatrix().GetTranslation())) +
++						" (its axes there, x " + VRAxisText(cMath_MatrixMul3x3(mtxToPalm, cMath_MatrixMul3x3(apProp.GetMatrix(), cVector3f(1.0f, 0.0f, 0.0f)))) +
++						" y " + VRAxisText(cMath_MatrixMul3x3(mtxToPalm, cMath_MatrixMul3x3(apProp.GetMatrix(), cVector3f(0.0f, 1.0f, 0.0f)))) +
++						" z " + VRAxisText(cMath_MatrixMul3x3(mtxToPalm, cMath_MatrixMul3x3(apProp.GetMatrix(), cVector3f(0.0f, 0.0f, 1.0f)))) + ")";
 +		cMeshEntity@ pMesh = apProp.GetMeshEntity();
 +		if(pMesh !is null)
 +		{
@@ -2810,6 +2921,13 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +	tString VRCmText(const cVector3f &in avMetres)
 +	{
 +		return "(" + VRCm(avMetres.x) + " " + VRCm(avMetres.y) + " " + VRCm(avMetres.z) + ")";
++	}
++
++	// BunkerVR: a way, made one long, for the log: each part in hundredths.
++	tString VRAxisText(const cVector3f &in avWay)
++	{
++		cVector3f vWay = avWay.Length() > 0.0001f ? cMath_Vector3Normalize(avWay) : avWay;
++		return "(" + cMath_RoundToInt(vWay.x * 100.0f) + " " + cMath_RoundToInt(vWay.y * 100.0f) + " " + cMath_RoundToInt(vWay.z * 100.0f) + ")";
 +	}
 +
 +	// BunkerVR: three numbers for the mod (in the camera's position, while its
@@ -2860,6 +2978,16 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +			mvVRHandleSpot = vHandle;
 +		}
 +		return fBest;
++	}
++
++	// BunkerVR: a free hand whose fingertip is near a number lock (VRPushButtons, which runs only for a free hand)
++	// points, as at a keypad in VR games: its first finger straight and the others closed, whatever the trigger and
++	// the finger sensors say. Pulled, the trigger would curl the drawn finger, and a finger resting on it (a touch
++	// controller's sensor) half curls it, putting the fingertip on the next roller (they are under 2 cm apart): the
++	// press would turn the wrong one. (Posed as gvVRPointFingers where the fingers are set.)
++	bool VRHandPointsAtLock(int alHand, float afNow)
++	{
++		return afNow - mfVRPointAtLockTime[alHand] <= 0.15f && afNow >= mfVRPointAtLockTime[alHand];
 +	}
 +
 +	// BunkerVR: where the tip of a drawn hand's index finger is, as posed
@@ -2943,11 +3071,10 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +	// apart, and the tag hangs in the air between them.)
 +	void VRNoteTagPinch(cMeshEntity@ apMesh, bool abLeft, const cMatrixf &in a_mtxPalm)
 +	{
-+		tString sSide = abLeft ? "j_L_" : "j_R_";
-+		cBoneState@ pThumb2 = apMesh.GetBoneStateFromName(sSide + "Thumb_2");
-+		cBoneState@ pThumb3 = apMesh.GetBoneStateFromName(sSide + "Thumb_3");
-+		cBoneState@ pIndex3 = apMesh.GetBoneStateFromName(sSide + "Index_3");
-+		cBoneState@ pIndex4 = apMesh.GetBoneStateFromName(sSide + "Index_4");
++		cBoneState@ pThumb2 = VRFingerBone(apMesh, abLeft, 4, 2);
++		cBoneState@ pThumb3 = VRFingerBone(apMesh, abLeft, 4, 3);
++		cBoneState@ pIndex3 = VRFingerBone(apMesh, abLeft, 0, 3);
++		cBoneState@ pIndex4 = VRFingerBone(apMesh, abLeft, 0, 4);
 +		if(pThumb2 is null || pThumb3 is null || pIndex3 is null || pIndex4 is null) return;
 +		cVector3f vThumbLast = pThumb3.GetWorldPosition();
 +		cVector3f vThumbPad = vThumbLast + (vThumbLast - pThumb2.GetWorldPosition()) * gfVRThumbPadBeyond;
@@ -3097,6 +3224,8 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		cVector3f vTip = mvVRIndexTip[alHand];
 +		bool bTipFresh = cMath_Abs(fNow - mfVRIndexTipTime[alHand]) < 0.25f;
 +		tID idLockNear = tID_Invalid; // (for the hints: a lock the fingertip is near)
++		bool bPointing = fNow - mfVRPointAtLockTime[alHand] < 0.2f && fNow >= mfVRPointAtLockTime[alHand];
++		bool bPointNow = false; // (the hand points while its fingertip is near a lock: see VRHandPointsAtLock)
 +		if(bTipFresh && mvVRLockList.length() > 0)
 +		{
 +			iCollideShape@ pTipBall = null;
@@ -3104,8 +3233,10 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +			{
 +				iLuxEntity@ pLock = cLux_ID_Entity(mvVRLockList[i]);
 +				if(pLock is null || pLock.IsActive() == false || pLock.GetInteractionDisabled()) continue;
-+				if((pLock.GetPosition() - vTip).Length() > gfVRPushNear) continue;
-+				if((pLock.GetPosition() - vTip).Length() < gfVRLockHintNear) idLockNear = pLock.GetID();
++				float fFromTip = (pLock.GetPosition() - vTip).Length();
++				if(fFromTip > gfVRPushNear) continue;
++				if(fFromTip < gfVRLockHintNear) idLockNear = pLock.GetID();
++				if(fFromTip < (bPointing ? gfVRLockPointKeep : gfVRLockHintNear)) bPointNow = true;
 +				iPhysicsBody@ pBody = pLock.GetMainBody();
 +				iCollideShape@ pShape = pBody !is null ? pBody.GetShape() : null;
 +				if(pShape is null) continue;
@@ -3126,6 +3257,7 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +			}
 +			// (The tip's ball is kept for the next frame: VRKeptBall.)
 +		}
++		if(bPointNow) mfVRPointAtLockTime[alHand] = fNow;
 +
 +		// Out of every button for long enough: ready to press again.
 +		if(fDepthAny < gfVRPushOut)
@@ -3779,6 +3911,15 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		cVector3f vPalm = a_mtxPalm.GetTranslation();
 +		cVector3f vPalmMove = vPalm - mvVRBlockPalmWas[alHand];
 +		mvVRBlockPalmWas[alHand] = vPalm;
++		// The player's own move since the last frame (the game's camera, which the real palm is placed from): the balls
++		// may walk that much further this frame (lVRSteps, below), so the hand is never left behind by the player's own
++		// speed (a sprint is 12 cm a frame at 45 a second), only by what stops it. Not a jump of the view (gfVRHandJump).
++		cLuxPlayer@ pVRCarryPlayer = cLux_GetPlayer();
++		cCamera@ pVRCarryCam = pVRCarryPlayer !is null ? pVRCarryPlayer.GetCamera() : null;
++		cVector3f vVRCamNow = pVRCarryCam !is null ? pVRCarryCam.GetPosition() : mvVRBlockCamWas[alHand];
++		float fVRCarry = (vVRCamNow - mvVRBlockCamWas[alHand]).Length();
++		mvVRBlockCamWas[alHand] = vVRCamNow;
++		int lVRSteps = glVRHandSteps + (fVRCarry < gfVRHandJump ? cMath_CeilToInt(fVRCarry / gfVRHandStep) : 0);
 +		cLuxMap@ pMap = cLux_GetCurrentMap();
 +		iPhysicsWorld@ pPhysics = pMap !is null ? pMap.GetPhysicsWorld() : null;
 +		if(abBusy || pPhysics is null || mfVRArmStep < 0.0001f)
@@ -3827,7 +3968,7 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		// stops the hand (vSolid), and may be pushed (vLight, vLightEntity).
 +		// (Whatever its weight: if light things were given the hand's speed
 +		// instead, hands would push them too easily and pass through big ones.)
-+		float fNear = fPalmRadius + gfVRFingerReach * afScale + fFingerRadius + gfVRHandStep * float(glVRHandSteps) + 0.02f;
++		float fNear = fPalmRadius + gfVRFingerReach * afScale + fFingerRadius + gfVRHandStep * float(lVRSteps) + 0.02f;
 +		cVector3f vLow = cVector3f(cMath_Min(vFrom.x, vPalm.x) - fNear, cMath_Min(vFrom.y, vPalm.y) - fNear, cMath_Min(vFrom.z, vPalm.z) - fNear);
 +		cVector3f vHigh = cVector3f(cMath_Max(vFrom.x, vPalm.x) + fNear, cMath_Max(vFrom.y, vPalm.y) + fNear, cMath_Max(vFrom.z, vPalm.z) + fNear);
 +		array<iPhysicsBody@> vNear;
@@ -3915,7 +4056,7 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +			}
 +
 +			// Steps towards the real hand, each at most gfVRHandStep long.
-+			for(int i = 0; i < glVRHandSteps; ++i)
++			for(int i = 0; i < lVRSteps; ++i)
 +			{
 +				cVector3f vLeft = vPalm - vAt;
 +				float fLeft = vLeft.Length();
@@ -4013,18 +4154,39 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +					if(cMath_Vector3Dot(vDir, vCentre - vBall) <= 0.0f) continue; // going away from it
 +					cVector3f vPoint = vBall + vDir * (bPalmIn ? fPalmRadius : fFingerRadius);
 +					float fAlready = cMath_Vector3Dot(pBody.GetVelocityAtPosition(vPoint), vDir);
-+					if(fAlready >= fWant) continue;
++					// A heavy thing (gfVRHandHeavyMass or more: crates, barrels upright or rolled on their side, whatever
++					// their script class) goes no faster than a hand holding it drags it (BunkerVR_PushTopSpeed): two
++					// open hands had pushed an 18 kg barrel at up to 4 m/s, where holding it drags it at 0.8.
++					float fWantHere = fWant;
++					if(pBody.GetMass() >= gfVRHandHeavyMass) fWantHere = cMath_Min(fWant, BunkerVR_PushTopSpeed(pBody.GetMass()));
++					if(fAlready >= fWantHere) continue;
 +					float fMost = cMath_Min(gfVRHandPushForce, gfVRHandPushAccel * pBody.GetMass()) * mfVRArmStep; // (this update's share)
-+					float fImpulse = cMath_Min((fWant - fAlready) * pBody.GetMass(), fMost);
++					float fImpulse = cMath_Min((fWantHere - fAlready) * pBody.GetMass(), fMost);
 +					pBody.Enable();
 +					pBody.AddImpulseAtPosition(vDir * fImpulse, vPoint);
-+					if(mfVRPushBuzzWait[alHand] <= 0.0f && fWant > 0.3f)
++					if(mfVRPushBuzzWait[alHand] <= 0.0f && fWantHere > 0.3f)
 +					{
 +						VRBuzzHand(alHand, 0.02f, 0.25f);
 +						mfVRPushBuzzWait[alHand] = 0.25f;
-+						VRBlockNote(alHand, cVector3f(2.0f, fWant, pBody.GetMass()));
++						VRBlockNote(alHand, cVector3f(2.0f, fWantHere, pBody.GetMass()));
 +					}
 +				}
++			}
++		}
++
++		// The real hand free again well away from where the hand is held back (gone round the edge of a door or a
++		// wall it caught on, or drawn back out of the way): the hand goes to it at once (note 4), rather than staying
++		// caught or walking along what it caught on, as hand-presence libraries return a stuck hand past a distance
++		// (BODY_PLAN.md: 25-40 cm). Only where the real hand is in the clear and in sight of the eyes
++		// (VRPalmInSight): never through a wall or a shut door it is pushed against.
++		if((vPalm - vAt).Length() > gfVRHandReturnFar && pPalmBall !is null && pFingerBall !is null && VRPalmInSight(vPalm))
++		{
++			VRHandMakeClear(pPhysics, pPalmBall, pFingerBall, vPalm, vToFingers);
++			if(mbVRClearOk && mbVRClearPushed == false)
++			{
++				VRBlockNote(alHand, cVector3f(4.0f, (vPalm - vAt).Length(), 0.0f));
++				vAt = vPalm;
++				bTouched = false;
 +			}
 +		}
 +
@@ -4086,6 +4248,23 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +			mbVRClearPushed = true;
 +		}
 +		return vAt;
++	}
++
++	// BunkerVR: is the real palm at avPalm in sight of the eyes (the game's camera): nothing on the line between?
++	// (A hand held back at a wall or a shut door with the real hand on its far side is not.)
++	bool VRPalmInSight(const cVector3f &in avPalm)
++	{
++		cLuxPlayer@ pPlayer = cLux_GetPlayer();
++		cCamera@ pCam = pPlayer !is null ? pPlayer.GetCamera() : null;
++		if(pCam is null) return false;
++		cVector3f vFrom = pCam.GetPosition();
++		cVector3f vWay = avPalm - vFrom;
++		float fWay = vWay.Length();
++		if(fWay < 0.05f) return true;
++		float fHitAt = 0.0f;
++		cVector3f vNormal = cVector3f(0.0f, 1.0f, 0.0f);
++		iPhysicsBody@ pHit = cLux_GetClosestBody(vFrom, vWay * (1.0f / fWay), fWay, fHitAt, vNormal);
++		return pHit is null || fHitAt >= fWay - 0.02f;
 +	}
 +
 +	// How far a ball at avAt has to move to come out of the world's solid
@@ -4490,11 +4669,18 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +	// An arm's (VRArmBone): 0 Clavicle, 1 Arm_Zero, 2 Arm_Assist, 3 to 8 Arm_1 to Arm_6,
 +	// 9 Wrist, 10 HandSocket. A finger's (VRFingerBone): 0 the first finger, 1 the middle,
 +	// 2 the ring, 3 the little finger, 4 the thumb; its bones 1 to 4 (the thumb's 1 to 3).
++	// A leg's (VRLegBone): 0 to 5 Leg_1 to Leg_6, 6 Foot, 7 Toes. The trunk's (VRTrunkBone):
++	// 0 Spine_1, 1 the left hip, 2 the right hip, 3 Spine_3, 4 Neck. The ladder's
++	// (VRLadderBone: VRLadderBoneName) and the revolver's hand's (VRGunHandBone: gvVRGunHandBones).
 +	void VRFindBones(cMeshEntity@ apMesh)
 +	{
 +		if(apMesh is mpVRBonesMesh && mvVRArmBoneStates.length() == 22) return;
 +		@mpVRBonesMesh = apMesh;
 +		mvVRArmBoneStates.resize(22);
++		mvVRLegBoneStates.resize(16);
++		mvVRTrunkBoneStates.resize(5);
++		mvVRLadderBoneStates.resize(glVRLadderBones);
++		mvVRGunHandBoneStates.resize(gvVRGunHandBones.length());
 +		mvVRFingerBones.resize(40);
 +		mvVRFingerRest.resize(40);
 +		mvVRFingerRestKnown.resize(40);
@@ -4524,6 +4710,37 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +				}
 +			}
 +		}
++		array<tString> vLeg = {"Leg_1", "Leg_2", "Leg_3", "Leg_4", "Leg_5", "Leg_6", "Foot", "Toes"};
++		for(int lSide = 0; lSide < 2; ++lSide)
++		{
++			tString sSide = lSide == 0 ? "j_L_" : "j_R_";
++			for(int i = 0; i < 8; ++i)
++				@mvVRLegBoneStates[lSide * 8 + i] = apMesh !is null ? apMesh.GetBoneStateFromName(sSide + vLeg[i]) : null;
++		}
++		array<tString> vTrunk = {"j_Spine_1", "j_L_Hip", "j_R_Hip", "j_Spine_3", "j_Neck"};
++		for(int i = 0; i < 5; ++i)
++			@mvVRTrunkBoneStates[i] = apMesh !is null ? apMesh.GetBoneStateFromName(vTrunk[i]) : null;
++		for(int i = 0; i < glVRLadderBones; ++i)
++			@mvVRLadderBoneStates[i] = apMesh !is null ? apMesh.GetBoneStateFromName(VRLadderBoneName(i)) : null;
++		for(uint lBone = 0; lBone < gvVRGunHandBones.length(); ++lBone)
++			@mvVRGunHandBoneStates[lBone] = apMesh !is null ? apMesh.GetBoneStateFromName(gvVRGunHandBones[lBone]) : null;
++		// Whether each forearm twist bone (Arm_4 to Arm_6) hangs off the twist bone found before it, as UpdateVRArm's
++		// twist needs: turned with it already, it is turned only by what is left.
++		mvVRTwistHangs.resize(6);
++		for(int lHand = 0; lHand < 2; ++lHand)
++		{
++			tString sBefore = "";
++			for(int lTwistBone = 4; lTwistBone <= 6; ++lTwistBone)
++			{
++				int lSlot = lHand * 3 + lTwistBone - 4;
++				mvVRTwistHangs[lSlot] = false;
++				cBoneState@ pTwist = mvVRArmBoneStates[lHand * 11 + lTwistBone + 2];
++				if(pTwist is null) continue;
++				cNode3D@ pUp = pTwist.GetParent();
++				mvVRTwistHangs[lSlot] = sBefore != "" && pUp !is null && pUp.GetName() == sBefore;
++				sBefore = (lHand == 0 ? "j_L_Arm_" : "j_R_Arm_") + lTwistBone;
++			}
++		}
 +	}
 +
 +	cBoneState@ VRArmBone(cMeshEntity@ apMesh, bool abLeft, int alBone)
@@ -4536,6 +4753,30 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +	{
 +		VRFindBones(apMesh);
 +		return mvVRFingerBones[(abLeft ? 0 : 20) + alFinger * 4 + alBone - 1];
++	}
++
++	cBoneState@ VRLegBone(cMeshEntity@ apMesh, int alSide, int alBone)
++	{
++		VRFindBones(apMesh);
++		return mvVRLegBoneStates[alSide * 8 + alBone];
++	}
++
++	cBoneState@ VRTrunkBone(cMeshEntity@ apMesh, int alBone)
++	{
++		VRFindBones(apMesh);
++		return mvVRTrunkBoneStates[alBone];
++	}
++
++	cBoneState@ VRLadderBone(cMeshEntity@ apMesh, int alIndex)
++	{
++		VRFindBones(apMesh);
++		return mvVRLadderBoneStates[alIndex];
++	}
++
++	cBoneState@ VRGunHandBone(cMeshEntity@ apMesh, uint alIndex)
++	{
++		VRFindBones(apMesh);
++		return mvVRGunHandBoneStates[alIndex];
 +	}
 +
 +	// (A finger's bone back to the rest shape the skeleton gives it.)
@@ -5109,7 +5350,7 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +	cMatrixf VRLeftOnPump(cMeshEntity@ apMesh, const cMatrixf &in a_mtxPalm)
 +	{
 +		if(mbVRForeEndKnown == false || mbVRBarrelKnown == false || mbVRGunUpKnown == false || mfVRGunSize < 0.000001f) return a_mtxPalm;
-+		cBoneState@ pWrist = apMesh.GetBoneStateFromName("j_R_Wrist");
++		cBoneState@ pWrist = VRArmBone(apMesh, false, 9);
 +		if(pWrist is null) return a_mtxPalm;
 +		cMatrixf mtxWrist = pWrist.GetWorldMatrix();
 +		cVector3f vBarrel = cMath_MatrixMul3x3(mtxWrist, mvVRBarrelInHand);
@@ -5155,7 +5396,7 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		if(apMesh is null || mbVRGunHandPoseKnown == false || mvVRGunHandPose.length() == 0) return cMatrixf_Identity;
 +		cLuxPlayer@ pPlayer = cLux_GetPlayer();
 +		if(pPlayer is null || pPlayer.GetCurrentStateId() != ePlayerState_Custom_UsingGun_Aim) return cMatrixf_Identity;
-+		cBoneState@ pSocket = apMesh.GetBoneStateFromName(gvVRGunHandBones[0]);
++		cBoneState@ pSocket = VRGunHandBone(apMesh, 0);
 +		if(pSocket is null) return cMatrixf_Identity;
 +		cMatrixf mtxNow = pSocket.GetWorldMatrix();
 +		// (The socket's parent as it is now, times the aim's own socket: where the aim would have it.)
@@ -5219,13 +5460,13 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +			{
 +				for(uint i = 0; i < lCount; ++i)
 +				{
-+					cBoneState@ pBone = apMesh.GetBoneStateFromName(gvVRGunHandBones[i]);
++					cBoneState@ pBone = VRGunHandBone(apMesh, i);
 +					if(pBone !is null) pBone.SetMatrix(mvVRGunHandSet[i]);
 +				}
 +			}
 +			return;
 +		}
-+		cBoneState@ pSocket = apMesh.GetBoneStateFromName(gvVRGunHandBones[0]);
++		cBoneState@ pSocket = VRGunHandBone(apMesh, 0);
 +		if(pSocket is null) return;
 +		cLuxPlayer@ pPlayer = cLux_GetPlayer();
 +		int lState = pPlayer !is null ? pPlayer.GetCurrentStateId() : -1;
@@ -5260,7 +5501,7 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +			mvVRGunHandPose.resize(lCount);
 +			for(uint i = 0; i < lCount; ++i)
 +			{
-+				cBoneState@ pBone = apMesh.GetBoneStateFromName(gvVRGunHandBones[i]);
++				cBoneState@ pBone = VRGunHandBone(apMesh, i);
 +				if(pBone !is null) mvVRGunHandPose[i] = pBone.GetLocalMatrix();
 +			}
 +			if(mbVRGunHandPoseKnown == false && mlVRGunHandNotes < 20)
@@ -5296,7 +5537,7 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		mvVRGunHandSet.resize(lCount);
 +		for(uint i = 0; i < lCount; ++i)
 +		{
-+			cBoneState@ pBone = apMesh.GetBoneStateFromName(gvVRGunHandBones[i]);
++			cBoneState@ pBone = VRGunHandBone(apMesh, i);
 +			if(pBone is null) continue;
 +			mvVRGunHandSet[i] = VRBlendBone(pBone.GetLocalMatrix(), mvVRGunHandPose[i], fT);
 +			pBone.SetMatrix(mvVRGunHandSet[i]);
@@ -5322,7 +5563,7 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		if(mbVRReloadOpen || mfVRBarrelHold > 0.0f) return;
 +
 +		cMeshEntity@ pMesh = mBaseObj.GetMeshEntity();
-+		cBoneState@ pWrist = pMesh !is null ? pMesh.GetBoneStateFromName("j_R_Wrist") : null;
++		cBoneState@ pWrist = pMesh !is null ? VRArmBone(pMesh, false, 9) : null;
 +		if(pWrist is null) return;
 +		
 +		for (uint i = 0; i < mvSocketAttachments.length(); i++)
@@ -5431,7 +5672,19 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +			VRNote(96, mvVRLegNote[3]);
 +		}
 +	}
-+	
++
++	// BunkerVR: for the log (the first 20 times): the legs' fit (`mfVRLegFit`, see UpdateVRLegs) and why it changed,
++	// with how high the hips were above the feet and how long the legs are, both in the game's meters.
++	void VRLegFitNote(const tString &in asWhy, float afBefore, float afHipsUp, float afLeg)
++	{
++		mfVRLegFitSaid = mfVRLegFit;
++		if(mlVRLegFitNotes >= 20) return;
++		mlVRLegFitNotes++;
++		Log("BunkerVR: the legs' fit after " + asWhy + ": " + int(mfVRLegFit * 100.0f + 0.5f) + "% of their length" +
++			(afBefore >= 0.0f ? " (was " + int(afBefore * 100.0f + 0.5f) + "%)" : "") + "; the hips " + int(afHipsUp * 100.0f + 0.5f) +
++			" cm above the feet, the legs " + int(afLeg * 100.0f + 0.5f) + " cm long\n");
++	}
++
 +	/////////////////////////////////////////////
 +	// BunkerVR: the legs.
 +	// The body is drawn bigger (by the world scale) about the eyes, so that
@@ -5501,7 +5754,6 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +			mfVRStepLength[0] = gfVRStepTime;
 +			mfVRStepLength[1] = gfVRStepTime;
 +		}
-+		array<tString> vChain = {"Leg_1", "Leg_2", "Leg_3", "Leg_4", "Leg_5", "Leg_6", "Foot"};
 +		
 +		// At the animation update only the legs' fresh pose is kept: they are
 +		// placed every frame once the camera is placed (_Global_VRUpdateArms),
@@ -5511,10 +5763,9 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		{
 +			for(int lSide = 0; lSide < 2; ++lSide)
 +			{
-+				tString sSide = lSide == 0 ? "j_L_" : "j_R_";
 +				for(int lLink = 0; lLink < 7; ++lLink)
 +				{
-+					cBoneState@ pLink = pMesh.GetBoneStateFromName(sSide + vChain[lLink]);
++					cBoneState@ pLink = VRLegBone(pMesh, lSide, lLink);
 +					if(pLink is null) continue;
 +					mvVRLegFresh[lSide * 7 + lLink] = pLink.GetLocalMatrix();
 +					mvVRLegFreshKnown[lSide * 7 + lLink] = true;
@@ -5546,10 +5797,9 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		array<float> vGround(2);
 +		for(int lSide = 0; lSide < 2; ++lSide)
 +		{
-+			tString sSide = lSide == 0 ? "j_L_" : "j_R_";
 +			for(int lLink = 0; lLink < 7; ++lLink)
 +			{
-+				cBoneState@ pLink = pMesh.GetBoneStateFromName(sSide + vChain[lLink]);
++				cBoneState@ pLink = VRLegBone(pMesh, lSide, lLink);
 +				if(pLink is null) continue;
 +				int lSlot = lSide * 7 + lLink;
 +				if(bFresh)
@@ -5562,10 +5812,10 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +					pLink.SetMatrix(mvVRLegFresh[lSlot]);
 +				}
 +			}
-+			cBoneState@ pThigh = pMesh.GetBoneStateFromName(sSide + "Leg_1");
-+			cBoneState@ pKnee = pMesh.GetBoneStateFromName(sSide + "Leg_3");
-+			cBoneState@ pFoot = pMesh.GetBoneStateFromName(sSide + "Foot");
-+			cBoneState@ pToes = pMesh.GetBoneStateFromName(sSide + "Toes");
++			cBoneState@ pThigh = VRLegBone(pMesh, lSide, 0);
++			cBoneState@ pKnee = VRLegBone(pMesh, lSide, 2);
++			cBoneState@ pFoot = VRLegBone(pMesh, lSide, 6);
++			cBoneState@ pToes = VRLegBone(pMesh, lSide, 7);
 +			if(pThigh is null || pKnee is null || pFoot is null || pToes is null) return;
 +
 +			vHip[lSide] = pThigh.GetWorldPosition();
@@ -5580,10 +5830,17 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +			vAnimFwd[lSide] = vFwd.Length() > 0.001f ? cMath_Vector3Normalize(vFwd) : vBodyFwd;
 +
 +			// Which way the knee bends: as animated (out from the line hip to
-+			// ankle); nearly straight, the way the foot points.
++			// ankle); nearly straight, the way the foot points. Blended from the
++			// one to the other as the animated bend grows from 0.5 to 1.5 cm (at
++			// the body's size), not switched at 1 cm: the game's standing pose is
++			// nearly straight, and the knee swung between the two as it breathed.
 +			cVector3f vLine = cMath_Vector3Normalize(vAnkle[lSide] - vHip[lSide]);
 +			cVector3f vOut = (vKnee - vHip[lSide]) - vLine * cMath_Vector3Dot(vKnee - vHip[lSide], vLine);
-+			vKneeSide[lSide] = vOut.Length() > 0.01f * fSize ? cMath_Vector3Normalize(vOut) : vAnimFwd[lSide];
++			float fKneeOut = cMath_Clamp((vOut.Length() / (0.01f * fSize) - 0.5f), 0.0f, 1.0f);
++			fKneeOut = fKneeOut * fKneeOut * (3.0f - 2.0f * fKneeOut);
++			cVector3f vKneeWay = vAnimFwd[lSide] * (1.0f - fKneeOut);
++			if(vOut.Length() > 0.00001f) vKneeWay = vKneeWay + cMath_Vector3Normalize(vOut) * fKneeOut;
++			vKneeSide[lSide] = vKneeWay.Length() > 0.05f ? cMath_Vector3Normalize(vKneeWay) : vAnimFwd[lSide];
 +
 +			// Where the foot stands: on the floor under it, as high above it as
 +			// the animation has the ankle above the body's own floor.
@@ -5604,29 +5861,79 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +			fFitWanted += cMath_Clamp((vHip[lSide].y - vHome[lSide].y) / (fLength * 0.97f), gfVRLegFitMin, 1.0f) * 0.5f;
 +		}
 +		bool bStepping = mfVRStepStart[0] >= 0.0 || mfVRStepStart[1] >= 0.0;
-+		// The fit is made each time the view is centered (special roll 7065:
-+		// how many times so far), at once, for 0.6 seconds while the eyes are
-+		// black and the body settles, and then kept: any duck bends the knees,
-+		// and standing up after a re-center fits straight away. (If the mod
++		// Fitted only while the body stands: on the ground (not walking, falling or stepping), not crouched by the
++		// game, on flat ground (the floor under each foot the game's body's own, gfVRLegFitFlat) and the hips settled
++		// (gfVRLegFitSteady); grown only with the head about level as well (gfVRLegFitLevel).
++		float fHipsUp = (vHip[0].y + vHip[1].y) * 0.5f - fFloor;
++		bool bUp = bWalking == false && bCrouching == false;
++		if(mfVRLegHipsEased < -100.0f) mfVRLegHipsEased = fHipsUp;
++		else mfVRLegHipsEased += (fHipsUp - mfVRLegHipsEased) * BunkerVR_EaseShare(fStep, gfVRLegFitSteadyTime);
++		bool bStanding = bUp && bStepping == false &&
++						 cMath_Abs(vGround[0] - fFloor) < gfVRLegFitFlat && cMath_Abs(vGround[1] - fFloor) < gfVRLegFitFlat &&
++						 cMath_Abs(fHipsUp - mfVRLegHipsEased) < gfVRLegFitSteady;
++		bool bHeadLevel = false;
++		if(mbVRHeadKnown)
++		{
++			cVector3f vLook = cMath_MatrixMul3x3(m_mtxVRHead, cVector3f(0.0f, 0.0f, -1.0f));
++			bHeadLevel = vLook.Length() > 0.001f && cMath_Abs(vLook.y) < gfVRLegFitLevel * vLook.Length();
++		}
++		// A level's body starts from the fit last made (the same player at the same size; "BunkerVR_LegFit"), until it
++		// stands to be fitted itself. With none (the first level since the game started) the legs are fitted as they
++		// stand meanwhile, whenever on the ground, and never start drawn at their whole length, kneeling.
++		if(mbVRLegFitKnown == false)
++		{
++			mbVRLegFitKnown = true;
++			float fKept = cScript_GetGlobalVarFloat("BunkerVR_LegFit");
++			if(fKept >= gfVRLegFitMin && fKept <= 1.0f) mfVRLegFit = fKept;
++			else mbVRLegFitLoose = true;
++		}
++		if(mbVRLegFitLoose && bUp) mfVRLegFit = fFitWanted;
++		// The fit is made each time the view is centered (special roll 7065: how many times so far) and as a level
++		// starts: from the first gfVRLegFitTime of standing after it, while the eyes are black and the body settles,
++		// and then kept: any duck bends the knees, and standing up after a re-center fits straight away. (If the mod
 +		// does not give the count: learned slowly while standing.)
 +		int lCentred = VRRecentreCount();
 +		if(lCentred >= 0 && lCentred != mlVRLegCentred)
 +		{
++			msVRLegFitWhy = mlVRLegCentred < 0 ? "the level's start" : "a re-centre";
 +			mlVRLegCentred = lCentred;
-+			mfVRLegFitUntil = fNow + 0.6;
++			mfVRLegFitLeft = gfVRLegFitTime;
++			mfVRLegFitBefore = mfVRLegFit;
 +		}
-+		if(mbVRLegFitKnown == false)
++		bool bFitMade = false;
++		if(lCentred >= 0)
 +		{
-+			mfVRLegFit = fFitWanted;
-+			mbVRLegFitKnown = true;
++			if(mfVRLegFitLeft > 0.0f)
++			{
++				if(bStanding)
++				{
++					mfVRLegFit = fFitWanted;
++					mfVRLegFitLeft -= fStep;
++					bFitMade = mfVRLegFitLeft <= 0.0f;
++				}
++			}
++			// (After that: standing taller than the fit, still, it grows to it, slowly, never shrinks. Made while the
++			// player part-ducked or leant in a seat as a level began, it was short for the whole level: the legs'
++			// straightest is the true fit, and a duck only bends them.)
++			else if(bStanding && bHeadLevel && fFitWanted > mfVRLegFit)
++				mfVRLegFit += (fFitWanted - mfVRLegFit) * cMath_Min(fStep * 0.7f, 1.0f);
 +		}
-+		else if(lCentred >= 0)
-+		{
-+			if(fNow < mfVRLegFitUntil && bWalking == false && bCrouching == false) mfVRLegFit = fFitWanted;
-+		}
-+		else if(bWalking == false && bCrouching == false && bStepping == false)
++		else if(bStanding && bHeadLevel)
 +		{
 +			mfVRLegFit += (fFitWanted - mfVRLegFit) * cMath_Min(fStep * 0.7f, 1.0f);
++		}
++		// Kept for the next level's body, and for the log: the fit as a re-center or a level's start leaves it, and
++		// each time it has grown 3% past what was last said.
++		if(bFitMade)
++		{
++			mbVRLegFitLoose = false;
++			cScript_SetGlobalVarFloat("BunkerVR_LegFit", mfVRLegFit);
++			VRLegFitNote(msVRLegFitWhy, mfVRLegFitBefore, fHipsUp, (vLegLength[0] + vLegLength[1]) * 0.5f);
++		}
++		else if(mfVRLegFitLeft <= 0.0f && mfVRLegFit > mfVRLegFitSaid + 0.03f)
++		{
++			cScript_SetGlobalVarFloat("BunkerVR_LegFit", mfVRLegFit);
++			VRLegFitNote(mfVRLegFitSaid < 0.0f ? "the level's start" : "standing taller", mfVRLegFitSaid, fHipsUp, (vLegLength[0] + vLegLength[1]) * 0.5f);
 +		}
 +
 +		/////////////////////////////
@@ -5685,11 +5992,41 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		}
 +		if(mbVRLegsOn == false || bWalking)
 +		{
-+			// Walking (or just started): the feet go as animated.
++			// Walking (or just started): the feet go as animated. Eased there over gfVRWalkBlendTime from where they
++			// stood as walking starts (they jumped to the walk's places at once: a snap of both feet with the first
++			// push of the stick).
++			if(mbVRLegsOn && mbVRLegsWalked == false)
++			{
++				mfVRWalkBlendStart = fNow;
++				for(int lSide = 0; lSide < 2; ++lSide)
++				{
++					// (From where the foot is drawn: part way through a step, its place in the step.)
++					cVector3f vFrom = mvVRFootAt[lSide];
++					cVector3f vFromFwd = mvVRFootFwd[lSide];
++					if(mfVRStepStart[lSide] >= 0.0)
++					{
++						float fT = cMath_Clamp(float(fNow - mfVRStepStart[lSide]) / mfVRStepLength[lSide], 0.0f, 1.0f);
++						float fEase = fT * fT * (3.0f - 2.0f * fT);
++						vFrom = mvVRStepFrom[lSide] + (vHome[lSide] - mvVRStepFrom[lSide]) * fEase + cVector3f(0.0f, cMath_Sin(fT * cMath_Pi) * gfVRStepLift * fSize, 0.0f);
++						cVector3f vTurning = mvVRFootFwd[lSide] * (1.0f - fEase) + vAnimFwd[lSide] * fEase;
++						if(vTurning.Length() > 0.05f) vFromFwd = cMath_Vector3Normalize(vTurning);
++					}
++					mvVRFootWalkFrom[lSide] = vFrom;
++					mvVRFootFwdWalkFrom[lSide] = vFromFwd;
++					// (Far from the walk's place, the game moved the body: no easing, as for a planted foot below.)
++					cVector3f vAway = vHome[lSide] - vFrom;
++					vAway.y = 0.0f;
++					if(vAway.Length() > 0.9f) mfVRWalkBlendStart = -100.0;
++				}
++			}
++			float fWalkIn = mbVRLegsOn ? cMath_Clamp(float(fNow - mfVRWalkBlendStart) / gfVRWalkBlendTime, 0.0f, 1.0f) : 1.0f;
++			fWalkIn = fWalkIn * fWalkIn * (3.0f - 2.0f * fWalkIn);
 +			for(int lSide = 0; lSide < 2; ++lSide)
 +			{
-+				mvVRFootAt[lSide] = vHome[lSide];
-+				mvVRFootFwd[lSide] = vAnimFwd[lSide];
++				mvVRFootAt[lSide] = mvVRFootWalkFrom[lSide] + (vHome[lSide] - mvVRFootWalkFrom[lSide]) * fWalkIn;
++				cVector3f vFwdIn = mvVRFootFwdWalkFrom[lSide] * (1.0f - fWalkIn) + vAnimFwd[lSide] * fWalkIn;
++				mvVRFootFwd[lSide] = (fWalkIn < 1.0f && vFwdIn.Length() > 0.05f) ? cMath_Vector3Normalize(vFwdIn) : vAnimFwd[lSide];
++				if(fWalkIn >= 1.0f) mvVRFootAt[lSide] = vHome[lSide];
 +				mfVRStepStart[lSide] = -1.0;
 +				mvVRStepBodyAt[lSide] = vBodyLevel;
 +			}
@@ -5787,7 +6124,7 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +			// The foot as animated, turned about the upright to point its way;
 +			// the knee turned with it.
 +			cMatrixf mtxYaw = VRTurnBetween(vAnimFwd[lSide], vFacing, cVector3f(0.0f, 1.0f, 0.0f));
-+			VRBendLeg(pMesh, lSide == 0 ? "j_L_" : "j_R_", vTarget, cMath_MatrixMul(mtxYaw, vFootAnim[lSide]), cMath_MatrixMul3x3(mtxYaw, vKneeSide[lSide]));
++			VRBendLeg(pMesh, lSide, vTarget, cMath_MatrixMul(mtxYaw, vFootAnim[lSide]), cMath_MatrixMul3x3(mtxYaw, vKneeSide[lSide]));
 +		}
 +		mbVRLegsOn = true;
 +		mbVRLegsWalked = bWalking;
@@ -5817,7 +6154,7 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		return 0.0f;
 +	}
 +
-+	// BunkerVR: bends one leg (asSide: "j_L_" or "j_R_") so that its ankle is
++	// BunkerVR: bends one leg (alSide: 0 left, 1 right) so that its ankle is
 +	// at avTarget, its foot turned as a_mtxFoot (its place is then set), the
 +	// knee bending out towards avKneeSide. As the arm is bent (UpdateVRArm):
 +	// the thigh (j_?_Leg_1) is turned about the hip so the knee (j_?_Leg_3)
@@ -5825,11 +6162,11 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +	// the knee so the ankle (j_?_Foot) comes to its place. The leg is
 +	// `mfVRLegFit` of its own length: the bones along the thigh (Leg_2) and
 +	// the shin (Leg_4 to Leg_6) move in by their share.
-+	void VRBendLeg(cMeshEntity@ apMesh, const tString &in asSide, const cVector3f &in avTarget, const cMatrixf &in a_mtxFoot, const cVector3f &in avKneeSide)
++	void VRBendLeg(cMeshEntity@ apMesh, int alSide, const cVector3f &in avTarget, const cMatrixf &in a_mtxFoot, const cVector3f &in avKneeSide)
 +	{
-+		cBoneState@ pThigh = apMesh.GetBoneStateFromName(asSide + "Leg_1");
-+		cBoneState@ pKnee = apMesh.GetBoneStateFromName(asSide + "Leg_3");
-+		cBoneState@ pFoot = apMesh.GetBoneStateFromName(asSide + "Foot");
++		cBoneState@ pThigh = VRLegBone(apMesh, alSide, 0);
++		cBoneState@ pKnee = VRLegBone(apMesh, alSide, 2);
++		cBoneState@ pFoot = VRLegBone(apMesh, alSide, 6);
 +		if(pThigh is null || pKnee is null || pFoot is null) return;
 +		cVector3f vHip = pThigh.GetWorldPosition();
 +		cVector3f vKnee = pKnee.GetWorldPosition();
@@ -5845,11 +6182,15 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		// The leg's length: `mfVRLegFit` of its own; out of reach, drawn out up
 +		// to gfVRLegStretch of that (standing taller than at the re-center, the
 +		// feet stay down).
-+		float fShare = mfVRLegFit * cMath_Clamp(fDist / ((fThighOwn + fShinOwn) * mfVRLegFit * 0.999f), 1.0f, gfVRLegStretch);
++		// (Soft reach: the bend eased out over the last gfVRLegSoftShare of the leg, the leg drawn out by what that
++		// leaves short, so the foot stays down.)
++		float fLegNatural = (fThighOwn + fShinOwn) * mfVRLegFit;
++		float fLegSoft = BunkerVR_SoftReach(fDist, fLegNatural * 0.9995f, fLegNatural * gfVRLegSoftShare);
++		float fShare = mfVRLegFit * cMath_Clamp(fDist / cMath_Max(fLegSoft, 0.001f), 1.0f, gfVRLegStretch);
 +		float fThigh = fThighOwn * fShare;
 +		float fShin = fShinOwn * fShare;
-+		// (Out of reach: the leg straight, towards the place.)
-+		float fReach = cMath_Clamp(fDist, cMath_Abs(fThigh - fShin) + 0.002f, (fThigh + fShin) * 0.9995f);
++		// (Out of reach even so: the leg straight, towards the place.)
++		float fReach = cMath_Clamp(fLegSoft * (fShare / mfVRLegFit), cMath_Abs(fThigh - fShin) + 0.002f, (fThigh + fShin) * 0.9995f);
 +
 +		cVector3f vSide = avKneeSide - vDir * cMath_Vector3Dot(avKneeSide, vDir);
 +		if(vSide.Length() < 0.001f)
@@ -5872,13 +6213,20 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +			cVector3f vHingeWanted = cMath_Vector3Cross(vKneeWanted - vHip, vAnkleWanted - vKneeWanted);
 +			float fBendWas = vHingeWas.Length() / cMath_Max((vKnee - vHip).Length() * (vAnkle - vKnee).Length(), 0.000001f);
 +			float fBendWanted = vHingeWanted.Length() / cMath_Max(fThigh * fShin, 0.000001f);
-+			if(fBendWas > 0.1f && fBendWanted > 0.05f)
++			// (Blended from the shortest swing to the hinge's turn as the bend grows, as the upper arm's is in
++			// UpdateVRArm: switched at one bend, the thigh rolled at once as the leg passed it.)
++			float fHingeWas = cMath_Clamp((fBendWas - 0.06f) / 0.08f, 0.0f, 1.0f);
++			float fHingeWanted = cMath_Clamp((fBendWanted - 0.03f) / 0.05f, 0.0f, 1.0f);
++			float fHingeShare = fHingeWas * fHingeWas * (3.0f - 2.0f * fHingeWas) * fHingeWanted * fHingeWanted * (3.0f - 2.0f * fHingeWanted);
++			if(fHingeShare > 0.999f)
 +				mtxThighTurn = VRTurnFrame(vKnee - vHip, vHingeWas, vKneeWanted - vHip, vHingeWanted);
++			else if(fHingeShare > 0.001f)
++				mtxThighTurn = BunkerVR_Slerp(fHingeShare, mtxThighTurn, VRTurnFrame(vKnee - vHip, vHingeWas, vKneeWanted - vHip, vHingeWanted));
 +		}
 +		VRTurnBoneAbout(pThigh, mtxThighTurn, vHip);
 +
 +		// The thigh's length: the bone along it by its share, the knee to its place.
-+		VRLegBonesAlong(apMesh, asSide, 2, 2, vHip, vKneeWanted, fShare - 1.0f);
++		VRLegBonesAlong(apMesh, alSide, 2, 2, vHip, vKneeWanted, fShare - 1.0f);
 +		VRMoveBoneTo(pKnee, vKneeWanted);
 +
 +		// Shin: swing the ankle to its place.
@@ -5887,19 +6235,19 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +
 +		// The shin's length: the bones along it by their shares; then the foot,
 +		// in its place and turned its way.
-+		VRLegBonesAlong(apMesh, asSide, 4, 6, vKneeWanted, vAnkleWanted, fShare - 1.0f);
++		VRLegBonesAlong(apMesh, alSide, 4, 6, vKneeWanted, vAnkleWanted, fShare - 1.0f);
 +		cMatrixf mtxFootNew = a_mtxFoot;
 +		mtxFootNew.SetTranslation(vAnkleWanted);
 +		pFoot.SetWorldMatrix(mtxFootNew);
 +	}
 +
-+	// BunkerVR: the leg's bones asSide + "Leg_" alFirst to alLast that lie
++	// BunkerVR: the leg's (alSide: 0 left, 1 right) bones Leg_alFirst to Leg_alLast that lie
 +	// along the line from avFrom to avTo (already turned onto it) are moved
 +	// along it by afMoreBy of how far along it they are (-0.2: a fifth of the
 +	// way back towards avFrom). All are worked out first, then moved in order
 +	// from avFrom, each carrying the ones after it, as the forearm's are.
 +	// A bone not between the two ends is left where it is.
-+	void VRLegBonesAlong(cMeshEntity@ apMesh, const tString &in asSide, int alFirst, int alLast, const cVector3f &in avFrom, const cVector3f &in avTo, float afMoreBy)
++	void VRLegBonesAlong(cMeshEntity@ apMesh, int alSide, int alFirst, int alLast, const cVector3f &in avFrom, const cVector3f &in avTo, float afMoreBy)
 +	{
 +		if(cMath_Abs(afMoreBy) < 0.0005f) return;
 +		cVector3f vLine = avTo - avFrom;
@@ -5912,7 +6260,7 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		for(int i = 0; i < lCount; ++i)
 +		{
 +			vMove[i] = false;
-+			cBoneState@ pBone = apMesh.GetBoneStateFromName(asSide + "Leg_" + (alFirst + i));
++			cBoneState@ pBone = VRLegBone(apMesh, alSide, alFirst + i - 1);
 +			if(pBone is null) continue;
 +			cVector3f vAt = pBone.GetWorldPosition();
 +			// (Taken along the bones' own line: they still have their own lengths.)
@@ -5924,7 +6272,7 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		for(int i = 0; i < lCount; ++i)
 +		{
 +			if(vMove[i] == false) continue;
-+			VRMoveBoneTo(apMesh.GetBoneStateFromName(asSide + "Leg_" + (alFirst + i)), vGoTo[i]);
++			VRMoveBoneTo(VRLegBone(apMesh, alSide, alFirst + i - 1), vGoTo[i]);
 +		}
 +	}
 +
@@ -5997,14 +6345,15 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +	
 +	// abPalmAsEmpty: the hand holds a thing the mod places itself; the hand is
 +	// put on the controller by its palm as it is when empty.
-+	void UpdateVRArm(cMeshEntity@ apMesh, bool abLeft, const tString &in asShoulder, const tString &in asElbow, const tString &in asWrist,
++	void UpdateVRArm(cMeshEntity@ apMesh, bool abLeft,
 +					 const cMatrixf &in a_mtxPalm, float afArmScale, float afCurl, int alFingerMode, const cVector3f &in avFingers, bool abOwnPose,
 +					 bool abPalmAsEmpty)
 +	{
-+		cBoneState@ pShoulder = apMesh.GetBoneStateFromName(asShoulder);
-+		cBoneState@ pElbow = apMesh.GetBoneStateFromName(asElbow);
-+		cBoneState@ pWrist = apMesh.GetBoneStateFromName(asWrist);
-+		cBoneState@ pPalm = VRArmBone(apMesh, abLeft, 10); // (j_?_HandSocket; the arm's other bones are found once too: see VRFindBones)
++		// (j_?_Arm_1, j_?_Arm_3, j_?_Wrist and j_?_HandSocket: found once, as all the arm's bones are, VRFindBones.)
++		cBoneState@ pShoulder = VRArmBone(apMesh, abLeft, 3);
++		cBoneState@ pElbow = VRArmBone(apMesh, abLeft, 5);
++		cBoneState@ pWrist = VRArmBone(apMesh, abLeft, 9);
++		cBoneState@ pPalm = VRArmBone(apMesh, abLeft, 10);
 +		if(pShoulder is null || pElbow is null || pWrist is null || pPalm is null) return;
 +		VRTimeMark(7106); // (timing: the pose kept and the reach, to 7107)
 +		
@@ -6082,6 +6431,22 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +				if(mvVRNeutralKnown[lSlot])
 +				{
 +					pLink.SetMatrix(mvVRNeutralChain[lSlot]);
++				}
++				// (Not learned yet, as in a level entered with the lantern out: the collar bone at least starts each
++				// bending from the pose the animation gave it, kept at the frame's first bending, so the shoulder's turn
++				// below is made once, not again on top of itself in the second bending.)
++				else if(lLink == 0)
++				{
++					int lArm = abLeft ? 0 : 1;
++					if(mbVRFreshPose)
++					{
++						mvVRClavicleFresh[lArm] = pLink.GetLocalMatrix();
++						mbVRClavicleFreshKnown[lArm] = true;
++					}
++					else if(mbVRClavicleFreshKnown[lArm])
++					{
++						pLink.SetMatrix(mvVRClavicleFresh[lArm]);
++					}
 +				}
 +			}
 +		}
@@ -6292,6 +6657,32 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		float fUpper = mvVRArmNatural[lLength];
 +		float fFore = mvVRArmNatural[lLength + 1];
 +
++		// The shoulder comes up and forward with a hand reaching high or far ahead, as a real one does (the shoulder
++		// blade and collar bone): the clavicle turned past half an arm's reach up or ahead of the shoulder,
++		// gfVRClavicleRate for each arm's length past it, at most gfVRClavicleMost each way (VRArmIK's shoulder
++		// rules). Without it the shoulder stayed put and the arm was drawn out to reach. (Restored from the arm's own
++		// pose every frame above, so it never builds up.)
++		if(pArmRoot !is pShoulder && fUpper + fFore > 0.01f)
++		{
++			cMatrixf mtxBodyNow = mBaseObj.GetMatrix();
++			cVector3f vBodyAhead = cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxBodyNow, cVector3f(0.0f, 0.0f, 1.0f)));
++			cVector3f vUpward = cVector3f(0.0f, 1.0f, 0.0f);
++			cVector3f vFromShoulder = (vTarget - vShoulder) * (1.0f / (fUpper + fFore));
++			float fLift = cMath_Clamp((cMath_Vector3Dot(vFromShoulder, vUpward) - 0.5f) * gfVRClavicleRate, 0.0f, gfVRClavicleMost);
++			float fAhead = cMath_Clamp((cMath_Vector3Dot(vFromShoulder, vBodyAhead) - 0.5f) * gfVRClavicleRate, 0.0f, gfVRClavicleMost);
++			cVector3f vBase = pArmRoot.GetWorldPosition();
++			cVector3f vCollar = vShoulder - vBase;
++			if((fLift > 0.001f || fAhead > 0.001f) && vCollar.Length() > 0.01f)
++			{
++				cVector3f vCollarDir = cMath_Vector3Normalize(vCollar);
++				cVector3f vCollarTo = cMath_Vector3Normalize(vCollarDir + vUpward * cMath_Tan(fLift) + vBodyAhead * cMath_Tan(fAhead));
++				VRTurnBoneAbout(pArmRoot, VRTurnBetween(vCollarDir, vCollarTo, vUpward), vBase);
++				vShoulder = pShoulder.GetWorldPosition();
++				vElbow = pElbow.GetWorldPosition();
++				vWrist = pWrist.GetWorldPosition();
++			}
++		}
++
 +		cVector3f vToTarget = vTarget - vShoulder;
 +		float fDist = vToTarget.Length();
 +		if(fUpper < 0.001f || fFore < 0.001f || fDist < 0.001f) return;
@@ -6313,20 +6704,29 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		// lengthens evenly from shoulder to wrist (see "the upper arm drawn
 +		// out" below). Only what is still missing after that slides the arm
 +		// out and leans the body.
++		// Soft reach: the arm's bend is eased out over the last stretch before it is straight (BunkerVR_SoftReach, the
++		// last gfVRArmSoftShare of its length), the bones drawn out by just as much as that leaves the hand short, so the
++		// hand stays on the controller. Solved straight to the reach, the elbow's angle changes faster and faster as the
++		// arm straightens: the elbow snapped straight at the end of a reach, and its roll with it.
++		float fNatural = fUpper + fFore;
++		float fNaturalLongest = fNatural * 0.98f;
++		float fSoft = BunkerVR_SoftReach(fDist, fNaturalLongest, fNatural * gfVRArmSoftShare);
 +		float fStretch = 1.0f;
-+		float fNaturalLongest = (fUpper + fFore) * 0.98f;
-+		if(fDist > fNaturalLongest) fStretch = cMath_Min(fDist / fNaturalLongest, gfVRArmStretch);
++		if(fDist > fSoft && fSoft > 0.001f) fStretch = cMath_Min(fDist / fSoft, gfVRArmStretch);
 +		fUpper *= fStretch;
 +		fFore *= fStretch;
 +		mvVRArmDrawnOut[lLength] = fUpper;
 +		mvVRArmDrawnOut[lLength + 1] = fFore;
-+		float fLongest = (fUpper + fFore) * 0.98f;
++		float fLongest = fSoft * fStretch;
 +		float fReach = fDist;
 +		cVector3f vShortBy = cVector3f(0.0f, 0.0f, 0.0f);
-+		if(fDist > fLongest)
++		if(fDist > fLongest + 0.0005f)
 +		{
-+			cVector3f vSlide = vDir * (fDist - fLongest);
-+			vShortBy = vSlide;
++			// (What is still missing past the stretch: the body leans that way (PlayerBodyHandler.hps), and the arm
++			// slides out from the shoulder meanwhile, by at most gfVRArmSlideMost. Further, the hand is left short
++			// rather than the sleeve torn from the body: a tracking jump, not a reach.)
++			cVector3f vSlide = vDir * cMath_Min(fDist - fLongest, gfVRArmSlideMost);
++			vShortBy = vDir * (fDist - fLongest);
 +			cMatrixf mtxMoved = pArmRoot.GetWorldMatrix();
 +			mtxMoved.SetTranslation(pArmRoot.GetWorldPosition() + vSlide);
 +			pArmRoot.SetWorldMatrix(mtxMoved);
@@ -6450,9 +6850,15 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +			// swing round after it.)
 +			cVector3f vUpward = cVector3f(0.0f, 1.0f, 0.0f);
 +			cVector3f vSideBefore = vOut * mvVRElbowSide[lArm].x + vUpward * mvVRElbowSide[lArm].y + vBack * mvVRElbowSide[lArm].z;
++			// (By the game's time since this arm's last glide, with the time constant gfVRElbowGlideTime: a fixed
++			// share each call glided twice as fast with both of a frame's passes, and half as fast at 45 updates a
++			// second. A second pass in the same moment adds nothing.)
++			double fGlideNow = cEngine_GetGameTime();
++			float fGlideStep = cMath_Clamp(float(fGlideNow - mvVRElbowGlideAt[lArm]), 0.0f, 0.1f);
++			mvVRElbowGlideAt[lArm] = fGlideNow;
 +			if(vSideBefore.Length() > 0.5f)
 +			{
-+				cVector3f vGlide = vSideBefore + (vElbowSide - vSideBefore) * 0.10f; // (a tenth of the way per call)
++				cVector3f vGlide = vSideBefore + (vElbowSide - vSideBefore) * BunkerVR_EaseShare(fGlideStep, gfVRElbowGlideTime);
 +				vGlide = vGlide - vDir * cMath_Vector3Dot(vGlide, vDir);
 +				if(vGlide.Length() > 0.05f)
 +				{
@@ -6482,11 +6888,18 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		{
 +			cVector3f vHingeWas = cMath_Vector3Cross(vElbow - vShoulder, vWrist - vElbow);
 +			cVector3f vHingeWanted = cMath_Vector3Cross(vElbowWanted - vShoulder, vWristWanted - vElbowWanted);
-+			// (Only with a bend to go by: a near-straight arm has no clear hinge.)
++			// (Only with a bend to go by: a near-straight arm has no clear hinge. Blended from the shortest swing to the
++			// hinge's turn as the bend grows, not switched: switched at one bend, the upper arm rolled at once as the
++			// arm passed it, near straight.)
 +			float fBendWas = vHingeWas.Length() / cMath_Max((vElbow - vShoulder).Length() * (vWrist - vElbow).Length(), 0.000001f);
 +			float fBendWanted = vHingeWanted.Length() / cMath_Max(fUpper * fFore, 0.000001f);
-+			if(fBendWas > 0.1f && fBendWanted > 0.05f)
++			float fHingeWas = cMath_Clamp((fBendWas - 0.06f) / 0.08f, 0.0f, 1.0f);
++			float fHingeWanted = cMath_Clamp((fBendWanted - 0.03f) / 0.05f, 0.0f, 1.0f);
++			float fHingeShare = fHingeWas * fHingeWas * (3.0f - 2.0f * fHingeWas) * fHingeWanted * fHingeWanted * (3.0f - 2.0f * fHingeWanted);
++			if(fHingeShare > 0.999f)
 +				mtxUpperTurn = VRTurnFrame(vElbow - vShoulder, vHingeWas, vElbowWanted - vShoulder, vHingeWanted);
++			else if(fHingeShare > 0.001f)
++				mtxUpperTurn = BunkerVR_Slerp(fHingeShare, mtxUpperTurn, VRTurnFrame(vElbow - vShoulder, vHingeWas, vElbowWanted - vShoulder, vHingeWanted));
 +		}
 +		VRTurnBoneAbout(pShoulder, mtxUpperTurn, vShoulder);
 +
@@ -6563,55 +6976,43 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +			cVector3f vForearm = cMath_Vector3Normalize(vWristWanted - vElbowWanted);
 +			cMatrixf mtxCarried = pWrist.GetWorldMatrix(); // the hand as the arm has carried it here, not yet turned
 +
-+			// How far has the hand to be rolled about the forearm from that?
-+			// Taken with whichever of the hand's two sideways directions
-+			// (out of its back, towards the thumb) stands more square to the arm.
-+			cVector3f vWas = cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxCarried, cVector3f(0.0f, fSide, 0.0f)));
-+			cVector3f vNow = cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxHand, cVector3f(0.0f, fSide, 0.0f)));
-+			if(cMath_Abs(cMath_Vector3Dot(vWas, vForearm)) > 0.8f || cMath_Abs(cMath_Vector3Dot(vNow, vForearm)) > 0.8f)
-+			{
-+				vWas = cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxCarried, cVector3f(0.0f, 0.0f, fSide)));
-+				vNow = cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxHand, cVector3f(0.0f, 0.0f, fSide)));
-+			}
-+			cVector3f vFlatWas = vWas - vForearm * cMath_Vector3Dot(vWas, vForearm);
-+			cVector3f vFlatNow = vNow - vForearm * cMath_Vector3Dot(vNow, vForearm);
++			// How far has the hand to be rolled about the forearm from that? The twist about the forearm of the turn
++			// from the carried hand to the wanted one (BunkerVR_TwistAbout: its swing-twist split, exact however far
++			// the wrist bends. Measured with one of the hand's own sideways directions, it changed with the bend,
++			// and jumped as that direction was swapped for the other near the arm's line.)
 +			int lTwistArm = abLeft ? 0 : 1;
-+			float fTwist = mvVRTwistLast[lTwistArm];
-+			if(vFlatWas.Length() > 0.3f && vFlatNow.Length() > 0.3f)
-+			{
-+				vFlatWas.Normalize();
-+				vFlatNow.Normalize();
-+				fTwist = cMath_ATan2(cMath_Vector3Dot(cMath_Vector3Cross(vFlatWas, vFlatNow), vForearm), cMath_Vector3Dot(vFlatWas, vFlatNow));
-+
-+				// Kept on the same side of a half turn as last frame (a wrist
-+				// does not go right round), and never quite a half turn.
-+				if(fTwist - mvVRTwistLast[lTwistArm] > cMath_Pi) fTwist -= cMath_PiMul2;
-+				if(fTwist - mvVRTwistLast[lTwistArm] < -cMath_Pi) fTwist += cMath_PiMul2;
-+				fTwist = cMath_Clamp(fTwist, -2.2f, 2.2f);
-+			}
++			cMatrixf mtxTwistTurn = cMath_MatrixMul(mtxHand.GetRotation(), cMath_MatrixInverse(mtxCarried.GetRotation()));
++			float fTwist = BunkerVR_TwistAbout(mtxTwistTurn, vForearm);
++			// Kept on the same side of a half turn as last frame (a wrist does not go right round), and never quite a
++			// half turn.
++			if(fTwist - mvVRTwistLast[lTwistArm] > cMath_Pi) fTwist -= cMath_PiMul2;
++			if(fTwist - mvVRTwistLast[lTwistArm] < -cMath_Pi) fTwist += cMath_PiMul2;
++			fTwist = cMath_Clamp(fTwist, -2.2f, 2.2f);
++			if(BunkerVR_IsNumber(fTwist) == false) fTwist = mvVRTwistLast[lTwistArm];
 +			mvVRTwistLast[lTwistArm] = fTwist;
++			// (A line square to the forearm, to turn the twist bones about it by: any will do.)
++			cVector3f vFlatWas = cMath_Vector3Cross(vForearm, cVector3f(0.0f, 1.0f, 0.0f));
++			if(vFlatWas.Length() < 0.3f) vFlatWas = cMath_Vector3Cross(vForearm, cVector3f(1.0f, 0.0f, 0.0f));
++			vFlatWas.Normalize();
 +
-+			if(vFlatWas.Length() > 0.3f)
 +			{
-+				tString sArmSide = abLeft ? "j_L_Arm_" : "j_R_Arm_";
-+				tString sBefore = "";
 +				float fPassedOn = 0.0f; // how much twist the bone before has already handed down to this one
 +				for(int lTwistBone = 4; lTwistBone <= 6; ++lTwistBone)
 +				{
-+					tString sTwistBone = sArmSide + lTwistBone;
 +					cBoneState@ pTwistBone = VRArmBone(apMesh, abLeft, lTwistBone + 2);
 +					if(pTwistBone is null) continue;
 +
 +					cVector3f vBonePos = pTwistBone.GetWorldPosition();
-+					float fShare = cMath_Clamp(cMath_Vector3Dot(vBonePos - vElbowWanted, vForearm) / fFore, 0.0f, 0.8f) * fTwist;
++					// (Its share by how far along the forearm it is, none at the elbow, all of it at the wrist: a real
++					// forearm's roll is spread along it, and the wrist itself does not roll. Held to 80% before, the
++					// rest was wrung at the wrist, the sleeve's end twisted like a sweet's wrapper.)
++					float fShare = cMath_Clamp(cMath_Vector3Dot(vBonePos - vElbowWanted, vForearm) / fFore, 0.0f, 1.0f) * fTwist;
 +
 +					// A bone that hangs off the twist bone before it has
-+					// been turned with it already.
-+					cNode3D@ pTwistParent = pTwistBone.GetParent();
-+					bool bHangsOffLast = sBefore != "" && pTwistParent !is null && pTwistParent.GetName() == sBefore;
++					// been turned with it already (found with the bones: VRFindBones).
++					bool bHangsOffLast = mvVRTwistHangs[(abLeft ? 0 : 3) + lTwistBone - 4];
 +					float fTurnBy = bHangsOffLast ? fShare - fPassedOn : fShare;
 +					fPassedOn = fShare;
-+					sBefore = sTwistBone;
 +
 +					if(cMath_Abs(fTurnBy) > 0.002f)
 +					{
@@ -6676,23 +7077,9 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +	//------------------------------------------------------------
 +	
 =17
+-1
 +
-+	// BunkerVR: the name of the thing hung on the body at place alIndex (the
-+	// global argument 0) of its list, or "" when there is none there (the
-+	// gentle knockdowns hide them with the body: VRGentleHide in
-+	// PlayerBodyHandler.hps).
-+	void _Global_VRGetAttachedProp()
-+	{
-+		int lIndex = cScript_GetGlobalArgInt(0);
-+		tString sName = "";
-+		if(lIndex >= 0 && lIndex < int(mvSocketAttachments.length()))
-+		{
-+			iLuxEntity@ pProp = cLux_ID_Entity(mvSocketAttachments[lIndex].m_idEntity);
-+			if(pProp !is null) sName = pProp.GetName();
-+		}
-+		cScript_SetGlobalReturnString(sName);
-+	}
-=214
+=213
 +	/////////////////////////////////////////////
 +	// BunkerVR: called by the body handler every frame, once the camera is in
 +	// its place. Puts the arms on the VR controllers again, then moves the
@@ -6745,6 +7132,8 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		VRUpdateGunBullet();
 +		VRMeasureGunBarrel();
 +		VRUpdateBandage();
++		VRUpdateMedkit();
++		VRPlaceWrap(mBaseObj.GetMeshEntity()); // (the dressing either of them winds onto a forearm)
 +		VRTimeMark(7103);
 +	}
 +	
@@ -6758,15 +7147,17 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +	// mod's vr.cpp) and says how far it has got (special roll value 7039:
 +	// 0 = still in the tin, 1 = out and being wound, 2 = done). This code
 +	// shows it:
-+	//   - the part already wound lies along a coil round the forearm, from
-+	//     where the hand first came to the arm to where the cloth leaves it,
++	//   - the part already wound is the dressing's own model, shown as far as
++	//     the cloth has gone round the forearm from where the hand first came to
++	//     it (the wrap: VRWindFollow, VRPlaceWrap, the same as the medkit's),
 +	//   - the part in the air runs straight from there to the roll,
 +	//   - the roll sits in the right hand.
-+	// Once the bandage has been used the coil stays on the arm.
++	// Once the bandage has been used, the rest of the dressing winds itself on,
++	// and it stays on the arm as wound.
 +	//
-+	// The cloth is made of short flat pieces, each an entity of its own (see
-+	// VRBandageMakePieces), put in its place whole every frame, the way
-+	// anything held in a hand is. The roll is the game's roll-and-strip model
++	// The cloth in the air is made of short flat pieces, each an entity of its
++	// own (see VRBandageMakePieces, VRWrapStrip), put in its place whole every
++	// frame, the way anything held in a hand is. The roll is the game's roll-and-strip model
 +	// ("bandage_cutscene_roll.ent") lying as it was made, with only its roll
 +	// drawn.
 +	//
@@ -6811,6 +7202,7 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		pMap.CreateEntity("vr_bandage_roll", "bandage_cutscene_roll.ent", cMatrixf_Identity, cVector3f(1.0f));
 +		@pRoll = pMap.GetLatestEntity();
 +		if(pRoll is null) return null;
++		pRoll.SetScriptableIsSaved(false); // (see VRMakeNamed)
 +		m_idVRBandageRoll = pRoll.GetID();
 +		pRoll.StopAllAnimations(0.0f);
 +		return pRoll;
@@ -6859,6 +7251,7 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +			if(pPiece !is null)
 +			{
 +				idPiece = pPiece.GetID();
++				pPiece.SetScriptableIsSaved(false); // (see VRMakeNamed)
 +				cMeshEntity@ pPieceMesh = pPiece.GetMeshEntity();
 +				if(pPieceMesh !is null) pPieceMesh.SetVisible(false);
 +			}
@@ -6938,6 +7331,7 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		pMap.CreateEntity("vr_bandage_tin", "bandage_cutscene_tin.ent", cMath_MatrixMul(m_mtxVRPalmLeft, m_mtxVRBandageTinInLeft), cVector3f(1.0f));
 +		iLuxEntity@ pTin = pMap.GetLatestEntity();
 +		if(pTin is null) return;
++		pTin.SetScriptableIsSaved(false); // (see VRMakeNamed)
 +		m_idVRBandageTin = pTin.GetID();
 +		pTin.StopAllAnimations(0.0f);
 +
@@ -6991,19 +7385,7 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		{
 +			lPhase = int(vAnswer.y + 0.5f);
 +			fModTurns = vAnswer.z;
-+			pCam.SetRoll(7062.0f);
-+			cVector3f vSet = pCam.GetMatrix().GetTranslation();
-+			if(vSet.x > 12344.0f && vSet.x < 12346.0f && vSet.y > 0.019f && vSet.y < 0.101f) fRadius = vSet.y;
-+			// And how far the coil's middle is moved off the line of the arm's
-+			// bones, two ways across the arm (7063): the sleeve does not hang
-+			// evenly round that line.
-+			pCam.SetRoll(7063.0f);
-+			cVector3f vShiftSet = pCam.GetMatrix().GetTranslation();
-+			if(vShiftSet.x > 12344.0f && vShiftSet.x < 12346.0f && cMath_Abs(vShiftSet.y) < 0.081f && cMath_Abs(vShiftSet.z) < 0.081f)
-+			{
-+				fShiftA = vShiftSet.y;
-+				fShiftB = vShiftSet.z;
-+			}
++			VRForearmSettings(pCam, fRadius, fShiftA, fShiftB);
 +		}
 +		pCam.SetRoll(fRealRoll);
 +
@@ -7012,13 +7394,10 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		bool bWinding = lPhase == 1;
 +		if(bWinding && mbVRBandageWinding == false)
 +		{
-+			// Just pulled out of the tin: start afresh.
++			// Just pulled out of the tin: start afresh (a dressing already on the left forearm comes off as this one's
++			// end is laid on: VRWrapStart).
 +			mbVRBandageWinding = true;
-+			mbVRBandageOn = false;
-+			mbVRBandageAnchored = false;
-+			mbVRBandageHadAngle = false;
-+			mfVRBandageTurned = 0.0f;
-+			mfVRBandageWound = 0.0f;
++			VRWindReset();
 +			VRBandageStartTin();
 +		}
 +		else if(bWinding == false && mbVRBandageWinding)
@@ -7026,33 +7405,34 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +			mbVRBandageWinding = false;
 +			VRBandageEndTin(lPhase != 2); // (used: the game is taking the thing in the right hand away, so it is not shown again)
 +
-+			// Used (the mod says "done"): it stays on the arm as it was wound,
-+			// with the end tucked a little further round. Put away or
-+			// dropped half-way: it goes.
-+			mbVRBandageOn = lPhase == 2 && mbVRBandageAnchored;
-+			if(mbVRBandageOn) mfVRBandageWound = cMath_Abs(mfVRBandageTurned) + 0.6f;
++			// Used (the mod says "done"): the rest of the dressing winds itself on, as it was being wound (the game's own
++			// bandage sound is playing). Put away or dropped half-way: what was wound comes off.
++			if(mbVRWindAnchored)
++			{
++				if(lPhase == 2) VRWrapFinish(0);
++				else VRWrapOff(0);
++			}
++			VRWindReset();
 +		}
 +
 +		// Should the game not have taken the thing in the right hand after all
 +		// (it does not use a bandage on a healthy man), it is drawn again.
 +		if(mbVRBandageWinding == false && lPhase != 2 && m_idVRBandageHidden != tID_Invalid) VRBandageEndTin(true);
 +
-+		// The mod's count going back means it has started the winding again
-+		// (the hand was away from the arm for too long).
-+		if(bWinding && fModTurns < mfVRBandageModTurns - 0.25f)
++		// The mod's count going back means it has started the winding again (the hand was away from the arm for too
++		// long): what was wound comes off, to be laid on again.
++		if(bWinding && fModTurns < mfVRBandageModTurns - 0.25f && mbVRWindAnchored)
 +		{
-+			mbVRBandageAnchored = false;
-+			mbVRBandageHadAngle = false;
-+			mfVRBandageTurned = 0.0f;
-+			mfVRBandageWound = 0.0f;
++			VRWindReset();
++			VRWrapOff(0);
 +		}
 +		mfVRBandageModTurns = fModTurns;
 +
-+		iLuxEntity@ pRoll = VRBandageRoll(mbVRBandageWinding || mbVRBandageOn);
++		iLuxEntity@ pRoll = VRBandageRoll(mbVRBandageWinding);
 +		if(pRoll is null) return;
 +		cMeshEntity@ pMesh = pRoll.GetMeshEntity();
 +		if(pMesh is null) return;
-+		if(mbVRBandageWinding == false && mbVRBandageOn == false)
++		if(mbVRBandageWinding == false)
 +		{
 +			if(pMesh.IsVisible()) pMesh.SetVisible(false);
 +			VRBandageHidePieces(0);
@@ -7063,105 +7443,26 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		// The left forearm: from the wrist towards the elbow, and two
 +		// directions across it to measure angles round it by. They turn
 +		// with the forearm, so what is wound on it stays put on it.
-+		cBoneState@ pElbow = pBody.GetBoneStateFromName("j_L_Arm_3");
-+		cBoneState@ pWrist = pBody.GetBoneStateFromName("j_L_Wrist");
-+		cBoneState@ pPalm = pBody.GetBoneStateFromName("j_R_HandSocket");
-+		if(pElbow is null || pWrist is null || pPalm is null) return;
-+
-+		cVector3f vWrist = pWrist.GetWorldPosition();
-+		cVector3f vAxis = pElbow.GetWorldPosition() - vWrist;
-+		float fForearm = vAxis.Length();
-+		if(fForearm < 0.05f) return;
-+		vAxis = vAxis * (1.0f / fForearm);
-+
-+		// (Taken from the bone half-way along the forearm, which twists
-+		// with the wrist by half: so the wrap turns with the sleeve under it.)
-+		cBoneState@ pTurnsWith = pBody.GetBoneStateFromName("j_L_Arm_5");
-+		if(pTurnsWith is null) @pTurnsWith = pElbow;
-+		cVector3f vAcross = cMath_Vector3Normalize(cMath_MatrixMul3x3(pTurnsWith.GetWorldMatrix(), cVector3f(0.0f, 1.0f, 0.0f)));
-+		if(cMath_Abs(cMath_Vector3Dot(vAcross, vAxis)) > 0.9f)
-+			vAcross = cMath_Vector3Normalize(cMath_MatrixMul3x3(pTurnsWith.GetWorldMatrix(), cVector3f(0.0f, 0.0f, 1.0f)));
-+		cVector3f vU = VRSquareTo(vAcross, vAxis, cVector3f(0.0f, 1.0f, 0.0f));
-+		cVector3f vV = cMath_Vector3Cross(vAxis, vU);
-+
-+		// Everything is as much bigger as the body is drawn bigger.
-+		float fBig = cMath_MatrixMul3x3(mBaseObj.GetMatrix(), cVector3f(1.0f, 0.0f, 0.0f)).Length();
-+		if(fBig < 0.3f || fBig > 3.0f) fBig = 1.0f;
-+		float fArm = (fRadius + 0.006f) * fBig;					// the coil's radius: the arm's, and a little air
-+		cVector3f vArmLine = vWrist + (vU * fShiftA + vV * fShiftB) * fBig;	// the coil's middle line starts here (the wrist, moved across as set)
-+		float fRise = gfVRBandagePitch * fBig / cMath_PiMul2;	// towards the elbow, per radian wound
-+		float fGrow = 0.0015f * fBig / cMath_PiMul2;			// each turn lies a little outside the last
-+		float fPerRadian = cMath_Sqrt(fArm * fArm + fRise * fRise);	// length of strip per radian wound
++		cBoneState@ pPalm = VRArmBone(pBody, false, 10);
++		cVector3f vWrist, vAxis, vU, vV;
++		float fForearm;
++		if(pPalm is null || VRForearm(pBody, true, vWrist, vAxis, fForearm, vU, vV) == false) return;
++		float fBig = VRBodyBig();	// (everything is as much bigger as the body is drawn bigger)
++		cVector3f vArmLine = vWrist + (vU * fShiftA + vV * fShiftB) * fBig;	// the arm's middle line (the wrist, moved across as set)
 +
 +		/////////////////////////////
-+		// While winding: follow the right hand round the arm.
++		// Follow the right hand round the arm: the dressing drawn as far as the cloth has gone round (VRPlaceWrap), and
++		// where it ends.
 +		cVector3f vHand = pPalm.GetWorldPosition();
-+		float fHandDist = 1.0f;
-+		if(mbVRBandageWinding)
-+		{
-+			cVector3f vRel = vHand - vArmLine;
-+			float fAlong = cMath_Vector3Dot(vRel, vAxis);
-+			cVector3f vOut = vRel - vAxis * fAlong;
-+			fHandDist = vOut.Length();
-+			float fX = cMath_Vector3Dot(vOut, vU);
-+			float fY = cMath_Vector3Dot(vOut, vV);
-+			float fAngle = cMath_ATan2(fY, fX);
-+			// (Should the math library take those two the other way round.)
-+			if(cMath_Abs(cMath_Cos(fAngle) * fHandDist - fX) + cMath_Abs(cMath_Sin(fAngle) * fHandDist - fY) > 0.2f * fHandDist)
-+				fAngle = cMath_ATan2(fX, fY);
-+
-+			// The cloth's end is laid on the arm only when the hand comes close
-+			// (within 16 cm of the arm's middle line; 30 feels too far off);
-+			// once it is on, the hand may be out to 30 cm.
-+			float fAtArmReach = mbVRBandageAnchored ? 0.30f : 0.16f;
-+			bool bAtArm = fAlong > -0.08f * fBig && fAlong < fForearm + 0.05f * fBig && fHandDist > 0.02f * fBig && fHandDist < fAtArmReach * fBig;
-+			if(bAtArm)
-+			{
-+				if(mbVRBandageAnchored == false)
-+				{
-+					// The hand has come to the arm: the end of the strip is
-+					// laid on the arm there.
-+					mbVRBandageAnchored = true;
-+					mfVRBandageStartAngle = fAngle;
-+					mfVRBandageStartAlong = cMath_Clamp(fAlong, 0.04f * fBig, fForearm * 0.5f) / fBig;
-+					mfVRBandageTurned = 0.0f;
-+				}
-+				else if(mbVRBandageHadAngle)
-+				{
-+					float fStep = fAngle - mfVRBandageLastAngle;
-+					if(fStep > cMath_Pi) fStep -= cMath_PiMul2;
-+					if(fStep < -cMath_Pi) fStep += cMath_PiMul2;
-+					if(cMath_Abs(fStep) < 1.2f) mfVRBandageTurned += fStep; // a bigger jump is a tracking slip
-+				}
-+				mfVRBandageLastAngle = fAngle;
-+				mbVRBandageHadAngle = true;
-+
-+				// The strip leaves the arm where a straight line from the hand
-+				// just touches it: that is behind the hand by an angle that
-+				// grows with the hand's distance.
-+				float fBehind = fHandDist > fArm ? cMath_ACos(fArm / fHandDist) : 0.0f;
-+				mfVRBandageWound = cMath_Max(0.0f, cMath_Abs(mfVRBandageTurned) - fBehind);
-+				mfVRBandageWay = mfVRBandageTurned < 0.0f ? -1.0f : 1.0f;
-+			}
-+			else
-+			{
-+				mbVRBandageHadAngle = false;
-+			}
-+		}
++		VRWindFollow(0, vHand, vArmLine, vAxis, fForearm, vU, vV, (fRadius + 0.006f) * fBig, fBig);
++		if(mbVRWindAnchored) VRWrapSet(0, mfVRWindWound, mfVRWindWay);
++		cVector3f vEndPos = vHand;
++		cVector3f vEndAhead = vAxis;
++		cVector3f vEndOut = vU;
++		bool bEnd = mbVRWindAnchored && VRWrapEnd(pBody, 0, vEndPos, vEndAhead, vEndOut);
 +
 +		/////////////////////////////
-+		// Where the wound part ends, and how the strip lies there.
-+		float fWound = mbVRBandageAnchored ? mfVRBandageWound : 0.0f;
-+		float fWay = mfVRBandageWay;
-+		float fEndAngle = mfVRBandageStartAngle + fWay * fWound;
-+		float fEndRadius = fArm + fGrow * fWound;
-+		cVector3f vEndOut = vU * cMath_Cos(fEndAngle) + vV * cMath_Sin(fEndAngle);
-+		cVector3f vEndPos = vArmLine + vAxis * (mfVRBandageStartAlong * fBig + fRise * fWound) + vEndOut * fEndRadius;
-+		cVector3f vEndAhead = cMath_Vector3Normalize((vV * cMath_Cos(fEndAngle) - vU * cMath_Sin(fEndAngle)) * (fWay * fEndRadius) + vAxis * fRise);
-+
-+		/////////////////////////////
-+		// The roll (only while winding): held in the right hand as the tin
-+		// was, its length along the hand's thumb-up direction, so that it
++		// The roll: held in the right hand as the tin was, its length along the hand's thumb-up direction, so that it
 +		// turns with the hand. It is the game's roll-and-strip model as it
 +		// lies at rest, with its strip not drawn, put whole so that the roll's
 +		// middle is in the hand.
@@ -7175,132 +7476,72 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +		}
 +		// (A roll is the same either way up: taken the way that twists the
 +		// cloth least on its way from the arm.)
-+		if(mbVRBandageAnchored && cMath_Vector3Dot(vRollAxis, vEndAcross) < 0.0f) vRollAxis = vRollAxis * -1.0f;
++		if(bEnd && cMath_Vector3Dot(vRollAxis, vEndAcross) < 0.0f) vRollAxis = vRollAxis * -1.0f;
 +
-+		cVector3f vFreeDir = vEndAhead;
 +		cVector3f vRollPos = vEndPos;	// where the strip meets the roll
-+		float fFree = 0.0f;
 +		float fRollOff = 0.036f * fBig;	// from the roll's middle to the side of it the strip comes off (the roll is 7.3 cm across)
 +
 +		cSubMeshEntity@ pStripPart = pMesh.GetSubMeshEntityName("m_bandage");
 +		if(pStripPart !is null && pStripPart.IsVisible()) pStripPart.SetVisible(false);
-+		if(mbVRBandageWinding)
-+		{
-+			// The model lies along its Z with its outer face towards Y: turned
-+			// to "along the strip" and "out of the strip's outer face" (its X
-+			// then lies along the roll's length, the other way to vRollAxis).
-+			cVector3f vRollMiddle = cVector3f(-0.0030f, -0.00665f, 1.3264f) * fBig; // where the roll's middle is in the model
-+			cVector3f vRollOut = cVector3f(0.0f, 1.0f, 0.0f);
-+			cMatrixf mtxRoll = cMatrixf_Identity;
-+			bool bRollOwn = mbVRBandageRollGrip && (mlVRPalmsNow == 2 || mlVRPalmsNow == 3);
-+			if(bRollOwn)
-+			{
-+				// Where "winding the bandage" has the roll in the right hand
-+				// (see VRAskPlacement): held still in the hand, the
-+				// cloth coming to it.
-+				mtxRoll = cMath_MatrixMul(m_mtxVRPalmRight, m_mtxVRBandageRollGrip);
-+				vRollAlong = cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxRoll, cVector3f(0.0f, 0.0f, 1.0f)));
-+				vRollOut = cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxRoll, cVector3f(0.0f, 1.0f, 0.0f)));
-+				vRollAxis = cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxRoll, cVector3f(-1.0f, 0.0f, 0.0f)));
-+				if(mbVRBandageAnchored && cMath_Vector3Dot(vRollAxis, vEndAcross) < 0.0f) vRollAxis = vRollAxis * -1.0f;
-+				// The placement says where the roll's middle is, not where the
-+				// model's own origin goes: that lies 1.33 m from the roll
-+				// (1.49 m at the body's size), past the 30 cm a placement may
-+				// go.
-+				cVector3f vRollAt = mtxRoll.GetTranslation();
-+				mtxRoll.SetTranslation(vRollAt - cMath_MatrixMul3x3(mtxRoll, vRollMiddle));
-+				vRollPos = vRollAt - vRollOut * fRollOff;
-+			}
-+			else
-+			{
-+				// The strip comes to the roll from the arm.
-+				if(mbVRBandageAnchored && (vHand - vEndPos).Length() > 0.01f) vRollAlong = vHand - vEndPos;
-+				vRollAlong = VRSquareTo(vRollAlong, vRollAxis, VRSquareTo(cVector3f(0.0f, 1.0f, 0.0f), vRollAxis, cVector3f(1.0f, 0.0f, 0.0f)));
-+				vRollOut = cMath_Vector3Cross(vRollAxis, vRollAlong);
-+				vRollPos = vHand - vRollOut * fRollOff;
-+				cMatrixf mtxFromModel = cMath_MatrixInverse(VRFrameMatrix(cVector3f(0.0f, 0.0f, 1.0f), cVector3f(0.0f, 1.0f, 0.0f)));
-+				mtxRoll = cMath_MatrixMul(VRFrameMatrix(vRollAlong, vRollOut), mtxFromModel);
-+				mtxRoll.SetTranslation(vHand - cMath_MatrixMul3x3(mtxRoll, vRollMiddle));
 +
-+				// Where it is, told to the mod while the hand poses tool is
-+				// open, as for a held item, so that a placement of its own
-+				// starts from there: its turn, and where its middle is (see
-+				// the roll's own placement above).
-+				if(mbVRBandageRollSend && (mlVRPalmsNow == 2 || mlVRPalmsNow == 3))
-+				{
-+					cMatrixf mtxPalmInverse = cMath_MatrixInverse(m_mtxVRPalmRight);
-+					cMatrixf mtxInPalm = cMath_MatrixMul(mtxPalmInverse, mtxRoll);
-+					mtxInPalm.SetTranslation(cMath_MatrixMul(mtxPalmInverse, vHand));
-+					VRSendGripNews(7089, mtxInPalm.GetTranslation());
-+					VRSendGripNews(7090, cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxInPalm, cVector3f(0.0f, 0.0f, 1.0f))));
-+					VRSendGripNews(7091, cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxInPalm, cVector3f(0.0f, 1.0f, 0.0f))));
-+				}
-+			}
-+			if(mbVRBandageAnchored)
-+			{
-+				cVector3f vTo = vRollPos - vEndPos;
-+				fFree = vTo.Length();
-+				if(fFree > 0.01f) vFreeDir = vTo * (1.0f / fFree);
-+			}
-+
-+			if(pMesh.IsVisible() == false) pMesh.SetVisible(true);
-+			pRoll.SetMeshScaleMul(cVector3f(fBig));
-+			pRoll.SetMatrix(mtxRoll);
-+		}
-+		else if(pMesh.IsVisible())
++		// The model lies along its Z with its outer face towards Y: turned
++		// to "along the strip" and "out of the strip's outer face" (its X
++		// then lies along the roll's length, the other way to vRollAxis).
++		cVector3f vRollMiddle = cVector3f(-0.0030f, -0.00665f, 1.3264f) * fBig; // where the roll's middle is in the model
++		cVector3f vRollOut = cVector3f(0.0f, 1.0f, 0.0f);
++		cMatrixf mtxRoll = cMatrixf_Identity;
++		bool bRollOwn = mbVRBandageRollGrip && (mlVRPalmsNow == 2 || mlVRPalmsNow == 3);
++		if(bRollOwn)
 +		{
-+			pMesh.SetVisible(false);
++			// Where "winding the bandage" has the roll in the right hand
++			// (see VRAskPlacement): held still in the hand, the
++			// cloth coming to it.
++			mtxRoll = cMath_MatrixMul(m_mtxVRPalmRight, m_mtxVRBandageRollGrip);
++			vRollAlong = cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxRoll, cVector3f(0.0f, 0.0f, 1.0f)));
++			vRollOut = cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxRoll, cVector3f(0.0f, 1.0f, 0.0f)));
++			vRollAxis = cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxRoll, cVector3f(-1.0f, 0.0f, 0.0f)));
++			if(bEnd && cMath_Vector3Dot(vRollAxis, vEndAcross) < 0.0f) vRollAxis = vRollAxis * -1.0f;
++			// The placement says where the roll's middle is, not where the
++			// model's own origin goes: that lies 1.33 m from the roll
++			// (1.49 m at the body's size), past the 30 cm a placement may
++			// go.
++			cVector3f vRollAt = mtxRoll.GetTranslation();
++			mtxRoll.SetTranslation(vRollAt - cMath_MatrixMul3x3(mtxRoll, vRollMiddle));
++			vRollPos = vRollAt - vRollOut * fRollOff;
 +		}
++		else
++		{
++			// The strip comes to the roll from the arm.
++			if(bEnd && (vHand - vEndPos).Length() > 0.01f) vRollAlong = vHand - vEndPos;
++			vRollAlong = VRSquareTo(vRollAlong, vRollAxis, VRSquareTo(cVector3f(0.0f, 1.0f, 0.0f), vRollAxis, cVector3f(1.0f, 0.0f, 0.0f)));
++			vRollOut = cMath_Vector3Cross(vRollAxis, vRollAlong);
++			vRollPos = vHand - vRollOut * fRollOff;
++			cMatrixf mtxFromModel = cMath_MatrixInverse(VRFrameMatrix(cVector3f(0.0f, 0.0f, 1.0f), cVector3f(0.0f, 1.0f, 0.0f)));
++			mtxRoll = cMath_MatrixMul(VRFrameMatrix(vRollAlong, vRollOut), mtxFromModel);
++			mtxRoll.SetTranslation(vHand - cMath_MatrixMul3x3(mtxRoll, vRollMiddle));
++
++			// Where it is, told to the mod while the hand poses tool is
++			// open, as for a held item, so that a placement of its own
++			// starts from there: its turn, and where its middle is (see
++			// the roll's own placement above).
++			if(mbVRBandageRollSend && (mlVRPalmsNow == 2 || mlVRPalmsNow == 3))
++			{
++				cMatrixf mtxPalmInverse = cMath_MatrixInverse(m_mtxVRPalmRight);
++				cMatrixf mtxInPalm = cMath_MatrixMul(mtxPalmInverse, mtxRoll);
++				mtxInPalm.SetTranslation(cMath_MatrixMul(mtxPalmInverse, vHand));
++				VRSendGripNews(7089, mtxInPalm.GetTranslation());
++				VRSendGripNews(7090, cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxInPalm, cVector3f(0.0f, 0.0f, 1.0f))));
++				VRSendGripNews(7091, cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxInPalm, cVector3f(0.0f, 1.0f, 0.0f))));
++			}
++		}
++
++		if(pMesh.IsVisible() == false) pMesh.SetVisible(true);
++		pRoll.SetMeshScaleMul(cVector3f(fBig));
++		pRoll.SetMatrix(mtxRoll);
 +
 +		/////////////////////////////
-+		// The cloth: short flat pieces laid end to end, sixteen to a turn
-+		// round the arm, then a run of them through the air to the roll,
-+		// twisting on the way from how the cloth lies on the arm to how the
-+		// roll is held.
-+		VRBandageMakePieces();
-+		int lUsed = 0;
-+		float fWidth = 0.1f * gfVRBandageWidth * fBig;
-+		if(mbVRBandageAnchored)
-+		{
-+			float fStep = cMath_PiMul2 / 16.0f;
-+			for(int j = 0; lUsed < glVRBandagePieces - 17; ++j)
-+			{
-+				float fFrom = float(j) * fStep;
-+				float fTo = cMath_Min(fFrom + fStep, fWound);
-+				if(fTo - fFrom < 0.02f) break;
-+				float fMid = (fFrom + fTo) * 0.5f;
-+
-+				cVector3f vOutA = vU * cMath_Cos(mfVRBandageStartAngle + fWay * fFrom) + vV * cMath_Sin(mfVRBandageStartAngle + fWay * fFrom);
-+				cVector3f vOutB = vU * cMath_Cos(mfVRBandageStartAngle + fWay * fTo) + vV * cMath_Sin(mfVRBandageStartAngle + fWay * fTo);
-+				cVector3f vOutMid = vU * cMath_Cos(mfVRBandageStartAngle + fWay * fMid) + vV * cMath_Sin(mfVRBandageStartAngle + fWay * fMid);
-+				cVector3f vA = vArmLine + vAxis * (mfVRBandageStartAlong * fBig + fRise * fFrom) + vOutA * (fArm + fGrow * fFrom);
-+				cVector3f vB = vArmLine + vAxis * (mfVRBandageStartAlong * fBig + fRise * fTo) + vOutB * (fArm + fGrow * fTo);
-+
-+				cVector3f vAlong = vB - vA;
-+				float fLength = vAlong.Length();
-+				if(fLength < 0.002f) break;
-+				vAlong = vAlong * (1.0f / fLength);
-+				// (Longer than the gap, so that the pieces overlap and no arm
-+				// shows between them.)
-+				VRBandagePlacePiece(lUsed, (vA + vB) * 0.5f, vAlong, VRSquareTo(vOutMid, vAlong, vOutMid), fLength * 1.4f, fWidth);
-+				lUsed++;
-+			}
-+
-+			if(mbVRBandageWinding && fFree > 0.01f)
-+			{
-+				int lFreePieces = int(fFree / (0.04f * fBig)) + 1;
-+				if(lFreePieces > 16) lFreePieces = 16;
-+				float fEach = fFree / float(lFreePieces);
-+				for(int k = 0; k < lFreePieces && lUsed < glVRBandagePieces; ++k)
-+				{
-+					float fT = (float(k) + 0.5f) / float(lFreePieces);
-+					cVector3f vAcross = VRSquareTo(vEndAcross * (1.0f - fT) + vRollAxis * fT, vFreeDir, vEndAcross);
-+					VRBandagePlacePiece(lUsed, vEndPos + vFreeDir * (fEach * (float(k) + 0.5f)), vFreeDir, cMath_Vector3Cross(vAcross, vFreeDir), fEach * 1.1f, fWidth);
-+					lUsed++;
-+				}
-+			}
-+		}
-+		VRBandageHidePieces(lUsed);
++		// The cloth from the wrap to the roll (VRWrapStrip).
++		VRWrapStrip(pBody, 0, vRollPos, vRollAxis);
 +
 +		/////////////////////////////
 +		// The second tin stays in the left hand: where "the bandage in the
@@ -7325,6 +7566,1325 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +
 +	//------------------------------------------------------------
 +	
++	// BunkerVR: how much bigger than its own the body is drawn (the hands and
++	// what they hold with it).
++	float VRBodyBig()
++	{
++		float fBig = cMath_MatrixMul3x3(mBaseObj.GetMatrix(), cVector3f(1.0f, 0.0f, 0.0f)).Length();
++		if(fBig < 0.3f || fBig > 3.0f) fBig = 1.0f;
++		return fBig;
++	}
++
++	// BunkerVR: how thick the left forearm is taken to be (meters from its
++	// line), and how far the middle of what is wound round it is moved off the
++	// line of its bones, two ways across it: the sleeve does not hang evenly
++	// round that line (special roll values 7062 and 7063: the mod's Bandage
++	// page). The defaults if the mod does not say.
++	void VRForearmSettings(cCamera@ apCam, float &out afRadius, float &out afShiftA, float &out afShiftB)
++	{
++		afRadius = gfVRBandageRadius;
++		afShiftA = 0.0f;
++		afShiftB = 0.0f;
++		if(apCam is null) return;
++		float fRollWas = apCam.GetRoll();
++		apCam.SetRoll(7062.0f);
++		cVector3f vSet = apCam.GetMatrix().GetTranslation();
++		if(vSet.x > 12344.0f && vSet.x < 12346.0f && vSet.y > 0.019f && vSet.y < 0.101f) afRadius = vSet.y;
++		apCam.SetRoll(7063.0f);
++		cVector3f vShiftSet = apCam.GetMatrix().GetTranslation();
++		if(vShiftSet.x > 12344.0f && vShiftSet.x < 12346.0f && cMath_Abs(vShiftSet.y) < 0.081f && cMath_Abs(vShiftSet.z) < 0.081f)
++		{
++			afShiftA = vShiftSet.y;
++			afShiftB = vShiftSet.z;
++		}
++		apCam.SetRoll(fRollWas);
++	}
++
++	// BunkerVR: a forearm as drawn (abLeft: the left's, else the right's): its
++	// wrist, its line towards the elbow (one long) and its length, and two
++	// directions across it (avU, avV) taken from the bone half-way along it,
++	// which turns with the wrist by half, so that what is wound on it turns
++	// with the sleeve under it. False without its bones.
++	bool VRForearm(cMeshEntity@ apBody, bool abLeft, cVector3f &out avWrist, cVector3f &out avAxis, float &out afLength, cVector3f &out avU, cVector3f &out avV)
++	{
++		avWrist = cVector3f(0.0f);
++		avAxis = cVector3f(0.0f, 1.0f, 0.0f);
++		afLength = 0.0f;
++		avU = cVector3f(1.0f, 0.0f, 0.0f);
++		avV = cVector3f(0.0f, 0.0f, 1.0f);
++		if(apBody is null) return false;
++		cBoneState@ pElbow = VRArmBone(apBody, abLeft, 5);
++		cBoneState@ pWrist = VRArmBone(apBody, abLeft, 9);
++		if(pElbow is null || pWrist is null) return false;
++		avWrist = pWrist.GetWorldPosition();
++		cVector3f vToElbow = pElbow.GetWorldPosition() - avWrist;
++		afLength = vToElbow.Length();
++		if(afLength < 0.05f) return false;
++		avAxis = vToElbow * (1.0f / afLength);
++		cBoneState@ pTurnsWith = VRArmBone(apBody, abLeft, 7);
++		if(pTurnsWith is null) @pTurnsWith = pElbow;
++		cVector3f vAcross = cMath_Vector3Normalize(cMath_MatrixMul3x3(pTurnsWith.GetWorldMatrix(), cVector3f(0.0f, 1.0f, 0.0f)));
++		if(cMath_Abs(cMath_Vector3Dot(vAcross, avAxis)) > 0.9f)
++			vAcross = cMath_Vector3Normalize(cMath_MatrixMul3x3(pTurnsWith.GetWorldMatrix(), cVector3f(0.0f, 0.0f, 1.0f)));
++		avU = VRSquareTo(vAcross, avAxis, cVector3f(0.0f, 1.0f, 0.0f));
++		avV = cMath_Vector3Cross(avAxis, avU);
++		return true;
++	}
++
++	//------------------------------------------------------------
++
++	// BunkerVR: the medkit worked by hand, as the game's own medkit scene (its bag's flap lifted, its bottle uncorked
++	// and drunk, its dressing wound on) in the two halves the game's own medkit heals in. It stays in the right hand as
++	// the game holds it ("Medkit" in the hand poses tool), and the left hand works it (the game puts the lantern away
++	// for it).
++	//   Shut: the left hand squeezes at its flap's edge, by the press-stud (gvVRMedkitFlapAt), and lifts it: the game's
++	//     own use's opening (medkit_usage) follows the hand (gfVRMedkitFlapLift). Lifted all the way, it is open; let
++	//     go part-way, it falls open past gfVRMedkitFlapStays and shut before. Only if the game would use it now:
++	//     unhurt, its own words say so ("not injured"), and the flap stays down.
++	//   Open: the bottle and the dressing lie in the bag where the game's own medkit keeps them. The left hand squeezes
++	//     at the bottle: takes it out ("The medkit's bottle" in the hand poses tool). Its trigger pulls the cork.
++	//     Tipped up at the mouth for gfVRMedkitDrinkTime (BunkerVR_MedkitDrinking) it is drunk: the first half of the
++	//     healing. Let go of, it goes back in the bag (not while its pose is being set: the hand poses tool open, or
++	//     the Grips page).
++	//   Drunk: the left hand squeezes at the dressing and takes it out, and the bag drops from the right hand to the
++	//     floor (VRMedkitDropBag). The dressing stays in the left hand, let go of or not ("The medkit's dressing
++	//     roll"), until it has been wound round the right forearm glVRMedkitWrapTurns times (VRWindFollow, the wrap
++	//     VRPlaceWrap draws): the second half, the medkit used up, the dressing left on the arm.
++	// Cancelled by the medkit leaving the right hand (put away, stored, dropped, a gun drawn instead) or a scene of the
++	// game's: nothing is lost, and a bag dropped from it goes with it. A medkit put away after its bottle was drunk
++	// keeps that in its own health (BunkerVR_MedkitDrunk): it opens again with its dressing left. While the mod's own
++	// menu is open the hands work the menu, and it holds as it is. The part to take next (its bag by the flap, the bottle,
++	// the dressing) glows, and the left hand reaching it ticks, while its hint would show (VRMedkitCue).
++	void VRUpdateMedkit()
++	{
++		double fNow = cEngine_GetGameTime();
++		float fStep = mfVRMedkitTime < 0.0 ? 0.0f : cMath_Clamp(float(fNow - mfVRMedkitTime), 0.0f, 0.1f);
++		mfVRMedkitTime = fNow;
++		cMeshEntity@ pBody = mBaseObj.GetMeshEntity();
++		VRUpdateMedkitDrop(fStep);
++		mlVRMedkitCuePartWas = mlVRMedkitCuePart; // (the part to take next is set again below, by VRMedkitCue, only while wanted)
++		mbVRMedkitCueNearWas = mbVRMedkitCueNear;
++		mlVRMedkitCuePart = -1;
++		mbVRMedkitCueNear = false;
++
++		/////////////////////////////
++		// The medkit in the right hand, and its state as it comes.
++		iLuxEntity@ pHeld = Item_GetHeldType(eItemHandlerHand_Right) == "Medkit" ? VRInHandSocket("R_Hand") : null;
++		cMeshEntity@ pHeldMesh = pHeld !is null ? pHeld.GetMeshEntity() : null;
++		tString sItem = pHeldMesh !is null ? Item_GetHeld(eItemHandlerHand_Right) : "";
++		if(sItem != "" && sItem == msVRMedkitUsedItem) sItem = ""; // (used up, on its way out of the hand)
++		if(sItem != msVRMedkitItem)
++		{
++			if(msVRMedkitItem != "") VRMedkitShut(sItem == "" ? "it left the right hand" : "another medkit came into the right hand", false, false);
++			msVRMedkitItem = sItem;
++			mbVRMedkitDrunk = sItem != "" && VRMedkitAsk("_Global_VRMedkitDrunk");
++			mbVRMedkitLeftWas = true;
++			mbVRMedkitTriggerWas = true;
++			if(sItem != "") VRMedkitNote("in the right hand" + (mbVRMedkitDrunk ? ", its bottle already drunk" : ""));
++		}
++		if(cScript_GetGlobalVarBool("BunkerVR_MedkitReportAsked"))
++		{
++			cScript_SetGlobalVarBool("BunkerVR_MedkitReportAsked", false);
++			VRMedkitReport(pBody, pHeldMesh);
++		}
++		if(sItem == "")
++		{
++			VRMedkitHint(-1, "", cVector3f(0.0f));
++			return;
++		}
++
++		/////////////////////////////
++		// The left hand's squeeze holds the flap, the bottle or the dressing; its trigger pulls the cork. One already on
++		// counts once it is let go. While the mod's own menu is open, nothing is taken or let go.
++		bool bMenu = cVR_HandsInMenu();
++		bool bLeftDown = cVR_HandSqueeze(0) > (mbVRMedkitLeftWas ? gfVRMedkitLetGo : gfVRMedkitSqueeze);
++		bool bTriggerDown = cVR_HandTrigger(0) > (mbVRMedkitTriggerWas ? gfVRMedkitLetGo : gfVRMedkitSqueeze);
++		bool bLeftFresh = bLeftDown && mbVRMedkitLeftWas == false && bMenu == false;
++		bool bTriggerFresh = bTriggerDown && mbVRMedkitTriggerWas == false && bMenu == false;
++		bool bLeftLetGo = bLeftDown == false && bMenu == false;
++		mbVRMedkitLeftWas = bMenu || bLeftDown;
++		mbVRMedkitTriggerWas = bMenu || bTriggerDown;
++		bool bLeftKnown = mlVRPalmsNow == 1 || mlVRPalmsNow == 3;
++		float fBig = VRBodyBig();
++		cVector3f vLeftPalm = m_mtxVRPalmLeft.GetTranslation();
++
++		// The bag as the right hand holds it: the held medkit as it is placed now (the bag's own bone, j_FirstAidKit_Bag, is
++		// the model's root in all of its animations), and a centimetre of it in the world (the bone's scale); where the
++		// flap's edge is, as far as it is lifted. Don't take the bag's place from the bone: the engine places a model's
++		// bones as it draws it, so a bone read here is a frame behind a model that has just moved.
++		cBoneState@ pBagBone = pHeldMesh.GetBoneStateFromName("j_FirstAidKit_Bag");
++		if(pBagBone is null) return;
++		cMatrixf mtxBag = VRNoScale(pHeldMesh.GetWorldMatrix());
++		float fPerCm = cMath_MatrixMul3x3(pBagBone.GetWorldMatrix(), cVector3f(1.0f, 0.0f, 0.0f)).Length();
++		if(fPerCm < 0.001f || fPerCm > 0.1f) fPerCm = 0.01f * fBig;
++		cVector3f vFlapUp = cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxBag, gvVRMedkitFlapUp));
++		cVector3f vFlap = cMath_MatrixMul(mtxBag, gvVRMedkitFlapAt * fPerCm) + vFlapUp * (mfVRMedkitOpen * gfVRMedkitFlapLift * fBig);
++
++		/////////////////////////////
++		// Shut: the left hand takes hold of its flap.
++		if(mlVRMedkitStep == 0)
++		{
++			// (The left hand empty, or holding the lantern, which goes as the game's own medkit puts it away.)
++			tString sLeftHeld = Item_GetHeldType(eItemHandlerHand_Left);
++			bool bLeftFree = sLeftHeld == "" || sLeftHeld == "DynamoLantern";
++			bool bHurt = Player_GetHealth() < 1.0f;
++			bool bNear = bLeftKnown && bLeftFree && (vLeftPalm - vFlap).Length() < gfVRMedkitFlapReach * fBig;
++			VRMedkitHint(bNear && bHurt ? 0 : -1, "medkit_flap", vFlap);
++			if(bLeftFree && bHurt) VRMedkitCue(0, "medkit_flap", pHeldMesh, bNear, fStep);
++			if(bNear == false) return;
++			cVR_LeftAtWork(); // (the left squeeze here is the medkit's)
++			if(bLeftFresh == false) return;
++			if(VRMedkitAsk("_Global_VRMedkitCanOpen") == false)
++			{
++				VRBuzzHand(0, 0.03f, 0.3f);
++				VRMedkitNote("the left hand took its flap, but the game would not use it now (health " + VRMedkitHealth(Player_GetHealth()) + "): it stays shut");
++				return;
++			}
++			if(VRMedkitOpen(pHeld, pHeldMesh, mtxBag) == false) return;
++			VRMedkitTakeFlap(mtxBag, vLeftPalm);
++			return;
++		}
++
++		/////////////////////////////
++		// Open (or opening): its parts, made as it opened, still there (a new level takes them; the bag is gone from
++		// the hand once dropped).
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		iLuxEntity@ pCase = cLux_ID_Entity(m_idVRMedkitCase);
++		iLuxEntity@ pRoll = cLux_ID_Entity(m_idVRMedkitRoll);
++		iLuxEntity@ pBottle = cLux_ID_Entity(m_idVRMedkitBottle);
++		if(pMap is null || pRoll is null || (mlVRMedkitStep < 4 && (pCase is null || pBottle is null)))
++		{
++			VRMedkitShut("its bag or what was in the hand was lost", true, false);
++			return;
++		}
++		cVR_LeftAtWork();
++		cMatrixf mtxInBag = pHeldMesh.GetWorldMatrix(); // (the bottle and the dressing in the bag: where the held medkit keeps them)
++
++		// The bag in the right hand, its flap as far open as it is: the opening bag's model placed as the held one (the
++		// bag's own bone is the root of both, its opening never moves it). Don't measure that bone after moving the model
++		// and place the model by it next time: the bone is a frame behind, and fed back so the bag shakes.
++		if(pCase !is null)
++		{
++			cMeshEntity@ pCaseMesh = pCase.GetMeshEntity();
++			pCase.SetMatrix(VRMedkitPartAt(cMatrixf_Identity, mtxBag));
++			cAnimationState@ pUse = pCaseMesh !is null ? pCaseMesh.GetAnimationStateFromName("medkit_usage") : null;
++			if(pUse !is null) pUse.SetTimePosition(mfVRMedkitOpen * gfVRMedkitOpenAt);
++		}
++		if(mlVRMedkitStep != 3 && pBottle !is null) pBottle.SetMatrix(mtxInBag);
++		if(mlVRMedkitStep != 4) pRoll.SetMatrix(mtxInBag);
++
++		/////////////////////////////
++		// The flap held by the left hand, or let go of and falling.
++		if(mlVRMedkitStep == 1)
++		{
++			if(mbVRMedkitFlapHeld && bLeftLetGo)
++			{
++				mbVRMedkitFlapHeld = false;
++				VRMedkitNote("the left hand let go of the flap " + int(mfVRMedkitOpen * 100.0f) + "% open: it falls " + (mfVRMedkitOpen >= gfVRMedkitFlapStays ? "open" : "shut"));
++			}
++			if(mbVRMedkitFlapHeld)
++			{
++				if(bMenu) return; // (the mod's menu open: as it is)
++				// It follows the hand: as far as the hand has gone up out of the bag (and out from its front) since it
++				// took hold, a tick in the hand every tenth of the way.
++				cVector3f vInBag = cMath_MatrixMul(cMath_MatrixInverse(mtxBag), vLeftPalm);
++				float fWas = mfVRMedkitOpen;
++				mfVRMedkitOpen = cMath_Clamp(mfVRMedkitOpenFrom + cMath_Vector3Dot(vInBag - mvVRMedkitFlapFrom, cMath_Vector3Normalize(gvVRMedkitFlapUp)) / (gfVRMedkitFlapLift * fBig), 0.0f, 1.0f);
++				if(int(fWas * 10.0f) != int(mfVRMedkitOpen * 10.0f)) VRBuzzHand(0, 0.01f, 0.25f);
++				VRMedkitHint(-1, "", cVector3f(0.0f));
++				if(mfVRMedkitOpen >= 1.0f) VRMedkitFlapOpened();
++				return;
++			}
++			// Let go of: it falls open past gfVRMedkitFlapStays, shut before; the left hand may take it again.
++			if(mfVRMedkitOpen >= gfVRMedkitFlapStays)
++			{
++				mfVRMedkitOpen = cMath_Min(1.0f, mfVRMedkitOpen + fStep / gfVRMedkitFlapFall);
++				if(mfVRMedkitOpen >= 1.0f) VRMedkitFlapOpened();
++				return;
++			}
++			mfVRMedkitOpen = cMath_Max(0.0f, mfVRMedkitOpen - fStep / gfVRMedkitFlapFall);
++			if(mfVRMedkitOpen <= 0.0f)
++			{
++				VRMedkitShut("its flap fell shut", true, false);
++				return;
++			}
++			bool bNearFlap = bLeftKnown && (vLeftPalm - vFlap).Length() < gfVRMedkitFlapReach * fBig;
++			VRMedkitHint(bNearFlap ? 0 : -1, "medkit_flap", vFlap);
++			if(bNearFlap && bLeftFresh) VRMedkitTakeFlap(mtxBag, vLeftPalm);
++			return;
++		}
++
++		/////////////////////////////
++		// Open, the left hand free: the bottle (not yet drunk), or the dressing, taken out.
++		if(mlVRMedkitStep == 2)
++		{
++			cVector3f vBottleAt = VRMedkitPartMiddle(pBottle, "j_bottle", 6.0f);
++			cVector3f vRollAt = VRMedkitPartMiddle(pRoll, "j_Bandage_Roll", 0.0f);
++			cVector3f vTarget = mbVRMedkitDrunk ? vRollAt : vBottleAt;
++			bool bNear = bLeftKnown && (vLeftPalm - vTarget).Length() < gfVRMedkitPartReach * fBig;
++			VRMedkitHint(0, mbVRMedkitDrunk ? "medkit_dressing" : "medkit_bottle", vTarget);
++			iLuxEntity@ pNext = mbVRMedkitDrunk ? pRoll : pBottle;
++			VRMedkitCue(mbVRMedkitDrunk ? 2 : 1, mbVRMedkitDrunk ? "medkit_dressing" : "medkit_bottle", pNext.GetMeshEntity(), bNear, fStep);
++			if(bNear == false || bLeftFresh == false) return;
++			if(mbVRMedkitDrunk)
++			{
++				VRMedkitTakeRoll(pMap);
++				return;
++			}
++			mlVRMedkitStep = 3;
++			VRMedkitSound("Take", "player/foley/action/pickup/medicine_bottle_pickup", 1.0f);
++			VRBuzzHand(0, 0.04f, 0.5f);
++			cVR_HintUsed("medkit_bottle");
++			VRMedkitNote("the left hand took the bottle out of the bag" + (mbVRMedkitCorkOut ? " (its cork already out)" : ""));
++			return;
++		}
++
++		/////////////////////////////
++		// The bottle in the left hand: uncorked, then drunk from.
++		if(mlVRMedkitStep == 3)
++		{
++			cMatrixf mtxHeldBottle = VRMedkitBottleHeld(fBig);
++			pBottle.SetMatrix(VRMedkitPartAt(m_mtxVRMedkitBottleIn, mtxHeldBottle));
++			if(mbVRMedkitBottleSend && mbVRMedkitBottleGrip == false) VRMedkitSendGrip(gvVRMedkitBottleGrip * fBig, cMatrixf_Identity);
++			cVector3f vOpening = cMath_MatrixMul(mtxHeldBottle, cMath_MatrixMul(cMath_MatrixInverse(m_mtxVRMedkitBottleIn), m_mtxVRMedkitCorkIn.GetTranslation()));
++			cVector3f vNeck = cMath_Vector3Normalize(vOpening - mtxHeldBottle.GetTranslation());
++			// (Let go of, it goes back in the bag; not while its pose is being set, so that the hand can be put down.)
++			if(bLeftLetGo && mbVRMedkitBottleSend == false)
++			{
++				VRMedkitDrinkSound(false);
++				pBottle.SetMatrix(mtxInBag);
++				mlVRMedkitStep = 2;
++				VRMedkitSound("Back", "player/foley/action/pickup/medicine_bottle_pickup", 0.8f);
++				VRBuzzHand(0, 0.03f, 0.3f);
++				if(mbVRMedkitDrunk) cVR_HintUsed("medkit_back");
++				VRMedkitNote("the bottle went back in the bag" + (mbVRMedkitDrunk ? " (drunk)" : (mbVRMedkitCorkOut ? " (uncorked, not drunk)" : "")));
++				return;
++			}
++			// (Its hints stand by the opening: none while that is near the mouth, where they would stand in the face.)
++			cVector3f vMouth = BunkerVR_Mouth(m_mtxVRHead, fBig);
++			int lHintHand = mbVRHeadKnown && (vOpening - vMouth).Length() < gfVRMedkitHintAway * fBig ? -1 : 0;
++			if(mbVRMedkitCorkOut == false)
++			{
++				VRMedkitHint(lHintHand, "medkit_cork", vOpening);
++				if(bTriggerFresh == false) return;
++				mbVRMedkitCorkOut = true;
++				VRMedkitDrawOnly(pBottle, "m_bottle", "");
++				VRMedkitSound("Cork", "player/tools/fuel/unscrew", 1.0f);
++				VRBuzzHand(0, 0.05f, 0.7f);
++				cVR_HintUsed("medkit_cork");
++				VRMedkitNote("the left trigger pulled the bottle's cork");
++				return;
++			}
++			if(mbVRMedkitDrunk)
++			{
++				VRMedkitHint(lHintHand, "medkit_back", vOpening);
++				return;
++			}
++			VRMedkitHint(lHintHand, "medkit_drink", vOpening);
++			cVector3f vFacing = cMath_Vector3Normalize(cMath_MatrixMul3x3(m_mtxVRHead, cVector3f(0.0f, 0.0f, -1.0f)));
++			bool bDrinking = bMenu == false && mbVRHeadKnown && BunkerVR_MedkitDrinking(vOpening, vNeck, vMouth, vFacing, fBig);
++			VRMedkitDrinkSound(bDrinking);
++			if(bDrinking == false) return;
++			// At the lips and tipped up: it is drunk, the liquid heard, a gulp felt in the hand now and then.
++			if(mfVRMedkitDrink == 0.0f || int(mfVRMedkitDrink / gfVRMedkitGulpGap) != int((mfVRMedkitDrink + fStep) / gfVRMedkitGulpGap))
++				VRBuzzHand(0, 0.05f, 0.4f);
++			mfVRMedkitDrink += fStep;
++			if(mfVRMedkitDrink < gfVRMedkitDrinkTime) return;
++			// Drunk long enough: the first half of the healing (the game's heal, its breath).
++			float fHealthWas = Player_GetHealth();
++			cScript_RunGlobalFunc("State_UsingHealthItem", "", "_Global_VRMedkitDrink");
++			mbVRMedkitDrunk = true;
++			VRMedkitDrinkSound(false);
++			VRBuzzHand(0, 0.12f, 0.8f);
++			cVR_HintUsed("medkit_drink");
++			VRMedkitNote("drunk: the first half of its healing (health " + VRMedkitHealth(fHealthWas) + " -> " + VRMedkitHealth(Player_GetHealth()) + ")");
++			return;
++		}
++
++		/////////////////////////////
++		// The dressing in the left hand (the bag dropped): wound round the right forearm. Let go of, it stays in the hand.
++		cVR_RightFitted(); // (the right hand holds nothing now: its fingers the real hand's, its squeeze the medkit's)
++		cMatrixf mtxHeldRoll = VRMedkitRollHeld(fBig);
++		pRoll.SetMatrix(VRMedkitPartAt(m_mtxVRMedkitRollIn, mtxHeldRoll));
++		if(mbVRMedkitRollSend && mbVRMedkitRollGrip == false) VRMedkitSendGrip(gvVRMedkitRollGrip * fBig, VRFrameMatrix(cVector3f(1.0f, 0.0f, 0.0f), cVector3f(0.0f, 0.0f, -1.0f)));
++		cVector3f vRoll = mtxHeldRoll.GetTranslation();
++		cVector3f vRollAxle = cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxHeldRoll, cVector3f(0.0f, 0.0f, 1.0f)));
++		cVector3f vWrist, vAxis, vU, vV;
++		float fForearm;
++		if(VRForearm(pBody, false, vWrist, vAxis, fForearm, vU, vV) == false) return;
++		float fRadius, fShiftA, fShiftB;
++		cLuxPlayer@ pPlayer = cLux_GetPlayer();
++		VRForearmSettings(pPlayer !is null ? pPlayer.GetCamera() : null, fRadius, fShiftA, fShiftB);
++		bool bAtArm = bMenu || VRWindFollow(1, vRoll, vWrist, vAxis, fForearm, vU, vV, (fRadius + 0.006f) * fBig, fBig); // (the mod's menu open: as it is)
++		if(bAtArm) mfVRMedkitAway = 0.0f;
++		else
++		{
++			// (Away from the forearm for longer than gfVRMedkitWrapAway: the wrapping starts again, as the bandage's.)
++			mfVRMedkitAway += fStep;
++			if(mfVRMedkitAway > gfVRMedkitWrapAway && mbVRWindAnchored)
++			{
++				VRWindReset();
++				VRWrapOff(1);
++				mlVRMedkitTurnsDone = 0;
++				VRMedkitNote("the left hand left the right forearm: the wrapping starts again");
++			}
++		}
++		VRMedkitHint(mlVRMedkitTurnsDone == 0 ? 0 : -1, "medkit_wrap", vRoll);
++		if(mbVRWindAnchored) VRWrapSet(1, mfVRWindWound, mfVRWindWay);
++		// The cloth from the arm to the roll: where it meets the roll, on the roll's side towards the arm.
++		cVector3f vEnd, vEndAhead, vEndOut;
++		cVector3f vMeet = vRoll;
++		if(VRWrapEnd(pBody, 1, vEnd, vEndAhead, vEndOut))
++			vMeet = vRoll + VRSquareTo(vEnd - vRoll, vRollAxle, vEndOut) * (gfVRMedkitRollRadius * mfVRMedkitScale);
++		VRWrapStrip(pBody, 1, vMeet, vRollAxle);
++		int lTurns = int(cMath_Abs(mfVRWindTurned) / cMath_PiMul2);
++		if(lTurns > mlVRMedkitTurnsDone)
++		{
++			mlVRMedkitTurnsDone = lTurns;
++			VRBuzzHand(0, 0.06f, 0.7f);
++			VRBuzzHand(1, 0.04f, 0.4f);
++			if(lTurns == 1) cVR_HintUsed("medkit_wrap");
++			VRMedkitNote("wrapped " + lTurns + " time" + (lTurns == 1 ? "" : "s") + " round the right forearm");
++		}
++		if(lTurns < glVRMedkitWrapTurns) return;
++
++		// Wrapped enough: the second half of the healing, the rest of the dressing winding itself on, and the medkit used
++		// up (taken from the hand: the dressing goes from the hand as it goes).
++		float fHealthWas = Player_GetHealth();
++		VRWrapFinish(1);
++		VRBuzzHand(0, 0.25f, 1.0f);
++		VRBuzzHand(1, 0.2f, 0.8f);
++		VRMedkitSound("Wrapped", "player/tools/bandage/bandage", 1.0f);
++		cScript_RunGlobalFunc("State_UsingHealthItem", "", "_Global_VRMedkitDress");
++		VRMedkitNote("the dressing wrapped round the right forearm " + glVRMedkitWrapTurns + " times: on, the second half of its healing (health " + VRMedkitHealth(fHealthWas) + " -> " +
++					 VRMedkitHealth(Player_GetHealth()) + "), the medkit used up");
++		msVRMedkitUsedItem = msVRMedkitItem;
++		VRMedkitShut("used", false, true);
++		msVRMedkitItem = "";
++	}
++
++	// BunkerVR: a scene of the game's own (a knockdown, a kill: its camera
++	// animation) has the view: the arms are not placed meanwhile
++	// (PlayerBodyHandler.hps), so the medkit, if open, shuts.
++	void _Global_VRMedkitInterrupted()
++	{
++		if(mlVRMedkitStep != 0) VRMedkitShut("a scene of the game's took the view", true, false);
++	}
++
++	// BunkerVR: the medkit in the right hand opens to the left hand: its bag drawn as the game's own opening bag (its
++	// flap moved by the game's own use's animation), and its bottle and dressing drawn where the held medkit keeps them
++	// (copies of the medkit's own model, each drawing that part alone, placed as the held one); the medkit in the hand
++	// is no longer drawn. Where its parts lie in its model is taken from it as the hand holds it (its bones as drawn;
++	// unscaled, in meters as drawn). False if its parts could not be made.
++	bool VRMedkitOpen(iLuxEntity@ apHeld, cMeshEntity@ apHeldMesh, const cMatrixf &in a_mtxBag)
++	{
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		if(pMap is null) return false;
++		cMatrixf mtxHeld = apHeldMesh.GetWorldMatrix();
++		cMatrixf mtxToModel = cMath_MatrixInverse(VRNoScale(mtxHeld));
++		mfVRMedkitScale = cMath_MatrixMul3x3(mtxHeld, cVector3f(1.0f, 0.0f, 0.0f)).Length();
++		m_mtxVRMedkitBottleIn = VRMedkitBoneIn(apHeldMesh, "j_bottle", mtxToModel);
++		m_mtxVRMedkitCorkIn = VRMedkitBoneIn(apHeldMesh, "j_cork", mtxToModel);
++		m_mtxVRMedkitRollIn = VRMedkitBoneIn(apHeldMesh, "j_Bandage_Roll", mtxToModel);
++
++		iLuxEntity@ pCase = VRMakeNamed(pMap, "vr_medkit_case", "medkit_cutscene_no_bandage.ent", VRMedkitPartAt(cMatrixf_Identity, a_mtxBag));
++		iLuxEntity@ pRoll = VRMakeNamed(pMap, "vr_medkit_roll", "medkit_cutscene.ent", mtxHeld);
++		iLuxEntity@ pBottle = VRMakeNamed(pMap, "vr_medkit_bottle", "medkit_cutscene.ent", mtxHeld);
++		if(pCase is null || pRoll is null || pBottle is null || pCase.GetMeshEntity() is null)
++		{
++			if(pCase !is null) pMap.DestroyEntity(pCase);
++			if(pRoll !is null) pMap.DestroyEntity(pRoll);
++			if(pBottle !is null) pMap.DestroyEntity(pBottle);
++			VRMedkitNote("its bag could not be made: it stays shut");
++			return false;
++		}
++		m_idVRMedkitCase = pCase.GetID();
++		m_idVRMedkitRoll = pRoll.GetID();
++		m_idVRMedkitBottle = pBottle.GetID();
++		// The bag: the game's own use of it, held at its start (shut), then run by the flap's lift (VRUpdateMedkit); its
++		// own bottle not drawn (the copy in the bag instead).
++		pCase.PlayAnimation("medkit_usage", 0.0f, false);
++		cAnimationState@ pUse = pCase.GetMeshEntity().GetAnimationStateFromName("medkit_usage");
++		if(pUse !is null)
++		{
++			pUse.SetPaused(true);
++			pUse.SetTimePosition(0.0f);
++		}
++		VRMedkitDrawOnly(pCase, "m_bag", "");
++		mbVRMedkitCorkOut = mbVRMedkitDrunk;	// (drunk: its bottle went back empty, its cork gone)
++		pBottle.PlayAnimation("medkit_idle", 0.0f, true);
++		VRMedkitDrawOnly(pBottle, "m_bottle", mbVRMedkitCorkOut ? "" : "m_cork");
++		pRoll.PlayAnimation("medkit_idle", 0.0f, true);
++		VRMedkitDrawOnly(pRoll, "m_bandage_roll", "m_bandage");
++
++		apHeldMesh.SetVisible(false);
++		m_idVRMedkitHidden = apHeld.GetID();
++		if(Item_GetHeldType(eItemHandlerHand_Left) == "DynamoLantern") Item_Unequip(Item_GetHeld(eItemHandlerHand_Left));
++		mlVRMedkitStep = 1;
++		mfVRMedkitOpen = 0.0f;
++		mfVRMedkitDrink = 0.0f;
++		mfVRMedkitAway = 0.0f;
++		mlVRMedkitTurnsDone = 0;
++		VRMedkitNote("the left hand took its flap" + (mbVRMedkitDrunk ? ", its bottle already drunk: its dressing left" : "") +
++					 " (health " + VRMedkitHealth(Player_GetHealth()) + "; its model drawn " + mfVRMedkitScale + " times)");
++		return true;
++	}
++
++	// BunkerVR: the left hand (at avPalm) takes hold of the flap: it follows the hand from here (a_mtxBag: the bag's
++	// bone, unscaled).
++	void VRMedkitTakeFlap(const cMatrixf &in a_mtxBag, const cVector3f &in avPalm)
++	{
++		mbVRMedkitFlapHeld = true;
++		mvVRMedkitFlapFrom = cMath_MatrixMul(cMath_MatrixInverse(a_mtxBag), avPalm);
++		mfVRMedkitOpenFrom = mfVRMedkitOpen;
++		VRMedkitSound("Flap", "player/tools/medkit/ready/focus_start_1", 1.0f);
++		VRBuzzHand(0, 0.04f, 0.5f);
++	}
++
++	// BunkerVR: the flap all the way up: open, the left hand free.
++	void VRMedkitFlapOpened()
++	{
++		mfVRMedkitOpen = 1.0f;
++		mbVRMedkitFlapHeld = false;
++		mlVRMedkitStep = 2;
++		VRMedkitSound("Open", "player/tools/medkit/ready/focus_start_2", 1.0f);
++		VRBuzzHand(0, 0.06f, 0.6f);
++		VRBuzzHand(1, 0.03f, 0.3f);
++		cVR_HintUsed("medkit_flap");
++		VRMedkitNote("its flap lifted: open");
++	}
++
++	// BunkerVR: the left hand takes the dressing out of the open bag: the bag drops from the right hand (with its
++	// empty bottle), and the dressing stays in the left hand until it is wound on.
++	void VRMedkitTakeRoll(cLuxMap@ apMap)
++	{
++		mlVRMedkitStep = 4;
++		mfVRMedkitAway = 0.0f;
++		mlVRMedkitTurnsDone = 0;
++		VRWindReset();
++		VRWrapOff(1);
++		VRMedkitDropBag(apMap);
++		VRMedkitSound("TakeRoll", "player/foley/action/pickup/cloth", 1.0f);
++		VRBuzzHand(0, 0.05f, 0.6f);
++		VRBuzzHand(1, 0.04f, 0.4f);
++		cVR_HintUsed("medkit_dressing");
++		VRMedkitNote("the left hand took the dressing out of the bag; the bag dropped");
++	}
++
++	// BunkerVR: the medkit shut: its bag, bottle and dressing go from the hands (made anew as it opens), and the medkit
++	// in the right hand is drawn again if it is still there (abShowHeld). Used (abUsed): its dressing stays on the arm
++	// and the bag where it fell; otherwise the dressing's wrap comes off the arm, and a bag dropped from it goes (it is
++	// back in the hand, or put away). What was drunk stays drunk.
++	void VRMedkitShut(const tString &in asWhy, bool abShowHeld, bool abUsed)
++	{
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		array<tID> vParts = { m_idVRMedkitCase, m_idVRMedkitRoll, m_idVRMedkitBottle };
++		for(uint i = 0; i < vParts.length(); ++i)
++		{
++			iLuxEntity@ pPart = vParts[i] != tID_Invalid ? cLux_ID_Entity(vParts[i]) : null;
++			if(pPart !is null && pMap !is null) pMap.DestroyEntity(pPart);
++		}
++		m_idVRMedkitCase = tID_Invalid;
++		m_idVRMedkitRoll = tID_Invalid;
++		m_idVRMedkitBottle = tID_Invalid;
++		VRMedkitDrinkSound(false);
++		if(mlVRMedkitStep == 4) VRBandageHidePieces(0); // (the cloth from the arm to the roll: the bandage's update hides it only while a bandage's roll is there)
++		if(mlVRMedkitStep == 4 && abUsed == false)
++		{
++			VRWindReset();
++			VRWrapOff(1);
++			VRMedkitDropOff();
++		}
++		iLuxEntity@ pHidden = m_idVRMedkitHidden != tID_Invalid ? cLux_ID_Entity(m_idVRMedkitHidden) : null;
++		cMeshEntity@ pHiddenMesh = pHidden !is null ? pHidden.GetMeshEntity() : null;
++		if(pHiddenMesh !is null && abShowHeld)
++		{
++			pHiddenMesh.SetVisible(true);
++			if(mlVRMedkitStep != 0)
++			{
++				VRMedkitSound("Shut", "player/tools/medkit/ready/focus_stop_1", 1.0f);
++				VRBuzzHand(0, 0.03f, 0.3f);
++			}
++		}
++		m_idVRMedkitHidden = tID_Invalid;
++		if(mlVRMedkitStep != 0) VRMedkitNote("shut: " + asWhy + (mbVRMedkitDrunk && abUsed == false ? " (its bottle drunk: its dressing kept for later)" : ""));
++		mlVRMedkitStep = 0;
++		mbVRMedkitFlapHeld = false;
++		mbVRMedkitCorkOut = false;
++		mfVRMedkitOpen = 0.0f;
++		mfVRMedkitDrink = 0.0f;
++		mlVRMedkitTurnsDone = 0;
++		VRMedkitHint(-1, "", cVector3f(0.0f));
++	}
++
++	// BunkerVR: the bag drops from the right hand: made anew where it is (so that the next medkit's bag is a new one),
++	// open, with its empty bottle; it falls to the floor below it (VRUpdateMedkitDrop), turning onto its back, and lies
++	// there until the next one drops or the level is left. One dropped before goes.
++	void VRMedkitDropBag(cLuxMap@ apMap)
++	{
++		iLuxEntity@ pCase = cLux_ID_Entity(m_idVRMedkitCase);
++		iLuxEntity@ pBottle = cLux_ID_Entity(m_idVRMedkitBottle);
++		if(apMap is null || pCase is null || pBottle is null) return;
++		VRMedkitDropOff();
++		cMatrixf mtxCase = pCase.GetMatrix();
++		cMatrixf mtxBottle = pBottle.GetMatrix();
++		iLuxEntity@ pDrop = VRMakeNamed(apMap, "vr_medkit_dropped", "medkit_cutscene_no_bandage.ent", mtxCase);
++		iLuxEntity@ pDropBottle = VRMakeNamed(apMap, "vr_medkit_dropped_bottle", "medkit_cutscene.ent", mtxBottle);
++		apMap.DestroyEntity(pCase);
++		apMap.DestroyEntity(pBottle);
++		m_idVRMedkitCase = tID_Invalid;
++		m_idVRMedkitBottle = tID_Invalid;
++		if(pDrop is null || pDrop.GetMeshEntity() is null || pDropBottle is null)
++		{
++			if(pDrop !is null) apMap.DestroyEntity(pDrop);
++			if(pDropBottle !is null) apMap.DestroyEntity(pDropBottle);
++			return;
++		}
++		pDrop.PlayAnimation("medkit_usage", 0.0f, false);
++		cAnimationState@ pUse = pDrop.GetMeshEntity().GetAnimationStateFromName("medkit_usage");
++		if(pUse !is null)
++		{
++			pUse.SetPaused(true);
++			pUse.SetTimePosition(gfVRMedkitOpenAt);
++		}
++		VRMedkitDrawOnly(pDrop, "m_bag", "");
++		pDropBottle.PlayAnimation("medkit_idle", 0.0f, true);
++		VRMedkitDrawOnly(pDropBottle, "m_bottle", mbVRMedkitCorkOut ? "" : "m_cork");
++		m_idVRMedkitDropCase = pDrop.GetID();
++		m_idVRMedkitDropBottle = pDropBottle.GetID();
++		m_mtxVRMedkitDropBottleIn = cMath_MatrixMul(cMath_MatrixInverse(mtxCase), mtxBottle);
++
++		// Where it comes to rest: its bag on its back (its front up, its width kept as level as it was), its back on the
++		// floor below it (gvVRMedkitBagBack under the bag's bone).
++		cMatrixf mtxBagNow = VRNoScale(mtxCase);
++		cVector3f vBagAt = mtxBagNow.GetTranslation();
++		cVector3f vAcross = cMath_MatrixMul3x3(mtxBagNow, cVector3f(1.0f, 0.0f, 0.0f));
++		vAcross.y = 0.0f;
++		if(vAcross.Length() < 0.1f) vAcross = cVector3f(1.0f, 0.0f, 0.0f);
++		cMatrixf mtxBagRest = VRFrameMatrix(cMath_Vector3Normalize(vAcross), cVector3f(0.0f, 1.0f, 0.0f));
++		float fFeet = vBagAt.y - 1.0f;
++		cLuxPlayer@ pPlayer = cLux_GetPlayer();
++		iCharacterBody@ pCharBody = pPlayer !is null ? pPlayer.GetCharacterBody() : null;
++		if(pCharBody !is null) fFeet = pCharBody.GetFeetPosition().y;
++		float fFloor = VRGroundBelow(vBagAt.x, vBagAt.z, vBagAt.y, fFeet);
++		float fPerCm = mfVRMedkitScale * 0.01f;
++		mtxBagRest.SetTranslation(cVector3f(vBagAt.x, fFloor - gvVRMedkitBagBack.y * fPerCm + 0.003f, vBagAt.z));
++		m_mtxVRMedkitDropFrom = VRNoScale(mtxCase);
++		m_mtxVRMedkitDropRest = VRNoScale(VRMedkitPartAt(cMatrixf_Identity, mtxBagRest));
++		mfVRMedkitDropFall = cMath_Sqrt(2.0f * cMath_Max(vBagAt.y - mtxBagRest.GetTranslation().y, 0.0f) / 9.8f);
++		mfVRMedkitDropTime = 0.0f;
++	}
++
++	// BunkerVR: the dropped bag falling: from where it was let go of to where it rests, as a thing falls from still
++	// (the height gone as the square of the time), turning onto its back on the way; the floor met with the bag's own
++	// sound.
++	void VRUpdateMedkitDrop(float afStep)
++	{
++		if(mfVRMedkitDropTime < 0.0f) return;
++		iLuxEntity@ pDrop = cLux_ID_Entity(m_idVRMedkitDropCase);
++		iLuxEntity@ pDropBottle = cLux_ID_Entity(m_idVRMedkitDropBottle);
++		if(pDrop is null || pDropBottle is null)
++		{
++			mfVRMedkitDropTime = -1.0f;
++			return;
++		}
++		mfVRMedkitDropTime += afStep;
++		float fT = mfVRMedkitDropFall > 0.01f ? cMath_Min(mfVRMedkitDropTime / mfVRMedkitDropFall, 1.0f) : 1.0f;
++		cMatrixf mtxNow = VRBlendBone(m_mtxVRMedkitDropFrom, m_mtxVRMedkitDropRest, BunkerVR_SmoothStep(0.0f, 1.0f, fT));
++		mtxNow.SetTranslation(m_mtxVRMedkitDropFrom.GetTranslation() + (m_mtxVRMedkitDropRest.GetTranslation() - m_mtxVRMedkitDropFrom.GetTranslation()) * (fT * fT));
++		cMatrixf mtxDrawn = cMath_MatrixMul(mtxNow, cMath_MatrixScale(cVector3f(mfVRMedkitScale)));
++		pDrop.SetMatrix(mtxDrawn);
++		pDropBottle.SetMatrix(cMath_MatrixMul(mtxDrawn, m_mtxVRMedkitDropBottleIn));
++		if(fT < 1.0f) return;
++		mfVRMedkitDropTime = -1.0f;
++		Sound_CreateAtEntity("BunkerVR_MedkitDropped", "player/foley/action/pickup/med_kit", pDrop.GetName(), 0.0f, false);
++		VRMedkitNote("the bag fell to the floor");
++	}
++
++	// BunkerVR: a dropped bag (and its bottle) gone.
++	void VRMedkitDropOff()
++	{
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		array<tID> vParts = { m_idVRMedkitDropCase, m_idVRMedkitDropBottle };
++		for(uint i = 0; i < vParts.length(); ++i)
++		{
++			iLuxEntity@ pPart = vParts[i] != tID_Invalid ? cLux_ID_Entity(vParts[i]) : null;
++			if(pPart !is null && pMap !is null) pMap.DestroyEntity(pPart);
++		}
++		m_idVRMedkitDropCase = tID_Invalid;
++		m_idVRMedkitDropBottle = tID_Invalid;
++		mfVRMedkitDropTime = -1.0f;
++	}
++
++	// BunkerVR: a part of the medkit or of the dressing made, named so that leaving the level takes it away
++	// (PlayerBodyHandler.hps VRMadeThingsAtLeave); one left by that name goes first. Kept out of saves: the game saves
++	// what scripts make, and a part saved where a hand or an arm was would come back hanging there after a load, with
++	// nothing left to move it (PlayerBodyHandler.hps also clears any found as a level is entered).
++	iLuxEntity@ VRMakeNamed(cLuxMap@ apMap, const tString &in asName, const tString &in asFile, const cMatrixf &in a_mtx)
++	{
++		iLuxEntity@ pOld = apMap.GetEntityByName(asName);
++		if(pOld !is null) apMap.DestroyEntity(pOld);
++		apMap.ResetLatestEntity();
++		apMap.CreateEntity(asName, asFile, a_mtx, cVector3f(1.0f));
++		iLuxEntity@ pMade = apMap.GetLatestEntity();
++		if(pMade is null || pMade.GetName() != asName) return null;
++		pMade.SetScriptableIsSaved(false);
++		return pMade;
++	}
++
++	// BunkerVR: only these parts of a copy of the medkit's model drawn ("" for none).
++	void VRMedkitDrawOnly(iLuxEntity@ apCopy, const tString &in asPart, const tString &in asPartToo)
++	{
++		cMeshEntity@ pMesh = apCopy !is null ? apCopy.GetMeshEntity() : null;
++		if(pMesh is null) return;
++		array<tString> vParts = { "m_bandage_roll", "m_bandage", "m_bottle", "m_cork", "m_bag" };
++		for(uint i = 0; i < vParts.length(); ++i)
++		{
++			cSubMeshEntity@ pPart = pMesh.GetSubMeshEntityName(vParts[i]);
++			if(pPart !is null) pPart.SetVisible(vParts[i] == asPart || vParts[i] == asPartToo);
++		}
++	}
++
++	// BunkerVR: where a bone of the medkit lies in its model as drawn: its place and turn from the model's own
++	// (a_mtxToModel: the inverse of the model's place and turn), without the model's scale.
++	cMatrixf VRMedkitBoneIn(cMeshEntity@ apMesh, const tString &in asBone, const cMatrixf &in a_mtxToModel)
++	{
++		cBoneState@ pBone = apMesh.GetBoneStateFromName(asBone);
++		if(pBone is null) return cMatrixf_Identity;
++		return cMath_MatrixMul(a_mtxToModel, VRNoScale(pBone.GetWorldMatrix()));
++	}
++
++	// BunkerVR: where a copy of the medkit's model goes for its part (lying at a_mtxPartIn in the model) to be at
++	// a_mtxPart in the world, drawn as big as the hand held the medkit.
++	cMatrixf VRMedkitPartAt(const cMatrixf &in a_mtxPartIn, const cMatrixf &in a_mtxPart)
++	{
++		return cMath_MatrixMul(cMath_MatrixMul(a_mtxPart, cMath_MatrixInverse(a_mtxPartIn)), cMath_MatrixScale(cVector3f(mfVRMedkitScale)));
++	}
++
++	// BunkerVR: a part of the medkit in the world as its copy draws it: its bone, afUpCm centimetres up its own y (the
++	// bottle's middle: half-way up its 12 cm).
++	cVector3f VRMedkitPartMiddle(iLuxEntity@ apCopy, const tString &in asBone, float afUpCm)
++	{
++		cMeshEntity@ pMesh = apCopy !is null ? apCopy.GetMeshEntity() : null;
++		cBoneState@ pBone = pMesh !is null ? pMesh.GetBoneStateFromName(asBone) : null;
++		if(pBone is null) return apCopy !is null ? apCopy.GetPosition() : cVector3f(0.0f);
++		cVector3f vUp = cMath_Vector3Normalize(cMath_MatrixMul3x3(pBone.GetWorldMatrix(), cVector3f(0.0f, 1.0f, 0.0f)));
++		return pBone.GetWorldPosition() + vUp * (afUpCm * 0.01f * mfVRMedkitScale);
++	}
++
++	// BunkerVR: the bottle's base as the left hand holds it: "The medkit's bottle" in the hand poses tool if it has a
++	// placement there (VRAskPlacement), otherwise its line (the bone's y) along the palm's y, gvVRMedkitBottleGrip from
++	// the palm.
++	cMatrixf VRMedkitBottleHeld(float afBig)
++	{
++		if(mbVRMedkitBottleGrip) return cMath_MatrixMul(m_mtxVRPalmLeft, m_mtxVRMedkitBottleGrip);
++		cMatrixf mtxGrip = cMatrixf_Identity;
++		mtxGrip.SetTranslation(gvVRMedkitBottleGrip * afBig);
++		return cMath_MatrixMul(m_mtxVRPalmLeft, mtxGrip);
++	}
++
++	// BunkerVR: the dressing's roll as the left hand holds it: "The medkit's dressing roll" if it has a placement,
++	// otherwise its axle (the bone's z, about which the game's own use unrolls it) along the palm's y.
++	cMatrixf VRMedkitRollHeld(float afBig)
++	{
++		if(mbVRMedkitRollGrip) return cMath_MatrixMul(m_mtxVRPalmLeft, m_mtxVRMedkitRollGrip);
++		cMatrixf mtxGrip = VRFrameMatrix(cVector3f(1.0f, 0.0f, 0.0f), cVector3f(0.0f, 0.0f, -1.0f));
++		mtxGrip.SetTranslation(gvVRMedkitRollGrip * afBig);
++		return cMath_MatrixMul(m_mtxVRPalmLeft, mtxGrip);
++	}
++
++	// BunkerVR: where the bottle or the dressing is in the left hand, told to the mod while its pose is being set and
++	// has no placement of its own yet (as VRPlaceHeldByGrip does for a held item: rolls 7086 .. 7088), so that one
++	// starts from there: its place and its own z and y in the palm's terms.
++	void VRMedkitSendGrip(const cVector3f &in avAt, const cMatrixf &in a_mtxTurn)
++	{
++		VRSendGripNews(7086, avAt);
++		VRSendGripNews(7087, cMath_Vector3Normalize(cMath_MatrixMul3x3(a_mtxTurn, cVector3f(0.0f, 0.0f, 1.0f))));
++		VRSendGripNews(7088, cMath_Vector3Normalize(cMath_MatrixMul3x3(a_mtxTurn, cVector3f(0.0f, 1.0f, 0.0f))));
++	}
++
++	// BunkerVR: a matrix's place and turn, without its scale.
++	cMatrixf VRNoScale(const cMatrixf &in a_mtx)
++	{
++		cMatrixf mtxOut = VRFrameMatrix(cMath_Vector3Normalize(cMath_MatrixMul3x3(a_mtx, cVector3f(1.0f, 0.0f, 0.0f))),
++										cMath_Vector3Normalize(cMath_MatrixMul3x3(a_mtx, cVector3f(0.0f, 1.0f, 0.0f))));
++		mtxOut.SetTranslation(a_mtx.GetTranslation());
++		return mtxOut;
++	}
++
++	// BunkerVR: the thing attached to a hand's socket ("R_Hand", "L_Hand"), or null.
++	iLuxEntity@ VRInHandSocket(const tString &in asSocket)
++	{
++		for(uint i = 0; i < mvSocketAttachments.length(); i++)
++		{
++			if(mvSocketAttachments[i].msSocket != asSocket || mvSocketAttachments[i].m_idEntity == tID_Invalid) continue;
++			iLuxEntity@ pProp = cLux_ID_Entity(mvSocketAttachments[i].m_idEntity);
++			if(pProp !is null) return pProp;
++		}
++		return null;
++	}
++
++	// BunkerVR: a question to the health item's own script (PlayerState_UsingHealthItem.hps), its yes or no.
++	bool VRMedkitAsk(const tString &in asFunction)
++	{
++		cScript_SetGlobalReturnBool(false);
++		if(cScript_RunGlobalFunc("State_UsingHealthItem", "", asFunction) == false) return false;
++		return cScript_GetGlobalReturnBool();
++	}
++
++	// BunkerVR: the hint the medkit asks of a hand now (-1: none), and where: read
++	// by the hints (PlayerBodyHandler.hps VRHintsForItem) within a quarter of a second.
++	void VRMedkitHint(int alHand, const tString &in asKey, const cVector3f &in avAt)
++	{
++		cScript_SetGlobalVarInt("BunkerVR_MedkitHintHand", alHand);
++		cScript_SetGlobalVarString("BunkerVR_MedkitHint", alHand >= 0 ? asKey : "");
++		cScript_SetGlobalVarVector3f("BunkerVR_MedkitHintAt", avAt);
++		cScript_SetGlobalVarFloat("BunkerVR_MedkitHintTime", float(cEngine_GetGameTime()));
++	}
++
++	// BunkerVR: the part of the medkit to take next (alPart: 0 its bag, by its flap; 1 its bottle; 2 its dressing, apMesh
++	// the model drawing it), shown while its hint would show (asHint: the Interaction Hints setting, and until it has
++	// been learned). It glows softly with the game's own pickup glow (HighlightEffectHandler.hps), rising and falling
++	// (gfVRMedkitGlowRise, gfVRMedkitGlowFall), then a rest, and the left hand coming within its reach (abNear) ticks, as
++	// at the places on the body. Wanted again each update (VRUpdateMedkit clears it first): an update without it ends the
++	// glow, and a part that becomes the next one starts its glow afresh. A hand already within reach as the part changes
++	// ticks only once it has left and come back.
++	void VRMedkitCue(int alPart, const tString &in asHint, cMeshEntity@ apMesh, bool abNear, float afStep)
++	{
++		if(apMesh is null || cVR_HintWanted(asHint) == false) return;
++		bool bSamePart = alPart == mlVRMedkitCuePartWas;
++		mlVRMedkitCuePart = alPart;
++		mbVRMedkitCueNear = abNear;
++		if(bSamePart == false) VRMedkitNote((alPart == 0 ? "its flap" : (alPart == 1 ? "its bottle" : "its dressing")) + " glints: the part to take next");
++
++		double fNow = cEngine_GetGameTime();
++		if(abNear && bSamePart && mbVRMedkitCueNearWas == false && (mfVRMedkitTickAt < 0.0 || fNow - mfVRMedkitTickAt >= gfVRMedkitReachTickGap))
++		{
++			VRBuzzHand(0, 0.015f, 0.25f);
++			mfVRMedkitTickAt = fNow;
++		}
++
++		// The glow: its strength rising and falling, eased, then a rest. The pickups' own glow sweeps its band (afY, 0
++		// to 1) over a thing; held at the middle (0.5) the band covers the whole part, so the part glows evenly.
++		float fRound = gfVRMedkitGlowRise + gfVRMedkitGlowFall + gfVRMedkitGlowRest;
++		mfVRMedkitGlow = bSamePart ? mfVRMedkitGlow + afStep : 0.0f;
++		if(mfVRMedkitGlow >= fRound) mfVRMedkitGlow -= fRound;
++		float fUp = mfVRMedkitGlow < gfVRMedkitGlowRise ? mfVRMedkitGlow / gfVRMedkitGlowRise
++													 : 1.0f - (mfVRMedkitGlow - gfVRMedkitGlowRise) / gfVRMedkitGlowFall;
++		if(fUp <= 0.0f) return;
++		cColor glowColor = gVRMedkitGlowColor;
++		glowColor.a = gfVRMedkitGlowMost * cMath_Easing(eEasing_SineInOut, fUp);
++		float fY = 0.5f;
++		array<tString> vParts;
++		if(alPart == 0) vParts.push_back("m_bag");
++		else if(alPart == 1) vParts.push_back("m_bottle");
++		else
++		{
++			vParts.push_back("m_bandage_roll");
++			vParts.push_back("m_bandage");
++		}
++		cLuxEffectHandler@ pEffects = cLux_GetEffectHandler();
++		for(uint i = 0; i < vParts.length(); ++i)
++		{
++			cSubMeshEntity@ pPart = apMesh.GetSubMeshEntityName(vParts[i]);
++			if(pPart !is null) pEffects.AddGlowObject(pPart, glowColor, fY);
++		}
++	}
++
++	// BunkerVR: a sound of the medkit's, heard as the player's own (where the mod's other hand sounds are played: the
++	// player's own sounds are made for that, not for the parts the mod draws).
++	void VRMedkitSound(const tString &in asName, const tString &in asSound, float afVolume)
++	{
++		Sound_CreateAtEntity("BunkerVR_Medkit" + asName, asSound, "player", 0.0f, false, afVolume);
++	}
++
++	// BunkerVR: the liquid heard while the bottle is drunk from (gsVRMedkitDrinkSound), stopped as it leaves the lips.
++	void VRMedkitDrinkSound(bool abOn)
++	{
++		if(abOn == mbVRMedkitDrinkHeard) return;
++		mbVRMedkitDrinkHeard = abOn;
++		if(abOn) Sound_CreateAtEntity("BunkerVR_MedkitDrink", gsVRMedkitDrinkSound, "player", 0.1f, false, 0.8f);
++		else Sound_Stop("BunkerVR_MedkitDrink", 0.2f);
++	}
++
++	// BunkerVR, for testing (the stand-in headset's script 97): where the medkit and its parts are, into the mod's log:
++	// its step and what has been done; the bag's bone; the flap's edge as far as it is lifted, and the way it lifts; the bottle's and the
++	// dressing's bones (their copies', or else the held medkit's); the bottle's opening and its neck (from its base,
++	// one long) in the hand; the mouth; the right forearm's line; the wrap on each forearm; the bag dropped; where the
++	// bottle and the dressing lie in the closed bag (in the bag's own terms, centimetres); the open bag's own bone and
++	// the held medkit's place; and how many pieces of the cloth to a roll are drawn.
++	void VRMedkitReport(cMeshEntity@ apBody, cMeshEntity@ apHeldMesh)
++	{
++		float fBig = VRBodyBig();
++		cVector3f vKit = cVector3f(0.0f);
++		cVector3f vFlap = cVector3f(0.0f);
++		cVector3f vLift = cVector3f(0.0f);
++		cVector3f vBottleIn = cVector3f(0.0f);
++		cVector3f vRollIn = cVector3f(0.0f);
++		cBoneState@ pKitBone = apHeldMesh !is null ? apHeldMesh.GetBoneStateFromName("j_FirstAidKit_Bag") : null;
++		if(pKitBone !is null)
++		{
++			cMatrixf mtxBag = VRNoScale(pKitBone.GetWorldMatrix());
++			float fPerCm = cMath_MatrixMul3x3(pKitBone.GetWorldMatrix(), cVector3f(1.0f, 0.0f, 0.0f)).Length();
++			vKit = mtxBag.GetTranslation();
++			vLift = cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxBag, gvVRMedkitFlapUp));
++			vFlap = cMath_MatrixMul(mtxBag, gvVRMedkitFlapAt * fPerCm) + vLift * (mfVRMedkitOpen * gfVRMedkitFlapLift * fBig);
++			cMatrixf mtxToBag = cMath_MatrixInverse(mtxBag);
++			cBoneState@ pB = apHeldMesh.GetBoneStateFromName("j_bottle");
++			cBoneState@ pR = apHeldMesh.GetBoneStateFromName("j_Bandage_Roll");
++			if(pB !is null && fPerCm > 0.0001f) vBottleIn = cMath_MatrixMul(mtxToBag, pB.GetWorldPosition()) * (1.0f / fPerCm);
++			if(pR !is null && fPerCm > 0.0001f) vRollIn = cMath_MatrixMul(mtxToBag, pR.GetWorldPosition()) * (1.0f / fPerCm);
++		}
++		iLuxEntity@ pBottle = cLux_ID_Entity(m_idVRMedkitBottle);
++		iLuxEntity@ pRoll = cLux_ID_Entity(m_idVRMedkitRoll);
++		cVector3f vBottle = pBottle !is null ? VRMedkitPartMiddle(pBottle, "j_bottle", 6.0f) : cVector3f(0.0f);
++		cVector3f vRoll = pRoll !is null ? VRMedkitPartMiddle(pRoll, "j_Bandage_Roll", 0.0f) : cVector3f(0.0f);
++		cVector3f vOpening = cVector3f(0.0f);
++		cVector3f vNeck = cVector3f(0.0f);
++		cBoneState@ pCork = pBottle !is null && pBottle.GetMeshEntity() !is null ? pBottle.GetMeshEntity().GetBoneStateFromName("j_cork") : null;
++		cBoneState@ pBottleBase = pBottle !is null && pBottle.GetMeshEntity() !is null ? pBottle.GetMeshEntity().GetBoneStateFromName("j_bottle") : null;
++		if(pCork !is null) vOpening = pCork.GetWorldPosition();
++		if(pCork !is null && pBottleBase !is null) vNeck = cMath_Vector3Normalize(vOpening - pBottleBase.GetWorldPosition());
++		cVector3f vWrist, vAxis, vU, vV;
++		float fForearm;
++		VRForearm(apBody, false, vWrist, vAxis, fForearm, vU, vV);
++		cVector3f vElbow = vWrist + vAxis * fForearm;
++		cVector3f vMouth = mbVRHeadKnown ? BunkerVR_Mouth(m_mtxVRHead, fBig) : cVector3f(0.0f);
++		VRWrapReady();
++		iLuxEntity@ pDrop = cLux_ID_Entity(m_idVRMedkitDropCase);
++		cVector3f vDrop = pDrop !is null ? pDrop.GetPosition() : cVector3f(0.0f);
++		iLuxEntity@ pCaseNow = cLux_ID_Entity(m_idVRMedkitCase);
++		cBoneState@ pCaseBag = pCaseNow !is null && pCaseNow.GetMeshEntity() !is null ? pCaseNow.GetMeshEntity().GetBoneStateFromName("j_FirstAidKit_Bag") : null;
++		cVector3f vCaseBag = pCaseBag !is null ? pCaseBag.GetWorldPosition() : cVector3f(0.0f);
++		cVector3f vHeldAt = apHeldMesh !is null ? apHeldMesh.GetWorldMatrix().GetTranslation() : cVector3f(0.0f);
++		// (The bottle's and the roll's bones in the left palm's terms: where "The medkit's bottle" and "The medkit's dressing
++		// roll" put them.)
++		cMatrixf mtxToPalm = cMath_MatrixInverse(VRNoScale(m_mtxVRPalmLeft));
++		cVector3f vBottleBone = cMath_MatrixMul(mtxToPalm, pBottleBase !is null ? pBottleBase.GetWorldPosition() : cVector3f(0.0f));
++		cBoneState@ pRollBone = pRoll !is null && pRoll.GetMeshEntity() !is null ? pRoll.GetMeshEntity().GetBoneStateFromName("j_Bandage_Roll") : null;
++		cVector3f vRollBone = cMath_MatrixMul(mtxToPalm, pRollBone !is null ? pRollBone.GetWorldPosition() : cVector3f(0.0f));
++		// (The right hand's own bones in the right palm's terms, as the bag is held: where its fingers are, to fit a
++		// placement of the bag to them.)
++		cMatrixf mtxToRightPalm = cMath_MatrixInverse(VRNoScale(m_mtxVRPalmRight));
++		tString sRightHand = "";
++		for(uint i = 0; i < gvVRGunHandBones.length() && apBody !is null; ++i)
++		{
++			cBoneState@ pFinger = apBody.GetBoneStateFromName(gvVRGunHandBones[i]);
++			if(pFinger !is null) sRightHand += (sRightHand == "" ? "" : " ") + VRCmText(cMath_MatrixMul(mtxToRightPalm, pFinger.GetWorldPosition()));
++		}
++		int lPiecesShown = 0;
++		for(uint i = 0; i < mvVRBandagePieces.length(); ++i)
++		{
++			iLuxEntity@ pPiece = mvVRBandagePieces[i] != tID_Invalid ? cLux_ID_Entity(mvVRBandagePieces[i]) : null;
++			if(pPiece !is null && pPiece.GetMeshEntity() !is null && pPiece.GetMeshEntity().IsVisible()) lPiecesShown++;
++		}
++		cVR_Say("medkit report: step " + mlVRMedkitStep + ", drunk " + (mbVRMedkitDrunk ? 1 : 0) + ", cork out " + (mbVRMedkitCorkOut ? 1 : 0) +
++				", open " + int(mfVRMedkitOpen * 100.0f) + "%, drunk for " + int(mfVRMedkitDrink * 1000.0f) + " ms, wrapped " +
++				int(cMath_Abs(mfVRWindTurned) / cMath_PiMul2 * 100.0f) + "/100 turns, wrap left " + mvVRWrapState[0] + " right " + mvVRWrapState[1] +
++				", dropped " + (pDrop !is null ? 1 : 0) + (mfVRMedkitDropTime >= 0.0f ? " falling" : " still") + ", health " + VRMedkitHealth(Player_GetHealth()) +
++				"; kit " + vKit.x + " " + vKit.y + " " + vKit.z + "; flap " + vFlap.x + " " + vFlap.y + " " + vFlap.z + ", lifting " + vLift.x + " " + vLift.y + " " + vLift.z +
++				"; bottle " + vBottle.x + " " + vBottle.y + " " + vBottle.z + "; roll " + vRoll.x + " " + vRoll.y + " " + vRoll.z +
++				"; opening " + vOpening.x + " " + vOpening.y + " " + vOpening.z + "; neck " + vNeck.x + " " + vNeck.y + " " + vNeck.z +
++				"; mouth " + vMouth.x + " " + vMouth.y + " " + vMouth.z + "; wrist " + vWrist.x + " " + vWrist.y + " " + vWrist.z +
++				"; elbow " + vElbow.x + " " + vElbow.y + " " + vElbow.z + "; dropped at " + vDrop.x + " " + vDrop.y + " " + vDrop.z +
++				"; in the bag: bottle " + vBottleIn.x + " " + vBottleIn.y + " " + vBottleIn.z + ", roll " + vRollIn.x + " " + vRollIn.y + " " + vRollIn.z +
++				"; the open bag's bone " + vCaseBag.x + " " + vCaseBag.y + " " + vCaseBag.z + "; the held one at " + vHeldAt.x + " " + vHeldAt.y + " " + vHeldAt.z +
++				"; cloth pieces shown " + lPiecesShown +
++				"; in the left palm, cm: the bottle's bone " + VRCm(vBottleBone) + ", the roll's bone " + VRCm(vRollBone));
++		// (On a line of its own: the report's line is already as long as a line in the mod's log may be. The bones of
++		// gvVRGunHandBones in turn: the hand's socket, then the thumb's three and the fingers' four each.)
++		cVR_Say("medkit report, the right hand in its palm, cm: " + sRightHand);
++	}
++
++	// BunkerVR, for testing: a place in centimetres, "x y z" to a tenth.
++	tString VRCm(const cVector3f &in avAt)
++	{
++		return "" + (int(avAt.x * 1000.0f) / 10.0f) + " " + (int(avAt.y * 1000.0f) / 10.0f) + " " + (int(avAt.z * 1000.0f) / 10.0f);
++	}
++
++	// BunkerVR: a health in words for the notes ("0.62").
++	tString VRMedkitHealth(float afHealth)
++	{
++		int lHundredths = int(cMath_Clamp(afHealth, 0.0f, 1.0f) * 100.0f + 0.5f);
++		return "" + (lHundredths / 100) + "." + (lHundredths % 100 < 10 ? "0" : "") + (lHundredths % 100);
++	}
++
++	// BunkerVR: a "BunkerVR medkit:" line in hpl.log and the mod's log (the first 80).
++	void VRMedkitNote(const tString &in asText)
++	{
++		if(mlVRMedkitNotes >= 80) return;
++		mlVRMedkitNotes++;
++		Log("BunkerVR medkit: " + asText + "\n");
++		cVR_Say("medkit: " + asText);
++	}
++
++	//------------------------------------------------------------
++
++	// BunkerVR: winding a dressing on (a bandage's, or the medkit's).
++	//
++	// The hand that winds is followed round a forearm (VRWindFollow): where it first comes to the arm the cloth's end is
++	// laid on, and how far round it has gone since is how far the cloth is wound. The wound cloth is the dressing's own
++	// model (make_dressing.ps1) in slices of an eighth of a turn, each shown once the cloth has gone past it, and the
++	// rest of the slice being wound in flat pieces of the same cloth, then a run of them through the air to the roll in
++	// the hand (VRWrapStrip): so it looks the same as it goes on as once it is on. Once it heals, the rest of the
++	// dressing winds itself on (gfVRWrapTuckTime), and the slices give way to the whole model (the same, made of them).
++	// It stays on until a new dressing for that arm is taken out (a bandage pulled open, a medkit's dressing taken from
++	// its bag) or the level is left. One for each forearm (0 left: the bandage's, 1 right: the medkit's).
++
++	// BunkerVR: the hand winding (at avHand) followed round a forearm (alArm: 0 left, 1 right; its line from avLine
++	// along avAxis, afForearm long, avU and avV across it; afArm the cloth's radius about it). The cloth's end is laid on
++	// the arm where the hand first comes within 16 cm of its line (30 feels too far off), and the wrap started there
++	// (VRWrapStart); once on, the hand may be out to 30 cm. Then how far round the hand has gone (mfVRWindTurned, either
++	// way) and how much of that the cloth has followed (mfVRWindWound: it leaves the arm where a straight line from the
++	// hand just touches it, behind the hand by an angle that grows with the hand's distance). True while the hand is at
++	// the arm.
++	bool VRWindFollow(int alArm, const cVector3f &in avHand, const cVector3f &in avLine, const cVector3f &in avAxis, float afForearm,
++					  const cVector3f &in avU, const cVector3f &in avV, float afArm, float afBig)
++	{
++		cVector3f vRel = avHand - avLine;
++		float fAlong = cMath_Vector3Dot(vRel, avAxis);
++		cVector3f vOut = vRel - avAxis * fAlong;
++		float fHandDist = vOut.Length();
++		float fX = cMath_Vector3Dot(vOut, avU);
++		float fY = cMath_Vector3Dot(vOut, avV);
++		float fAngle = cMath_ATan2(fY, fX);
++		// (Should the math library take those two the other way round.)
++		if(cMath_Abs(cMath_Cos(fAngle) * fHandDist - fX) + cMath_Abs(cMath_Sin(fAngle) * fHandDist - fY) > 0.2f * fHandDist)
++			fAngle = cMath_ATan2(fX, fY);
++		float fReach = mbVRWindAnchored ? 0.30f : 0.16f;
++		bool bAtArm = fAlong > -0.08f * afBig && fAlong < afForearm + 0.05f * afBig && fHandDist > 0.02f * afBig && fHandDist < fReach * afBig;
++		if(bAtArm == false)
++		{
++			mbVRWindHadAngle = false;
++			return false;
++		}
++		if(mbVRWindAnchored == false)
++		{
++			mbVRWindAnchored = true;
++			mfVRWindTurned = 0.0f;
++			VRWrapStart(alArm, fAngle);
++		}
++		else if(mbVRWindHadAngle)
++		{
++			float fStep = fAngle - mfVRWindLastAngle;
++			if(fStep > cMath_Pi) fStep -= cMath_PiMul2;
++			if(fStep < -cMath_Pi) fStep += cMath_PiMul2;
++			if(cMath_Abs(fStep) < 1.2f) mfVRWindTurned += fStep; // a bigger jump is a tracking slip
++		}
++		mfVRWindLastAngle = fAngle;
++		mbVRWindHadAngle = true;
++		float fBehind = fHandDist > afArm ? cMath_ACos(afArm / fHandDist) : 0.0f;
++		mfVRWindWound = cMath_Max(0.0f, cMath_Abs(mfVRWindTurned) - fBehind);
++		mfVRWindWay = mfVRWindTurned < 0.0f ? -1.0f : 1.0f;
++		return true;
++	}
++
++	// BunkerVR: the winding followed from nothing again.
++	void VRWindReset()
++	{
++		mbVRWindAnchored = false;
++		mbVRWindHadAngle = false;
++		mfVRWindTurned = 0.0f;
++		mfVRWindWound = 0.0f;
++		mfVRWindWay = 1.0f;
++	}
++
++	// BunkerVR: the wraps' state, one for each forearm, made when first wanted.
++	void VRWrapReady()
++	{
++		if(mvVRWrapState.length() >= 2) return;
++		mvVRWrapState.resize(2);
++		mvVRWrapStart.resize(2);
++		mvVRWrapShown.resize(2);
++		mvVRWrapSet.resize(2);
++		mvVRWrapWhole.resize(2);
++		mvVRWrapMap.resize(2);
++		mvVRWrapSlices.resize(2 * glVRWrapSlices);
++		for(int i = 0; i < 2; ++i)
++		{
++			mvVRWrapState[i] = 0;
++			mvVRWrapStart[i] = 0.0f;
++			mvVRWrapShown[i] = 0.0f;
++			mvVRWrapSet[i] = 1;
++			mvVRWrapWhole[i] = tID_Invalid;
++			mvVRWrapMap[i] = "";
++		}
++		for(int i = 0; i < 2 * glVRWrapSlices; ++i) mvVRWrapSlices[i] = tID_Invalid;
++	}
++
++	// BunkerVR: a wrap begun on a forearm, its cloth's end laid on at afStart round it (radians, as VRForearm's
++	// directions across it). Whatever was on that arm comes off.
++	void VRWrapStart(int alArm, float afStart)
++	{
++		VRWrapOff(alArm);
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		mvVRWrapState[alArm] = 1;
++		mvVRWrapStart[alArm] = afStart;
++		mvVRWrapShown[alArm] = 0.0f;
++		mvVRWrapSet[alArm] = 1;
++		mvVRWrapMap[alArm] = pMap !is null ? pMap.GetName() : "";
++	}
++
++	// BunkerVR: how far round a wrap's cloth has gone (afShown, radians), and which way (afWay: the slices of the
++	// dressing's own model wound that way, its "b" one way and its "a" the other: make_dressing.ps1). The cloth heard
++	// at each quarter turn.
++	void VRWrapSet(int alArm, float afShown, float afWay)
++	{
++		VRWrapReady();
++		if(mvVRWrapState[alArm] != 1) return;
++		int lSet = afWay < 0.0f ? 0 : 1;
++		if(lSet != mvVRWrapSet[alArm])
++		{
++			VRWrapSlicesOff(alArm); // (it turned the other way round: the other slices)
++			mvVRWrapSet[alArm] = lSet;
++		}
++		float fShown = cMath_Clamp(afShown, 0.0f, float(glVRWrapSlices) * gfVRWrapSliceTurn);
++		int lQuarter = int(fShown / (cMath_Pi * 0.5f));
++		if(lQuarter > int(mvVRWrapShown[alArm] / (cMath_Pi * 0.5f)))
++			Sound_CreateAtEntity("BunkerVR_WrapCloth", "player/tools/bandage/ready/focus_start_" + (1 + lQuarter % 4), "player", 0.0f, false, 0.8f);
++		mvVRWrapShown[alArm] = fShown;
++	}
++
++	// BunkerVR: a wrap healed: the rest of it winds itself on, then it is the whole dressing.
++	void VRWrapFinish(int alArm)
++	{
++		VRWrapReady();
++		if(mvVRWrapState[alArm] == 1) mvVRWrapState[alArm] = 2;
++	}
++
++	// BunkerVR: a forearm's wrap off: its slices and its whole dressing gone.
++	void VRWrapOff(int alArm)
++	{
++		VRWrapReady();
++		VRWrapSlicesOff(alArm);
++		iLuxEntity@ pWhole = mvVRWrapWhole[alArm] != tID_Invalid ? cLux_ID_Entity(mvVRWrapWhole[alArm]) : null;
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		if(pWhole !is null && pMap !is null) pMap.DestroyEntity(pWhole);
++		mvVRWrapWhole[alArm] = tID_Invalid;
++		mvVRWrapState[alArm] = 0;
++		mvVRWrapShown[alArm] = 0.0f;
++	}
++
++	// BunkerVR: a wrap's slices gone.
++	void VRWrapSlicesOff(int alArm)
++	{
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		for(int k = 0; k < glVRWrapSlices; ++k)
++		{
++			int i = alArm * glVRWrapSlices + k;
++			iLuxEntity@ pSlice = mvVRWrapSlices[i] != tID_Invalid ? cLux_ID_Entity(mvVRWrapSlices[i]) : null;
++			if(pSlice !is null && pMap !is null) pMap.DestroyEntity(pSlice);
++			mvVRWrapSlices[i] = tID_Invalid;
++		}
++	}
++
++	// BunkerVR: where a forearm's wrap goes (a_mtx: its model's X out to where the cloth starts, its Y along the arm
++	// from gfVRDressingFrom past the wrist, round the arm's line moved across as the Bandage page sets it for the left;
++	// afScale: the model's size, to the arm's thickness as that page sets it). False without the arm's bones.
++	bool VRWrapFrame(cMeshEntity@ apBody, int alArm, cMatrixf &out a_mtx, float &out afScale)
++	{
++		a_mtx = cMatrixf_Identity;
++		afScale = 1.0f;
++		cVector3f vWrist, vAxis, vU, vV;
++		float fForearm;
++		if(VRForearm(apBody, alArm == 0, vWrist, vAxis, fForearm, vU, vV) == false) return false;
++		cLuxPlayer@ pPlayer = cLux_GetPlayer();
++		float fRadius, fShiftA, fShiftB;
++		VRForearmSettings(pPlayer !is null ? pPlayer.GetCamera() : null, fRadius, fShiftA, fShiftB);
++		if(alArm != 0)
++		{
++			// (The page's numbers are the left sleeve's.)
++			fShiftA = 0.0f;
++			fShiftB = 0.0f;
++		}
++		float fBig = VRBodyBig();
++		float fFrom = gfVRDressingFrom;
++		float fSize = 1.0f;
++		if(cScript_GetGlobalVarBool("BunkerVR_MedkitTryOn"))
++		{
++			// (A test's try: its size and place along the arm, worked out with the stand-in headset: script 98.)
++			cVector3f vTry = cScript_GetGlobalVarVector3f("BunkerVR_MedkitTryDressing");
++			fSize = vTry.x;
++			fFrom = vTry.y;
++		}
++		float fStart = mvVRWrapStart[alArm];
++		a_mtx = VRFrameMatrix(vU * cMath_Cos(fStart) + vV * cMath_Sin(fStart), vAxis);
++		a_mtx.SetTranslation(vWrist + (vU * fShiftA + vV * fShiftB) * fBig + vAxis * (fFrom * fBig));
++		afScale = (fRadius + 0.006f) * fBig / gfVRDressingRadius * fSize;
++		return true;
++	}
++
++	// BunkerVR: the middle of the dressing's cloth afAt round from where it starts (radians), in its model's terms, as
++	// make_dressing.ps1 winds it (up the arm by its pitch for its rising turns, then level; out by its layer over the
++	// turn under it, and a little for the arm's thickening); which way the cloth runs there (avAhead) and out of it
++	// (avOut). alSet 1: the model wound the other way (its Z turned round).
++	cVector3f VRWrapPoint(float afAt, int alSet, cVector3f &out avAhead, cVector3f &out avOut)
++	{
++		float fRising = cMath_PiMul2 * gfVRDressingRisingTurns;
++		float fY = gfVRDressingWidth * 0.5f + gfVRDressingPitch * cMath_Min(afAt, fRising) / cMath_PiMul2;
++		float fR = gfVRDressingRadius + (afAt >= cMath_PiMul2 ? gfVRDressingLayer : 0.0f) + 0.06f * fY;
++		float fZ = alSet == 1 ? -1.0f : 1.0f;
++		float fRise = afAt < fRising ? gfVRDressingPitch / cMath_PiMul2 : 0.0f;
++		float fCos = cMath_Cos(afAt);
++		float fSin = cMath_Sin(afAt);
++		avOut = cVector3f(fCos, 0.0f, fZ * fSin);
++		avAhead = cMath_Vector3Normalize(cVector3f(-fR * fSin, fRise, fZ * fR * fCos));
++		return cVector3f(fR * fCos, fY, fZ * fR * fSin);
++	}
++
++	// BunkerVR: where a forearm's wrap's shown cloth ends, in the world, which way it runs on (avAhead) and out of the
++	// arm (avOut). False if there is none being wound.
++	bool VRWrapEnd(cMeshEntity@ apBody, int alArm, cVector3f &out avAt, cVector3f &out avAhead, cVector3f &out avOut)
++	{
++		avAt = cVector3f(0.0f);
++		avAhead = cVector3f(0.0f, 1.0f, 0.0f);
++		avOut = cVector3f(1.0f, 0.0f, 0.0f);
++		VRWrapReady();
++		if(mvVRWrapState[alArm] != 1) return false;
++		cMatrixf mtxWrap;
++		float fScale;
++		if(VRWrapFrame(apBody, alArm, mtxWrap, fScale) == false) return false;
++		cVector3f vAhead, vOut;
++		cVector3f vAt = VRWrapPoint(mvVRWrapShown[alArm], mvVRWrapSet[alArm], vAhead, vOut);
++		avAt = cMath_MatrixMul(mtxWrap, vAt * fScale);
++		avAhead = cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxWrap, vAhead));
++		avOut = cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxWrap, vOut));
++		return true;
++	}
++
++	// BunkerVR: the cloth from where a wrap's shown slices end to the roll in the winding hand: the rest of the slice
++	// being wound (two flat pieces of the cloth round the arm), then a run of them through the air to avRollAt (where
++	// the cloth meets the roll), twisting on the way from how the cloth lies on the arm to how the roll's axle
++	// (avRollAxis) lies. The pieces not needed are not drawn.
++	void VRWrapStrip(cMeshEntity@ apBody, int alArm, const cVector3f &in avRollAt, const cVector3f &in avRollAxis)
++	{
++		VRBandageMakePieces();
++		VRWrapReady();
++		int lUsed = 0;
++		cMatrixf mtxWrap;
++		float fScale;
++		if(mvVRWrapState[alArm] == 1 && VRWrapFrame(apBody, alArm, mtxWrap, fScale))
++		{
++			float fWidth = gfVRDressingWidth * fScale;
++			int lSet = mvVRWrapSet[alArm];
++			float fShown = mvVRWrapShown[alArm];
++			float fFrom = float(int(fShown / gfVRWrapSliceTurn)) * gfVRWrapSliceTurn;
++			for(int k = 0; k < 2; ++k)
++			{
++				float fA = fFrom + (fShown - fFrom) * float(k) * 0.5f;
++				float fB = fFrom + (fShown - fFrom) * float(k + 1) * 0.5f;
++				if(fB - fA < 0.02f) continue;
++				cVector3f vAheadA, vOutA, vAheadB, vOutB, vAheadMid, vOutMid;
++				cVector3f vA = cMath_MatrixMul(mtxWrap, VRWrapPoint(fA, lSet, vAheadA, vOutA) * fScale);
++				cVector3f vB = cMath_MatrixMul(mtxWrap, VRWrapPoint(fB, lSet, vAheadB, vOutB) * fScale);
++				VRWrapPoint((fA + fB) * 0.5f, lSet, vAheadMid, vOutMid);
++				cVector3f vAlong = vB - vA;
++				float fLength = vAlong.Length();
++				if(fLength < 0.002f) continue;
++				vAlong = vAlong * (1.0f / fLength);
++				cVector3f vOutWorld = cMath_Vector3Normalize(cMath_MatrixMul3x3(mtxWrap, vOutMid));
++				// (A little longer than the gap, so that no arm shows between them and the slice before.)
++				VRBandagePlacePiece(lUsed, (vA + vB) * 0.5f, vAlong, VRSquareTo(vOutWorld, vAlong, vOutWorld), fLength * 1.15f, fWidth);
++				lUsed++;
++			}
++			cVector3f vEnd, vEndAhead, vEndOut;
++			if(VRWrapEnd(apBody, alArm, vEnd, vEndAhead, vEndOut))
++			{
++				cVector3f vTo = avRollAt - vEnd;
++				float fFree = vTo.Length();
++				if(fFree > 0.01f)
++				{
++					cVector3f vFreeDir = vTo * (1.0f / fFree);
++					cVector3f vEndAcross = cMath_Vector3Cross(vEndAhead, vEndOut);
++					int lFreePieces = cMath_Min(int(fFree / (0.04f * VRBodyBig())) + 1, 16);
++					float fEach = fFree / float(lFreePieces);
++					for(int k = 0; k < lFreePieces && lUsed < glVRBandagePieces; ++k)
++					{
++						float fT = (float(k) + 0.5f) / float(lFreePieces);
++						cVector3f vAcross = VRSquareTo(vEndAcross * (1.0f - fT) + avRollAxis * fT, vFreeDir, vEndAcross);
++						VRBandagePlacePiece(lUsed, vEnd + vFreeDir * (fEach * (float(k) + 0.5f)), vFreeDir, cMath_Vector3Cross(vAcross, vFreeDir), fEach * 1.1f, fWidth);
++						lUsed++;
++					}
++				}
++			}
++		}
++		VRBandageHidePieces(lUsed);
++	}
++
++	// BunkerVR: the wraps placed with the forearms each update: the slices the cloth has gone past (made when first
++	// wanted), or the whole dressing once on; a wrap healed winds the rest of itself on first (gfVRWrapTuckTime a
++	// turn). A level left takes them (VRMadeThingsAtLeave): a wrap from another level is over.
++	void VRPlaceWrap(cMeshEntity@ apBody)
++	{
++		VRWrapReady();
++		double fNow = cEngine_GetGameTime();
++		float fStep = mfVRWrapTime < 0.0 ? 0.0f : cMath_Clamp(float(fNow - mfVRWrapTime), 0.0f, 0.1f);
++		mfVRWrapTime = fNow;
++		cLuxMap@ pMap = cLux_GetCurrentMap();
++		if(pMap is null || apBody is null) return;
++		float fTotal = float(glVRWrapSlices) * gfVRWrapSliceTurn;
++		for(int lArm = 0; lArm < 2; ++lArm)
++		{
++			if(mvVRWrapState[lArm] == 0) continue;
++			if(mvVRWrapMap[lArm] != pMap.GetName())
++			{
++				VRWrapOff(lArm);
++				continue;
++			}
++			if(mvVRWrapState[lArm] == 2)
++			{
++				mvVRWrapShown[lArm] = cMath_Min(fTotal, mvVRWrapShown[lArm] + fStep * cMath_PiMul2 / gfVRWrapTuckTime);
++				if(mvVRWrapShown[lArm] >= fTotal)
++				{
++					// All on: the whole dressing in the slices' place (the same, made of them).
++					VRWrapSlicesOff(lArm);
++					iLuxEntity@ pWhole = VRMakeNamed(pMap, "vr_dressing_" + lArm, mvVRWrapSet[lArm] == 1 ? "bunkervr_dressing_b.ent" : "bunkervr_dressing.ent", cMatrixf_Identity);
++					mvVRWrapWhole[lArm] = pWhole !is null ? pWhole.GetID() : tID_Invalid;
++					mvVRWrapState[lArm] = 3;
++				}
++			}
++			cMatrixf mtxWrap;
++			float fScale;
++			if(VRWrapFrame(apBody, lArm, mtxWrap, fScale) == false) continue;
++			if(mvVRWrapState[lArm] == 3)
++			{
++				iLuxEntity@ pWhole = mvVRWrapWhole[lArm] != tID_Invalid ? cLux_ID_Entity(mvVRWrapWhole[lArm]) : null;
++				if(pWhole is null)
++				{
++					VRWrapOff(lArm);
++					continue;
++				}
++				pWhole.SetMatrix(mtxWrap);
++				pWhole.SetMeshScaleMul(cVector3f(fScale));
++				continue;
++			}
++			for(int k = 0; k < glVRWrapSlices; ++k)
++			{
++				int i = lArm * glVRWrapSlices + k;
++				bool bShown = mvVRWrapShown[lArm] >= float(k + 1) * gfVRWrapSliceTurn - 0.001f;
++				iLuxEntity@ pSlice = mvVRWrapSlices[i] != tID_Invalid ? cLux_ID_Entity(mvVRWrapSlices[i]) : null;
++				if(pSlice is null && bShown)
++				{
++					@pSlice = VRMakeNamed(pMap, "vr_wrap_" + lArm + "_" + k, "bunkervr_wrap_" + (mvVRWrapSet[lArm] == 1 ? "b" : "a") + "_" + (k < 10 ? "0" : "") + k + ".ent", mtxWrap);
++					mvVRWrapSlices[i] = pSlice !is null ? pSlice.GetID() : tID_Invalid;
++				}
++				if(pSlice is null) continue;
++				cMeshEntity@ pSliceMesh = pSlice.GetMeshEntity();
++				if(pSliceMesh is null) continue;
++				if(bShown == false)
++				{
++					if(pSliceMesh.IsVisible()) pSliceMesh.SetVisible(false);
++					continue;
++				}
++				pSlice.SetMatrix(mtxWrap);
++				pSlice.SetMeshScaleMul(cVector3f(fScale));
++				if(pSliceMesh.IsVisible() == false) pSliceMesh.SetVisible(true);
++			}
++		}
++	}
++
++	//------------------------------------------------------------
++
 =65
 +	[nosave] int mlVRArmCalls = 0;	// BunkerVR: how often the arms have been moved to the controllers
 +	[nosave] bool mbVRArmNote = false;	// BunkerVR: send this frame's numbers to the mod's log?
@@ -7336,6 +8896,7 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +	[nosave] bool mbVRBulletInHand = false;	// BunkerVR: is the left hand carrying a bullet to the open revolver?
 +	[nosave] float mfVRElbowMove = 0.0f;	// BunkerVR: how much the elbows move with the hands (set by the mod)
 +	[nosave] cVector3f[] mvVRElbowSide = {0, 0};	// BunkerVR: which side each elbow was on last frame (left, right), in the body's own directions (outwards, up, backwards)
++	[nosave] double[] mvVRElbowGlideAt = {0.0, 0.0};	// BunkerVR: the game's time of each elbow's last glide (left, right)
 +	[nosave] bool mbVRFootPlacementOff = false;	// BunkerVR: did we switch the foot placement off?
 +	[nosave] bool mbVRReloadOpen = false;	// BunkerVR: is the revolver open (ammo check)?
 +	[nosave] bool mbVRGunInHand = false;	// BunkerVR: is a gun held in the tracked right hand?
@@ -7397,17 +8958,66 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +	[nosave] cMatrixf m_mtxVRBandageRollGrip = cMatrixf_Identity;	// ...that placement, as the right palm sees it...
 +	[nosave] bool mbVRBandageRollSend = false;	// ...and, if it has none, does the mod want to know where the roll is
 +	[nosave] bool mbVRBandageWinding = false;	// BunkerVR: is the bandage out of its tin and being wound?
-+	[nosave] bool mbVRBandageOn = false;	// BunkerVR: is a used bandage on the left forearm?
-+	[nosave] bool mbVRBandageAnchored = false;	// BunkerVR: has the strip's end been laid on the arm?
-+	[nosave] bool mbVRBandageHadAngle = false;	// BunkerVR: was the hand at the arm last frame?
-+	[nosave] float mfVRBandageTurned = 0.0f;	// BunkerVR: how far the hand has gone round the arm since then (radians, either way)
-+	[nosave] float mfVRBandageWound = 0.0f;	// BunkerVR: how much of that the strip has followed
-+	[nosave] float mfVRBandageWay = 1.0f;	// BunkerVR: which way round it is wound
-+	[nosave] float mfVRBandageStartAngle = 0.0f;	// BunkerVR: where on the arm the strip's end lies (angle round it, and meters from the wrist)
-+	[nosave] float mfVRBandageStartAlong = 0.06f;
-+	[nosave] float mfVRBandageLastAngle = 0.0f;
 +	[nosave] float mfVRBandageModTurns = 0.0f;	// BunkerVR: the mod's own count of turns, last frame
-+	[nosave] array<tID> mvVRBandagePieces;	// BunkerVR: the flat pieces the wound cloth is made of (see VRBandageMakePieces)
++	[nosave] array<tID> mvVRBandagePieces;	// BunkerVR: the flat pieces of cloth between a wrap and the roll (see VRBandageMakePieces, VRWrapStrip)
++	[nosave] bool mbVRWindAnchored = false;	// BunkerVR: the hand winding a dressing on (see VRWindFollow): has the cloth's end been laid on the arm?...
++	[nosave] bool mbVRWindHadAngle = false;	// ...was the hand at the arm last frame?...
++	[nosave] float mfVRWindTurned = 0.0f;	// ...how far it has gone round the arm since (radians, either way)...
++	[nosave] float mfVRWindWound = 0.0f;	// ...how much of that the cloth has followed...
++	[nosave] float mfVRWindWay = 1.0f;		// ...which way round it is wound...
++	[nosave] float mfVRWindLastAngle = 0.0f;	// ...and where round the arm the hand was last frame
++	[nosave] array<int> mvVRWrapState;		// BunkerVR: the wrap on each forearm (0 left, 1 right; see VRPlaceWrap): 0 none, 1 being wound, 2 winding the rest of itself on, 3 the whole dressing on...
++	[nosave] array<float> mvVRWrapStart;	// ...where round the arm its cloth starts (radians)...
++	[nosave] array<float> mvVRWrapShown;	// ...how far round it is shown (radians)...
++	[nosave] array<int> mvVRWrapSet;		// ...which way round its model is wound (1 its "b", 0 its "a")...
++	[nosave] array<tID> mvVRWrapWhole;		// ...the whole dressing, once on...
++	[nosave] array<tString> mvVRWrapMap;	// ...the level it is in...
++	[nosave] array<tID> mvVRWrapSlices;		// ...and its slices (glVRWrapSlices each, the left's first)
++	[nosave] double mfVRWrapTime = -1.0;	// BunkerVR: the game's time at the wraps' last placing
++	[nosave] int mlVRMedkitStep = 0;	// BunkerVR: the medkit by hand (see VRUpdateMedkit): 0 shut in the right hand, 1 its flap held by the left hand (or falling), 2 open, 3 its bottle in the left hand, 4 its dressing in the left hand (its bag dropped)
++	[nosave] tString msVRMedkitItem = "";	// ...the medkit (its item) all this is about
++	[nosave] tString msVRMedkitUsedItem = "";	// ...the last one used up (the game takes it from the hand)
++	[nosave] bool mbVRMedkitDrunk = false;	// ...its bottle drunk (its own health says so too)
++	[nosave] bool mbVRMedkitCorkOut = false;	// ...its cork pulled (while it is open)
++	[nosave] float mfVRMedkitOpen = 0.0f;	// ...how far its flap is lifted (0 to 1)...
++	[nosave] bool mbVRMedkitFlapHeld = false;	// ...whether the left hand holds it...
++	[nosave] cVector3f mvVRMedkitFlapFrom = cVector3f(0.0f);	// ...where the hand took hold of it (the bag's bone's terms, meters)...
++	[nosave] float mfVRMedkitOpenFrom = 0.0f;	// ...and how far it was lifted then
++	[nosave] float mfVRMedkitDrink = 0.0f;	// ...drunk from so far (seconds)...
++	[nosave] bool mbVRMedkitDrinkHeard = false;	// ...the liquid heard now
++	[nosave] float mfVRMedkitAway = 0.0f;	// ...the left hand away from the right forearm while wrapping it (seconds)...
++	[nosave] int mlVRMedkitTurnsDone = 0;	// ...and the whole turns it has been wrapped
++	[nosave] double mfVRMedkitTime = -1.0;	// ...the game's time at its last update
++	[nosave] bool mbVRMedkitLeftWas = true;	// ...the left squeeze and trigger as they were (one already on as the medkit came counts only once let go)
++	[nosave] bool mbVRMedkitTriggerWas = true;
++	[nosave] tID m_idVRMedkitCase = tID_Invalid;	// ...its bag in the right hand (the game's own bag, opened by its own use's animation)
++	[nosave] tID m_idVRMedkitRoll = tID_Invalid;	// ...its dressing (the medkit's model, its roll alone drawn), in the bag or in the left hand
++	[nosave] tID m_idVRMedkitBottle = tID_Invalid;	// ...its bottle (the medkit's model, its bottle alone drawn), in the bag or in the left hand
++	[nosave] tID m_idVRMedkitHidden = tID_Invalid;	// ...the medkit in the right hand, not drawn while it is open
++	[nosave] cMatrixf m_mtxVRMedkitBottleIn = cMatrixf_Identity;	// ...where its bottle's base (j_bottle), its cork (j_cork) and its roll (j_Bandage_Roll) lie in the medkit's model, unscaled (its bag's own bone is the model's root)
++	[nosave] cMatrixf m_mtxVRMedkitCorkIn = cMatrixf_Identity;
++	[nosave] cMatrixf m_mtxVRMedkitRollIn = cMatrixf_Identity;
++	[nosave] float mfVRMedkitScale = 1.0f;	// ...the model's own scale, as the hand holds it
++	[nosave] bool mbVRMedkitBottleGrip = false;	// ...has "The medkit's bottle" its own placement (see VRAskPlacement)...
++	[nosave] cMatrixf m_mtxVRMedkitBottleGrip = cMatrixf_Identity;	// ...that placement, as the left palm sees it...
++	[nosave] bool mbVRMedkitBottleSend = false;	// ...and is that pose being set (the hand poses tool open, or the Grips page): the bottle then stays in the hand
++	[nosave] bool mbVRMedkitRollGrip = false;	// ...the same for "The medkit's dressing roll"
++	[nosave] cMatrixf m_mtxVRMedkitRollGrip = cMatrixf_Identity;
++	[nosave] bool mbVRMedkitRollSend = false;
++	[nosave] tID m_idVRMedkitDropCase = tID_Invalid;	// BunkerVR: the medkit's bag dropped as its dressing was taken (see VRMedkitDropBag)...
++	[nosave] tID m_idVRMedkitDropBottle = tID_Invalid;	// ...its bottle in it...
++	[nosave] cMatrixf m_mtxVRMedkitDropBottleIn = cMatrixf_Identity;	// ...where, from the bag's model...
++	[nosave] cMatrixf m_mtxVRMedkitDropFrom = cMatrixf_Identity;	// ...where it fell from, unscaled...
++	[nosave] cMatrixf m_mtxVRMedkitDropRest = cMatrixf_Identity;	// ...where it comes to rest...
++	[nosave] float mfVRMedkitDropFall = 0.0f;	// ...how long it falls (seconds)...
++	[nosave] float mfVRMedkitDropTime = -1.0f;	// ...and how long it has (-1: not falling)
++	[nosave] int mlVRMedkitNotes = 0;	// BunkerVR: "BunkerVR medkit:" lines in hpl.log so far
++	[nosave] int mlVRMedkitCuePart = -1;	// BunkerVR: the medkit's part to take next, this update and the last (see VRMedkitCue: 0 its bag by the flap, 1 its bottle, 2 its dressing; -1 none)...
++	[nosave] int mlVRMedkitCuePartWas = -1;
++	[nosave] bool mbVRMedkitCueNear = false;	// ...the left hand within reach of it, this update and the last...
++	[nosave] bool mbVRMedkitCueNearWas = false;
++	[nosave] float mfVRMedkitGlow = 0.0f;	// ...how far into its glint's round (seconds)...
++	[nosave] double mfVRMedkitTickAt = -1.0;	// ...and the game's time at the last tick as the hand came within reach
 +	[nosave] array<cMatrixf> mvVRLegFresh;		// BunkerVR: each leg's bones (Leg_1 to Leg_6, Foot; left 0-6, right 7-13) as the animation last left them
 +	[nosave] array<bool> mvVRLegFreshKnown;		// BunkerVR: which of those have been seen yet
 +	[nosave] array<cVector3f> mvVRFootAt;		// BunkerVR: where each planted ankle is (left, right)
@@ -7429,11 +9039,20 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +	[nosave] array<cVector3f> mvVRLegNote;		// BunkerVR: the legs' numbers for the F9 notes (see VRBodyNotes)
 +	[nosave] bool mbVRLegsOn = false;			// BunkerVR: are the legs being placed (UpdateVRLegs)?
 +	[nosave] bool mbVRLegsWalked = false;		// BunkerVR: were the feet going as animated (walking) last time?
-+	[nosave] bool mbVRLegFitKnown = false;		// BunkerVR: has the legs' shortening been worked out yet?
++	[nosave] double mfVRWalkBlendStart = -100.0;	// BunkerVR: the game's time walking last began (the feet eased into the walk from then)...
++	[nosave] cVector3f[] mvVRFootWalkFrom = {0, 0};	// ...from where each foot stood then (left, right)...
++	[nosave] cVector3f[] mvVRFootFwdWalkFrom = {0, 0};	// ...and the way it pointed
++	[nosave] bool mbVRLegFitKnown = false;		// BunkerVR: has the legs' shortening been started (from the last level's)?
 +	[nosave] float mfVRLegFit = 1.0f;			// BunkerVR: how long the legs are drawn (a share of their own length)
 +	[nosave] double mfVRLegLastTime = 0.0;		// BunkerVR: game time at the last UpdateVRLegs
 +	[nosave] int mlVRLegCentred = -1;			// BunkerVR: how many times the view had been centered when the legs were last fitted
-+	[nosave] double mfVRLegFitUntil = 0.0;		// BunkerVR: the legs are fitted again until this game time (just after a re-center)
++	[nosave] float mfVRLegFitLeft = 0.0f;		// BunkerVR: standing still to be fitted from after a re-center or a level's start (seconds)...
++	[nosave] float mfVRLegHipsEased = -1000.0f;	// BunkerVR: the hips' height above the feet, eased (gfVRLegFitSteadyTime; -1000: none yet)
++	[nosave] bool mbVRLegFitLoose = false;		// BunkerVR: no fit made yet since the game started: the legs fitted as they stand meanwhile
++	[nosave] float mfVRLegFitBefore = 1.0f;		// ...the fit before it, for the log (VRLegFitNote)...
++	[nosave] tString msVRLegFitWhy = "";		// ...and what it followed
++	[nosave] float mfVRLegFitSaid = -1.0f;		// BunkerVR: the fit last said in the log
++	[nosave] int mlVRLegFitNotes = 0;			// BunkerVR: how many times it has been said
 +	[nosave] double mfVRLastLanding = 0.0;		// BunkerVR: game time when a foot last came down
 +	[nosave] bool mbVRFreshPose = false;	// BunkerVR: are the body's bones as the animation has just left them (nothing here has moved them yet)?
 +	[nosave] bool mbVRBothHandsEmpty = false;	// BunkerVR: is nothing held in either hand this frame?
@@ -7459,6 +9078,7 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +	[nosave] int mlVRGlueNotes = 0;		// BunkerVR: notes for the log from VRGlueToHeld so far
 +	[nosave] cVector3f[] mvVRBlockAt = {cVector3f(0.0f), cVector3f(0.0f)};	// BunkerVR: where each hand's palm ball is (left, right)
 +	[nosave] cVector3f[] mvVRBlockPalmWas = {cVector3f(0.0f), cVector3f(0.0f)};	// BunkerVR: where each real palm was last frame (to tell a jump of the view)
++	[nosave] cVector3f[] mvVRBlockCamWas = {cVector3f(0.0f), cVector3f(0.0f)};	// BunkerVR: where the game's camera was at each hand's last VRHandBlock (the player's own move)
 +	[nosave] bool[] mbVRBlockKnown = {false, false};	// BunkerVR: is that known yet (and the hand empty)?
 +	[nosave] bool[] mbVRBlockWasFixed = {false, false};	// BunkerVR: was the hand drawn held on a handle or a rung at the last frame (its place then in mvVRBlockAt)?
 +	[nosave] bool[] mbVRBlockTouching = {false, false};	// BunkerVR: was the hand against something solid last frame?
@@ -7506,11 +9126,16 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +	[nosave] bool mbVRWorldNear = true;					// BunkerVR: are the world's solid parts near the hand's way this frame (VRHandBlock)?
 +	[nosave] int mlVRWorldNearCount = 0;				// ...for the log: how many times it was, of so many
 +	[nosave] int mlVRWorldNearOf = 0;
-+	[nosave] cMeshEntity@ mpVRBonesMesh = null;			// BunkerVR: the mesh the arms' and fingers' bones below were found in (VRFindBones)...
++	[nosave] cMeshEntity@ mpVRBonesMesh = null;			// BunkerVR: the mesh the body's bones below were found in (VRFindBones)...
 +	[nosave] array<cBoneState@> mvVRArmBoneStates;			// ...the arms' (VRArmBone)...
 +	[nosave] array<cBoneState@> mvVRFingerBones;		// ...the fingers' (VRFingerBone)...
++	[nosave] array<cBoneState@> mvVRLegBoneStates;		// ...the legs' (VRLegBone)...
++	[nosave] array<cBoneState@> mvVRTrunkBoneStates;	// ...the spine's, the hips' and the neck's (VRTrunkBone)...
++	[nosave] array<cBoneState@> mvVRLadderBoneStates;	// ...those VRLadderLean moves (VRLadderBone)...
++	[nosave] array<cBoneState@> mvVRGunHandBoneStates;	// ...the revolver's hand's (VRGunHandBone)...
 +	[nosave] array<cMatrixf> mvVRFingerRest;			// ...and each finger bone's rest shape, if the skeleton has one
 +	[nosave] array<bool> mvVRFingerRestKnown;
++	[nosave] array<bool> mvVRTwistHangs;				// ...and whether each forearm twist bone hangs off the one before it (left Arm_4-6, right)
 +	[nosave] array<tID> mvVRPickupNear;		// BunkerVR: the pick-ups (mvVRPickupList) near the hands...
 +	[nosave] float mfVRPickupNearTime = -100.0f;	// ...as listed at this game time
 +	[nosave] array<tID> mvVRStandInList;	// BunkerVR: the map's interact areas, listed with them, for VRStandInFor
@@ -7523,6 +9148,7 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +	[nosave] array<tID> mvVRLockList;		// BunkerVR: the map's number locks, listed with the buttons
 +	[nosave] cVector3f[] mvVRIndexTip = {cVector3f(0.0f), cVector3f(0.0f)};	// BunkerVR: each index fingertip, as drawn (VRNoteIndexTip)...
 +	[nosave] float[] mfVRIndexTipTime = {-100.0f, -100.0f};	// ...at this game time
++	[nosave] float[] mfVRPointAtLockTime = {-100.0f, -100.0f};	// BunkerVR: when each hand's fingertip was last near a number lock (VRPushButtons; it points)
 +	[nosave] bool mbVRTagPinchLogged = false;	// BunkerVR: the present dog tag hold's pinch noted in the log (VRNoteTagPinch)
 +	[nosave] int mlVRReadHeldLogs = 0;	// BunkerVR: how many times VRUpdateReadHeld has logged a move
 +	[nosave] bool mbVRArmsToMove = false;	// BunkerVR: are the arms a knockdown's, kill's or death's animation's now (VRArmsLeftToMove)?
@@ -7574,8 +9200,10 @@ to 91b4d792da0694f0a340eb3239a0d1fdd98b482acfd6f9ae58b13e959adffa81 426381
 +	[nosave] int mlVRStillFrames = 0;	// BunkerVR: for how many frames in a row
 +	[nosave] cVector3f mvVRStillFeet = cVector3f(0.0f);	// BunkerVR: where the feet were last frame
 +	[nosave] cVector3f mvVRStillFacing = cVector3f(0.0f);	// BunkerVR: and which way the body faced
-+	[nosave] array<cMatrixf> mvVRNeutralChain;	// BunkerVR: each arm's collar bone and arm bones as animated with empty hands (left 0-8, right 9-17)
++	[nosave] array<cMatrixf> mvVRNeutralChain;	// BunkerVR: each arm's collar bone and arm bones as animated with empty hands (left 0-9, right 10-19)
 +	[nosave] array<bool> mvVRNeutralKnown;	// BunkerVR: which of those have been seen yet
++	[nosave] cMatrixf[] mvVRClavicleFresh = {cMatrixf_Identity, cMatrixf_Identity};	// BunkerVR: each collar bone as this frame's animation left it, while the chain above is not known (left, right)...
++	[nosave] bool[] mbVRClavicleFreshKnown = {false, false};	// BunkerVR: ...and whether it has been kept yet
 +	[nosave] bool mbVRHeadKnown = false;	// BunkerVR: does the mod know where the real head is this frame?
 +	[nosave] cMatrixf m_mtxVRHead = cMatrixf_Identity;	// BunkerVR: the real head, in the game's world
 +	[nosave] float[] mvVRTwistLast = {0.0f, 0.0f};	// BunkerVR: how far each forearm was twisted last frame (left, right; radians)

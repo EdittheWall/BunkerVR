@@ -1,7 +1,7 @@
 BunkerVR patch 1
 file script/player/PlayerState_Interact_Slide.hps
 from b3fd20520dda83a39cd377b078c4eefc05466a0dc36214f9af9d8abb848d13e0 13653
-to 8f3f2064622225068f9e3f25211e0c6808b56a6f95246da3ede1aaba2fc97450 21684
+to 25a7b6243cfb8d1dba93be8a5a9c66b2156ca13ab3b844dcbc213004ce6d66e4 21716
 =3
 +// BunkerVR: a drawer's handle, found by rays cast back at its front (meters;
 +// see VRHoldOnHandle).
@@ -55,7 +55,7 @@ to 8f3f2064622225068f9e3f25211e0c6808b56a6f95246da3ede1aaba2fc97450 21684
 +				VRHoldSetBar(lVRHand, cMath_Vector3Normalize(vVRBar), vVROut);
 +			}
 +			float fVRGap = cMath_Vector3Dot(vVRPalm - mvVRHoldPalmOff - vVRSpot, vVRPin); // (from where the hand took hold)
-+			fVRWanted = cMath_Clamp(fVRGap * (gfVRHoldCatchUp / cMath_Max(afTimeStep, 0.004f)), -mfSlideMaxSpeed, mfSlideMaxSpeed);
++			fVRWanted = cMath_Clamp(fVRGap * (VRHoldCatchUpShare(gfVRHoldCatchUp, afTimeStep) / cMath_Max(afTimeStep, 0.004f)), -mfSlideMaxSpeed, mfSlideMaxSpeed);
 +			VRHoldFeelStop(lVRHand, mfVRHoldLastWanted, cMath_Vector3Dot(pBody.GetLinearVelocity(), vVRPin), cMath_Abs(fVRGap), afTimeStep);
 +			mfVRHoldLastWanted = fVRWanted;
 +		}

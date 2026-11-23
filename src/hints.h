@@ -71,6 +71,7 @@ enum
     kCarryShells = 16,    // spare shotgun shells
     kCarryChestItem = 32, // the right chest slot's item (the game's hotkey 1) is carried, not in the right hand
     kCarryChestTakes = 64, // the item in the right hand can go into the right chest slot (as the game's hotkeys take it)
+    kCarryHealRefused = 128, // the bandage in the right hand would not be used now (the game's own check: not hurt)
 };
 void HintCarried(int flags, double nowMs);
 int HintCarriedFlags(double nowMs);

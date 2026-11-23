@@ -1,7 +1,7 @@
 BunkerVR patch 1
 file script/player/PlayerState_Interact_Grab.hps
 from 92f4cace894e1deb487092078226407af98a02ad358204c4b6bffc3d8882af5f 33293
-to 20c0c61232f1d1f5dc2a1cd954be84b41121d40d657882b1d1271a92e16f4fa5 83349
+to f5fd60117b1f0c66ebb4ffef3d914e98f65ba20495b256853457c6d66f7a2c3a 84858
 =6
 +#include "custom/helpers/helper_bunkervr.hps"
 =40
@@ -32,10 +32,13 @@ to 20c0c61232f1d1f5dc2a1cd954be84b41121d40d657882b1d1271a92e16f4fa5 83349
 +		mvVRLastHoldBack = cVector3f(0.0f); // BunkerVR
 +		mfVRRealMass = 0.0f; // BunkerVR (taken when the hand holds it)
 +		mbVRTooHeavy = false; // BunkerVR
++		mbVRDraggedHeavy = false; // BunkerVR
 +		mVRWeight.Reset(); // BunkerVR (it starts at the hand)
 +		cScript_SetGlobalVarID("BunkerVR_GrabBody", tID_Invalid); // BunkerVR (set again once the hand holds it)
 +		mbVRThrowKnown = false;
-+		mlVRHandTrailCount = 0;
++		mVRTrail.Clear();
++		mVRTrailOwn.Clear();
++		mbVRDropAtSpeedNow = false;
 =14
 -1
 +
@@ -162,10 +165,10 @@ to 20c0c61232f1d1f5dc2a1cd954be84b41121d40d657882b1d1271a92e16f4fa5 83349
 +				// Throwing: remember where the hand was over the last few
 +				// updates. When the object is let go, it leaves with the speed
 +				// the hand had at its fastest moment; see DropBody.
-+				for(int i = 0; i < 19; ++i) mvVRHandTrail[i] = mvVRHandTrail[i + 1];
-+				mvVRHandTrail[19] = mtxVRHand.GetTranslation();
-+				if(mlVRHandTrailCount < 20) mlVRHandTrailCount++;
-+				if(afTimeStep > 0.0001f) mfVRHandTrailStep = afTimeStep;
++				mVRTrail.Add(mtxVRHand.GetTranslation());
++				// (And in the player's own frame: the arm's own swing, without the player's walking and turning; see
++				// VRHandSwingNow.)
++				mVRTrailOwn.Add(cMath_MatrixMul(cMath_MatrixInverse(BunkerVR_PlayerFrame(pCam)), mtxVRHand.GetTranslation()));
 +				mbVRThrowKnown = true;
 +				
 +				// How strong throws are is set in the mod's menu (special roll value 7032, third number).
@@ -370,6 +373,7 @@ to 20c0c61232f1d1f5dc2a1cd954be84b41121d40d657882b1d1271a92e16f4fa5 83349
 +			// turn as their own weight has them. (With both hands they are
 +			// lifted, slowly.)
 +			bool bVRHeavyDrag = (mbIsHeavy || mbVRTooHeavy) && bVRTwoHands == false; // (also an object too heavy for one hand to hold up)
++			mbVRDraggedHeavy = bVRHeavyDrag; // (for its let-go: DropBody)
 +			int lVRHands = bVRTwoHands ? 2 : 1;
 +			// Weight (see gbBunkerVR_Weight): it is held at its carried place,
 +			// which follows where the hands want it as a weight would (not a
@@ -474,8 +478,10 @@ to 20c0c61232f1d1f5dc2a1cd954be84b41121d40d657882b1d1271a92e16f4fa5 83349
 +			cVector3f vVRKeptOut = vVRPlace - mtxVRAhead.GetTranslation();
 +			if(bVRTwoHands) fVRTwoOff = (cMath_MatrixMul(pBody.GetLocalMatrix(), mvVRTwoGrip) - (mtxVRHand.GetTranslation() + vVRKeptOut)).Length();
 +			// (During a swing its turn may lag further, and lost in a fast swing
-+			// it flies on with the hand; see gfBunkerVR_TwoHandSwing.)
-+			float fVRHandNow = VRHandSpeedNow();
++			// it flies on with the hand; see gfBunkerVR_TwoHandSwing. The arm's
++			// own swing: the player turning with the stick swings the hands
++			// round too, but a thing lost then is let go, not flung.)
++			float fVRHandNow = VRHandSwingNow();
 +			float fVRTurnLetGo = fVRHandNow > gfBunkerVR_TwoHandSwing ? gfBunkerVR_TwoHandLetGoSwinging : gfBunkerVR_TwoHandLetGo;
 +			if(bVRTwoHands && mfVRTwoTime > 0.5f && (vVRBehind.Length() > gfBunkerVR_TwoHandLetGo || fVRTwoOff > fVRTurnLetGo)) // (not in the first half second: a heavy object is still rising to the hands)
 +			{
@@ -486,9 +492,9 @@ to 20c0c61232f1d1f5dc2a1cd954be84b41121d40d657882b1d1271a92e16f4fa5 83349
 +				cScript_SetGlobalVarFloat("BunkerVR_TwoHandDropTime", float(cEngine_GetGameTime()));
 +				if(bVRSwungOff)
 +				{
-+					// Thrown with the hand's speed now: DropBody looks back over
-+					// the last four places only (not at a faster wind-up before).
-+					mlVRHandTrailCount = 4;
++					// Thrown with the hand's speed now (not at a faster wind-up
++					// before): mbVRDropAtSpeedNow, see DropBody.
++					mbVRDropAtSpeedNow = true;
 +					DropBody();
 +					return;
 +				}
@@ -590,7 +596,7 @@ to 20c0c61232f1d1f5dc2a1cd954be84b41121d40d657882b1d1271a92e16f4fa5 83349
 +			// which a hand outruns easily: the object falls behind and is then
 +			// let go as "blocked". In the hand it may go as fast as the hand.
 +			// (The game puts the object's own limit back when it is let go.)
-+			float fVRSpeedLimit = mbIsHeavy ? gfVRHoldMaxSpeed * 0.4f : gfVRHoldMaxSpeed;
++			float fVRSpeedLimit = (mbIsHeavy || bVRHeavyDrag) ? gfVRHoldMaxSpeed * 0.4f : gfVRHoldMaxSpeed;
 +			if(pBody.GetMaxLinearSpeed() < fVRSpeedLimit + 1.0f) pBody.SetMaxLinearSpeed(fVRSpeedLimit + 2.0f);
 +			if(bVRHeavyDrag == false) BunkerVR_HoldRaiseSpinLimit(pBody); // (and its spin limit, put back in ResetPropVars)
 +			if(mfVRBlockedCount > gfVRHoldLetGoTime)
@@ -604,11 +610,13 @@ to 20c0c61232f1d1f5dc2a1cd954be84b41121d40d657882b1d1271a92e16f4fa5 83349
 +
 +			// Speed: there by the next update (heavy objects come a little
 +			// slower, so that they still feel heavy), never faster than a limit.
-+			float fVRFollow = BunkerVR_HoldFollow(mbIsHeavy ? gfVRHoldFollowHeavy : gfVRHoldFollow, vVRPlace, mtxVRAhead.GetTranslation()); // (less firmly while kept out of a table or a wall)
++			// (Heavy: flagged so by the game, or dragged as too heavy for one hand, a scatter rock say, which had
++			// the light limits in the first hand and the heavy ones in the second.)
++			float fVRFollow = BunkerVR_HoldFollow((mbIsHeavy || bVRHeavyDrag) ? gfVRHoldFollowHeavy : gfVRHoldFollow, vVRPlace, mtxVRAhead.GetTranslation()); // (less firmly while kept out of a table or a wall)
 +			float fVRSpinFollow = fVRFollow; // (turned as firmly while touching: see gfBunkerVR_TouchTwist)
 +			if(bVRTouching) fVRFollow *= gfBunkerVR_TouchFollow;
 +			cVector3f vVRSpeed = vVRPosError * (fVRFollow / fVRStep) + vVRFeed * (1.0f - fVRFollow); // (with the feed: the rest of the way is its place moving on)
-+			float fVRMaxSpeed = mbIsHeavy ? (bVRTwoHands ? gfVRHoldTwoHeavySpeed : gfVRHoldMaxSpeed * 0.4f) : gfVRHoldMaxSpeed;
++			float fVRMaxSpeed = bVRHeavyDrag ? gfVRHoldMaxSpeed * 0.4f : ((mbIsHeavy && bVRTwoHands) ? gfVRHoldTwoHeavySpeed : gfVRHoldMaxSpeed);
 +			vVRSpeed = cMath_Vector3MaxLength(vVRSpeed, fVRMaxSpeed);
 +			if(bVRTouching) vVRSpeed = cMath_Vector3MaxLength(vVRSpeed, gfBunkerVR_TouchMaxSpeed);
 +			if(bVRTouching) vVRSpeed = BunkerVR_HoldLimitChange(pBody.GetLinearVelocity(), vVRSpeed, gfBunkerVR_TouchAccel * fVRStep); // (only so much strength)
@@ -617,8 +625,7 @@ to 20c0c61232f1d1f5dc2a1cd954be84b41121d40d657882b1d1271a92e16f4fa5 83349
 +			{
 +				// The hand's own speed (from its last two places), and towards
 +				// its place at the glide's speed.
-+				cVector3f vVRHandSpeed = cVector3f(0.0f);
-+				if(mlVRHandTrailCount >= 2 && mfVRHandTrailStep > 0.0001f) vVRHandSpeed = (mvVRHandTrail[19] - mvVRHandTrail[18]) / mfVRHandTrailStep;
++				cVector3f vVRHandSpeed = mVRTrail.LastStep();
 +				float fVRError = vVRPosError.Length();
 +				mfVRPullSpeed = BunkerVR_HoldPullSpeed(mfVRPullSpeed, fVRError, fVRStep);
 +				vVRSpeed = vVRHandSpeed;
@@ -634,7 +641,15 @@ to 20c0c61232f1d1f5dc2a1cd954be84b41121d40d657882b1d1271a92e16f4fa5 83349
 +				// grab adds a fall for heavy objects itself (below). Without it a
 +				// held urn or block weighs nothing: bumped upwards, it goes on up,
 +				// as if in low gravity.)
-+				vVRSpeed.y = pBody.GetLinearVelocity().y + pPhysicsWorld.GetGravity().y * fVRStep;
++				// One arm's strength along the floor: its speed there changes by no more than gfBunkerVR_DragForce
++				// over its real weight allows (BunkerVR_DragAccel), so it neither starts nor stops dead with the hand:
++				// the trenches' 25 kg block had gone at once as fast as the hand, and stopped as it did.
++				cVector3f vVRNow = pBody.GetLinearVelocity();
++				cVector3f vVRAlong = BunkerVR_HoldLimitChange(cVector3f(vVRNow.x, 0.0f, vVRNow.z), cVector3f(vVRSpeed.x, 0.0f, vVRSpeed.z),
++															  BunkerVR_DragAccel(mfVRRealMass) * fVRStep);
++				vVRSpeed.x = vVRAlong.x;
++				vVRSpeed.z = vVRAlong.z;
++				vVRSpeed.y = vVRNow.y + pPhysicsWorld.GetGravity().y * fVRStep;
 +				pBody.SetLinearVelocity(vVRSpeed);
 +				mModEvent_GrabHeavy.Update(afTimeStep,mbIsHeavy);
 +				return;
@@ -689,38 +704,29 @@ to 20c0c61232f1d1f5dc2a1cd954be84b41121d40d657882b1d1271a92e16f4fa5 83349
 +		mVRWeight.DumpForMark(cScript_GetGlobalArgInt(0), "the game's grab (the first hand)", float(cEngine_GetGameTime()));
 +	}
 =17
-+	// BunkerVR: how fast the hand moves now (meters a second), over its last
-+	// three updates (0 while that isn't known).
-+	float VRHandSpeedNow()
++	// BunkerVR: how fast the hand moves now in the player's own frame (meters a second; 0 while that isn't known): the
++	// arm's own swing, the player's walking and turning left out (cBunkerVRHandTrail.SpeedNow).
++	float VRHandSwingNow()
 +	{
-+		if(mbVRThrowKnown == false || mlVRHandTrailCount < 4 || mfVRHandTrailStep <= 0.0001f) return 0.0f;
-+		return (mvVRHandTrail[19] - mvVRHandTrail[16]).Length() / (mfVRHandTrailStep * 3.0f);
++		if(mbVRThrowKnown == false) return 0.0f;
++		return mVRTrailOwn.SpeedNow().Length();
 +	}
 +	
 +	//------------------------------------------------------------
 +	
 =9
 +			// BunkerVR: held in a hand, it leaves with the hand's own speed, so it can be thrown.
-+			if(mbVRThrowKnown && mlVRHandTrailCount > 3 && mfVRHandTrailStep > 0.0001f)
++			if(mbVRThrowKnown)
 +			{
 +				// People let go a little late, when the hand is already slowing
-+				// and dropping. So look back over the hand's last movements and
-+				// take the fastest stretch (each measured over three updates,
-+				// which evens out the jitter).
-+				int lFirst = 20 - mlVRHandTrailCount;
-+				cVector3f vBest = cVector3f(0);
-+				float fBest = -1.0f;
-+				for(int i = lFirst + 3; i < 20; ++i)
-+				{
-+					cVector3f vSpeed = (mvVRHandTrail[i] - mvVRHandTrail[i - 3]) / (mfVRHandTrailStep * 3.0f);
-+					float fSpeed = vSpeed.Length();
-+					if(fSpeed > fBest)
-+					{
-+						fBest = fSpeed;
-+						vBest = vSpeed;
-+					}
-+				}
-+				vAvgVel = vBest * mfVRThrowBoost;
++				// and dropping. So the hand's fastest stretch of the moment
++				// before, or a gentle let-go with its speed now
++				// (cBunkerVRHandTrail.ThrowSpeed); with no fresh record of the
++				// hand (let go in a pause or a menu), still. Swung off from two
++				// hands: its speed now (mbVRDropAtSpeedNow).
++				float fVRPeak = 0.0f;
++				vAvgVel = mbVRDropAtSpeedNow ? mVRTrail.SpeedNow() * mfVRThrowBoost : mVRTrail.ThrowSpeed(mfVRThrowBoost, fVRPeak);
++				mbVRDropAtSpeedNow = false;
 +				// (With only so much energy: heavy objects leave slowly; see
 +				// BunkerVR_ThrowLimit. By its real weight: the game makes a held
 +				// object lighter, and gives its weight back after this.)
@@ -730,8 +736,13 @@ to 20c0c61232f1d1f5dc2a1cd954be84b41121d40d657882b1d1271a92e16f4fa5 83349
 +					if(mvBodyProperties[i].mBodyID == mBodyID) fVRMass = mvBodyProperties[i].mfMass;
 +				}
 +				vAvgVel = BunkerVR_ThrowLimit(vAvgVel, fVRMass);
++				// (Dragged along the floor by one hand, too heavy for it to lift: let go with one arm's push, no
++				// more: the heave a heavy thing is thrown with takes both hands.)
++				if(mbVRDraggedHeavy) vAvgVel = BunkerVR_DragLetGoLimit(vAvgVel, fVRMass);
 +				// (Logged for heavy objects, such as the trenches' brick.)
-+				if(fVRMass >= 8.0f) Log("BunkerVR: the grab throws a " + BunkerVR_Fixed(fVRMass, 0) + " kg thing at " + BunkerVR_Fixed(vAvgVel.Length(), 2) + " m/s (at most " + BunkerVR_Fixed(cMath_Sqrt(2.0f * BunkerVR_ThrowEnergyFor(fVRMass) / fVRMass), 2) + " for its weight)\n");
++				if(fVRMass >= 8.0f) Log("BunkerVR: the grab throws a " + BunkerVR_Fixed(fVRMass, 0) + " kg thing at " + BunkerVR_Fixed(vAvgVel.Length(), 2) + " m/s (at most " +
++										BunkerVR_Fixed(cMath_Sqrt(2.0f * (mbVRDraggedHeavy ? gfBunkerVR_ThrowEnergy : BunkerVR_ThrowEnergyFor(fVRMass)) / fVRMass), 2) +
++										" for its weight" + (mbVRDraggedHeavy ? ", dragged by one hand" : "") + ")\n");
 +			}
 +			// BunkerVR: let go because the other hand took the game's interact
 +			// button, and this hand's own hold keeps the object (see
@@ -845,8 +856,9 @@ to 20c0c61232f1d1f5dc2a1cd954be84b41121d40d657882b1d1271a92e16f4fa5 83349
 +	[nosave] int mlVRLastGrabHand = -1;		// BunkerVR: the hand this grab held with, as last set ("BunkerVR_GrabHand"; -1 none)
 +	[nosave] int mlVRLagLogs = 0;			// BunkerVR: lines written to the log about keeping up with the hand (12 at most)
 +	[nosave] float mfVRLagLogWait = 0.0f;	// BunkerVR: and how long until the next may be (seconds)
-+	[nosave] cVector3f[] mvVRHandTrail = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};	// BunkerVR: where the hand was over the last 20 updates
-+	[nosave] int mlVRHandTrailCount = 0;
-+	[nosave] float mfVRHandTrailStep = 0.0083f;
++	[nosave] cBunkerVRHandTrail mVRTrail;	// BunkerVR: where the hand has been, and when: the speed it lets go with (helper_bunkervr.hps)
++	[nosave] cBunkerVRHandTrail mVRTrailOwn;	// BunkerVR: ...and in the player's own frame: the arm's own swing (VRHandSwingNow)
++	[nosave] bool mbVRDropAtSpeedNow = false;	// BunkerVR: let go with the hand's speed now, not its fastest of before (DropBody)
++	[nosave] bool mbVRDraggedHeavy = false;		// BunkerVR: dragged along the floor by one hand at the last update (heavy: see Update)
 +	[nosave] float mfVRThrowBoost = 1.3f;	// BunkerVR: throw strength, from the mod's menu
 end

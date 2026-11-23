@@ -1,7 +1,7 @@
 BunkerVR patch 1
 file config/base_english.lang
 from 7114e42bd563b81888592c60dd1103408cd675c7230994857cb58f3d2cdc1ed6 57782
-to 284d46dc9c4ddfb2c1b6f0ae5be43392902d7770fe916f7eaab305515aa3a36d 67363
+to ff9ba6ebe1ada4ffc185305d58b13baea27758d325ad67f299a4cc45a22c6030 67587
 =460
 +	<Entry Name="Options_VR">VR</Entry>
 +	<Entry Name="VRMenu">VR SETTINGS</Entry>
@@ -61,12 +61,12 @@ to 284d46dc9c4ddfb2c1b6f0ae5be43392902d7770fe916f7eaab305515aa3a36d 67363
 +	<Entry Name="VR_Default">Default</Entry>
 +	<Entry Name="VR_Full">Full</Entry>
 +	<Entry Name="VR_Knockdown">Knockdown View</Entry>
-+	<Entry Name="VR_Knockdown_Info">How knockdowns, falls and the Beast's kills are shown. No Comfort: through your own eyes as the game moves you. Cutscene Screen: on a large screen. Vignette: through your own eyes, the edges of your view darkened while you are thrown about.</Entry>
++	<Entry Name="VR_Knockdown_Info">How knockdowns, deaths and the Beast's kills are shown. Comfort: through your own eyes, a blink as you are thrown and as you land, the edges of your view darkened while you are thrown about, dark when the Beast covers your eyes or a death begins. No Comfort: through your own eyes as the game moves you, nothing softened. Cutscene Screen: on a large screen. With Comfort or Cutscene Screen, the game's crouch and crawl also come in a blink, and the view never sways.</Entry>
 +	<Entry Name="VR_NoComfort">No Comfort</Entry>
 +	<Entry Name="VR_CutsceneScreen">Cutscene Screen</Entry>
-+	<Entry Name="VR_Vignette">Vignette</Entry>
++	<Entry Name="VR_Vignette">Comfort</Entry>
 +	<Entry Name="VR_VignetteStrength">Knockdown Vignette</Entry>
-+	<Entry Name="VR_VignetteStrength_Info">How far the vignette closes in from the edges of your view while you are thrown about, when Knockdown View is Vignette. None, Weak, Medium or Strong.</Entry>
++	<Entry Name="VR_VignetteStrength_Info">How far the vignette closes in from the edges of your view while you are thrown about, when Knockdown View is Comfort. None, Weak, Medium or Strong.</Entry>
 +	<Entry Name="VR_VignetteNone">None</Entry>
 +	<Entry Name="VR_VignetteWeak">Weak</Entry>
 +	<Entry Name="VR_VignetteMedium">Medium</Entry>

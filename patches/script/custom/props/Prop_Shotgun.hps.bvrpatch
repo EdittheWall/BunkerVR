@@ -1,7 +1,7 @@
 BunkerVR patch 1
 file script/custom/props/Prop_Shotgun.hps
 from 288c2bcb5a999b4159fbe8fca1fe8dceb6a9c3015d89ef3bb988b402c0aad7b7 7955
-to 1cf65dcf51ceb2f532497ef53036d589078fe46b75b3bcd74f001c32265e1668 38757
+to 2a5c044ad8b930929c37eb932cbb5a9cd7013795956b8a864b8d5667adc71c0f 40662
 =2
 +#include "custom/helpers/helper_bunkervr_shotgun.hps" // BunkerVR: the shotgun worked by hand
 +#include "custom/helpers/helper_bunkervr_hints.hps" // BunkerVR: the hints on the objects
@@ -16,6 +16,8 @@ to 1cf65dcf51ceb2f532497ef53036d589078fe46b75b3bcd74f001c32265e1668 38757
 +const cVector3f gvShotgun_VRPort = cVector3f(-0.0085f, -0.012f, 0.0f);		// the loading port, under the receiver (below the tube's front shell)
 +const float gfShotgun_VRPumpReach = 0.12f;		// the left palm this near the fore-end's line...
 +const float gfShotgun_VRPumpAlong = 0.15f;		// ...and within this of its middle along the barrel: a squeeze there takes the pump
++const float gfShotgun_VRPumpLetGo = 0.18f;		// the real left hand this far (meters, life size) from where it held the fore-end...
++const float gfShotgun_VRPumpLetGoAfter = 0.1f;	// ...for this long (seconds) lets go of the pump, as a hand pulled off a real gun does
 +const float gfShotgun_VRLoadReach = 0.06f;		// a carried shell's nose this near the loading port goes in
 +const float gfShotgun_VRCheckVolume = 0.55f;	// the press-check's pump sounds, this loud
 +const float gfShotgun_VRShellLength = 0.045f;	// a shell, base to nose (m_Shotgun_Shell_02)
@@ -181,10 +183,31 @@ to 1cf65dcf51ceb2f532497ef53036d589078fe46b75b3bcd74f001c32265e1668 38757
 +			float fOffAcross = ((vLeft - vForeEnd) - vFwd * fOffAlong).Length();
 +			cVR_LeftAtPump(bLeftKnown && cMath_Abs(fOffAlong) < gfShotgun_VRPumpAlong && fOffAcross < gfShotgun_VRPumpReach);
 +			
++			// Where the real left palm is against the fore-end, in the gun's own ways (along, up, right), the shot's
++			// kick taken out (it pushes the gun back under the hand for a moment).
++			cVector3f vOffPump = cVector3f(fOffAlong - fKickPush, cMath_Vector3Dot(vLeft - vForeEnd, vUp), cMath_Vector3Dot(vLeft - vForeEnd, vRight));
 +			if (bLeftOnGun && bLeftKnown)
 +			{
++				// Held, the pump lets go once the real hand is well off where it held the fore-end (past the pump's ends,
++				// or away from it), for a moment (a tracking slip is not enough): drawn on the fore-end wherever the real
++				// hand went, it would not be the player's hand (as in Pavlov and H3VR). The mod's hand then closes on
++				// nothing until squeezed again. (Moved only to the side the hand turns the barrel after it, which it
++				// steers, and stays on the fore-end's line: that is no let-go.)
++				if (mVRPump.mbHeld)
++				{
++					float fOff = (vOffPump - mvVRPumpHoldOff).Length() / fSize;
++					mfVRPumpOffFor = fOff > gfShotgun_VRPumpLetGo ? mfVRPumpOffFor + fStep : 0.0f;
++					if (mfVRPumpOffFor >= gfShotgun_VRPumpLetGoAfter)
++					{
++						mfVRPumpOffFor = 0.0f;
++						cVR_LeftLetsGoOfGun();
++						VRNote("the real left hand came " + int(fOff * 100.0f) + " cm off where it held the fore-end: it lets go of the pump");
++					}
++				}
 +				if (mVRPump.mbHeld == false)
 +				{
++					mvVRPumpHoldOff = vOffPump;
++					mfVRPumpOffFor = 0.0f;
 +					mVRPump.Hold(fAlong);
 +					VRNote("the left hand takes the pump (the fore-end " + int(mVRPump.mfSlide * 100.0f) + "% back; " + mlMagazineCount + " in the tube, " +
 +						   (mbChamberedShell ? "a live shell" : (mVRPump.mbChamberSpent ? "a spent shell" : "nothing")) + " in the chamber)");
@@ -598,6 +621,8 @@ to 1cf65dcf51ceb2f532497ef53036d589078fe46b75b3bcd74f001c32265e1668 38757
 +	[nosave] int mlVRLockNotes = 0;					// BunkerVR: of them, "the pump is locked" ones (at most 6)...
 +	[nosave] int mlVRJumpNotes = 0;					// ...and "jumped" ones (at most 10)
 +	[nosave] double mfVRLogicAt = -1.0;				// BunkerVR: the game time of the last frame whose work was done
++	[nosave] cVector3f mvVRPumpHoldOff = cVector3f(0.0f);	// BunkerVR: where the real left palm was against the fore-end as it took the pump (along, up, right)...
++	[nosave] float mfVRPumpOffFor = 0.0f;			// ...and how long it has been more than gfShotgun_VRPumpLetGo from there (seconds)
 +	[nosave] tID m_idVRDryClick = tID_Invalid;		// BunkerVR: the empty click sounding (VRDryClick)...
 +	[nosave] double mfVRDryClickAt = 0.0;			// ...since this game time...
 +	[nosave] int mlVRDryClicks = 0;					// ...and how many, for their names

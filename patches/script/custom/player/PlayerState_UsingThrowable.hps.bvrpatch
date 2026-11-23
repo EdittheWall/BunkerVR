@@ -1,9 +1,10 @@
 BunkerVR patch 1
 file script/custom/player/PlayerState_UsingThrowable.hps
 from d2295316736421adc88c911a2e75eb8bf833f2fc6eaf6b4b590968cea1d8d717 10737
-to 625507fa3cd1be6ac33c11de58888ac423786b2dbf94c54d2fc58033933c5604 20402
+to 8c3b7fa258d99296f93ad3417f83cf8ba1a86be16bf08652f2df17ea06220d29 21307
 =9
 +#include "custom/helpers/helper_bunkervr_items.hps"
++#include "custom/helpers/helper_bunkervr.hps" // BunkerVR: BunkerVR_ThrowPlace
 =5
 +// BunkerVR: how many throws by hand have had their making timed for the log
 +// (at most 20), to track down stalls when a thrown bottle is made.
@@ -77,10 +78,25 @@ to 625507fa3cd1be6ac33c11de58888ac423786b2dbf94c54d2fc58033933c5604 20402
 +		}
 +		
 +		//////////////////
-+		// Send it off. For a moment it cannot touch anything, so that it does
-+		// not bounce off the hand or the body. (Put down: it touches the world
-+		// at once, or it would sink into a table it is put on, and only the
-+		// body is left out for a moment.)
++		// Send it off. It touches the world at once (it was left out for a moment
++		// before, and at 8 to 14 m/s that let it through a wall or the Beast up to
++		// a meter off), from a place on the player's side of any wall, table or
++		// shut door the real hand has gone into (BunkerVR_ThrowPlace, along the
++		// line from the eyes). Only the player's body is left out for a moment,
++		// so that it does not bounce off it (the hands have no body).
++		iPhysicsBody@ pVRMain = pThrownProp.GetBodyNum() == 1 ? pThrownProp.GetBody(0) : null;
++		cCamera@ pVRCam = mBaseObj.mpPlayer.GetCamera();
++		if (pVRMain !is null && pVRCam !is null)
++		{
++			cMatrixf mtxVRBody = pVRMain.GetLocalMatrix();
++			cMatrixf mtxVRClear = BunkerVR_ThrowPlace(pVRMain, pVRCam.GetPosition(), mtxVRBody);
++			float fVRMoved = (mtxVRClear.GetTranslation() - mtxVRBody.GetTranslation()).Length();
++			if (fVRMoved > 0.001f)
++			{
++				pVRMain.SetMatrix(mtxVRClear);
++				Log("BunkerVR: throwing: the hand is in something solid: " + pThrownProp.GetName() + " leaves " + int(fVRMoved * 100.0f + 0.5f) + " cm nearer the eyes\n");
++			}
++		}
 +		pMap.AddTimer(pThrownProp.GetName(), abPutDown ? 0.3f : 0.1f, "$_Throwable_ActivateThrownCollision");
 +		// (Woken, as the game's own dropping wakes what it makes:
 +		// SpawnTypeAsEntity in ItemHandler.hps. Otherwise an object made with
@@ -98,7 +114,6 @@ to 625507fa3cd1be6ac33c11de58888ac423786b2dbf94c54d2fc58033933c5604 20402
 +			cVector3f vTorque = cMath_Vector3ClampLength(cMath_RandomSphereSurfacePoint(1.f), 0.5f, 1.f);
 +			pBody.SetThrownByPlayer(true);
 +			pBody.AddTorque(vTorque);
-+			pBody.SetCollide(false);
 +		}
 +		
 +		pThrownProp.EnableBodyCollisionCallback();

@@ -49,7 +49,12 @@ void TestListUseFolder(const char* folder);
 // answered.
 void TestListLoad();
 
+// The most checks the list holds; any after them are left out (counted by
+// TestListLeftOut, which the list's own tool checks is 0).
+static const int kTestListMostChecks = 400;
+
 int TestListCount();
+int TestListLeftOut();
 int TestListAt(); // which is shown, from 0
 const TestCheck* TestListCurrent(); // null if the list is empty
 void TestListMove(int step);

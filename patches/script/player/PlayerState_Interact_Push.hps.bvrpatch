@@ -1,12 +1,12 @@
 BunkerVR patch 1
 file script/player/PlayerState_Interact_Push.hps
 from 25352d363f2b1d832a3c1b8e25919641b92574f776e1fe1660082fa5864c1b74 23614
-to 86f47e58c27ec8e33f7ca774bd66dd110092d219f1c05b5d977f4f267b29fff2 43378
-=26
+to b7efce0961a446ea0f291c021132fe6c5783eacf6fd45206e3d798b4d30fcb93 43228
+=4
++#include "custom/helpers/helper_bunkervr_maths.hps" // BunkerVR: BunkerVR_PushTopSpeed
+=22
 +// BunkerVR: a crate or barrel dragged by a VR hand (see VRPushByHand):
 +const float gfVRPushCatchUp = 0.3f;		// the share of the gap to the hand closed each update
-+const float gfVRPushMaxSpeed = 2.0f;	// the fastest it would go with the hand, weighing nothing (meters a second): less by its weight, as the game's own push (VRPushTopSpeed)
-+const float gfVRPushLeastSpeed = 0.4f;	// ...and however heavy, it goes this fast
 +const float gfVRPushForce = 45.0f;		// how hard a hand pulls (newtons): by its weight, how quickly it gets going
 +const float gfVRPushStopForce = 150.0f;	// how hard the floor stops it, once the hand asks for less
 +const float gfVRPushStick = 0.05f;		// the hand this far ahead of it before it moves at all (meters): it takes a pull to start it
@@ -79,10 +79,11 @@ to 86f47e58c27ec8e33f7ca774bd66dd110092d219f1c05b5d977f4f267b29fff2 43378
 +	}
 +
 +	// BunkerVR: the fastest a hand (or two) moves it. Its weight counts, so heavy
-+	// objects don't feel light: its speed isn't taken straight from the hand.
++	// objects don't feel light: its speed isn't taken straight from the hand
++	// (BunkerVR_PushTopSpeed, the same for open hands pushing it).
 +	float VRPushTopSpeed(float afMass, bool abTwoHands)
 +	{
-+		float fTop = cMath_Max(gfVRPushMaxSpeed * VRPushLightness(afMass), gfVRPushLeastSpeed);
++		float fTop = BunkerVR_PushTopSpeed(afMass);
 +		return abTwoHands ? fTop * gfVRPushTwoSpeed : fTop;
 +	}
 +

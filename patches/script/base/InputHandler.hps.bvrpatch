@@ -1,0 +1,15 @@
+BunkerVR patch 1
+file script/base/InputHandler.hps
+from 27ec76b83ddec24e1faa54d51ac5d614025f18d070a311ea180145036d2308c9 41585
+to 203582cb734a579bc984840a03c549be12cb44e0d8d7bfb403bf2eb7a8490e5d 42179
+=234
++		// BunkerVR: the controllers press keyboard keys for some of these actions (walking, jumping, crouching,
++		// running, the inventory, the ammo check). The mod is told the keys they are bound to, and presses the key
++		// that types each on the player's keyboard layout.
++		for(uint i = 0; i < vBinds.size(); ++i)
++		{
++			tString sAction = GetActionName(vBinds[i].mAction, vBinds[i].mbAnalog);
++			if(sAction == "") continue;
++			cVR_KeyBound(sAction, apKeyConfig.GetString(sAction, "Primary", vBinds[i].msPrimary), apKeyConfig.GetString(sAction, "Secondary", vBinds[i].msSecondary));
++		}
+end

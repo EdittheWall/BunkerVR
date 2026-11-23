@@ -21,7 +21,7 @@ static const char* const kSlotNames[kGripSlotCount] = {
     "Cutters", "Wrench", "GasMask", "Flare", "Lighter", "PocketBag", "Medkit", "Bandage", "Dynamite", "DynamiteBundle",
     "Meat", "LockdownWheel", "DetonatorHandle", "RabbitDoll", "CommunicationsKey", "PillboxKey", "Fuse",
     // (hands at work)
-    "GunSupport", "Bullet", "Cord", "Door", "Loose", "BandageRoll", "Dogtag", "ShotgunPump" };
+    "GunSupport", "Bullet", "Cord", "Door", "Loose", "BandageRoll", "Dogtag", "ShotgunPump", "MedkitBottle", "MedkitRoll" };
 
 // The same, as people call them (shown in the menu and the hand poses tool;
 // the file keeps the names above).
@@ -31,7 +31,7 @@ static const char* const kSlotTitles[kGripSlotCount] = {
     "Chain cutters", "Wrench", "Gas mask", "Flare", "Lighter", "Pocket bag", "Medkit", "Bandage", "Dynamite", "Dynamite bundle",
     "Meat", "Lockdown wheel", "Detonator handle", "Rabbit doll", "Communications key", "Pillbox key", "Fuse",
     "Steadying the gun", "Carrying a bullet", "Pulling the flashlight's cord", "Holding a door handle", "Holding a loose thing",
-    "Winding the bandage (the roll)", "Holding a dogtag", "Holding the shotgun's pump" };
+    "Winding the bandage (the roll)", "Holding a dogtag", "Holding the shotgun's pump", "The medkit's bottle", "The medkit's dressing roll" };
 
 const char* GripItemName(int slot)
 {
@@ -45,13 +45,14 @@ const char* GripItemTitle(int slot)
 
 bool GripSlotHasPlace(int slot)
 {
-    return (slot >= 0 && slot < kGripItemCount) || slot == kSlotBandageRoll || slot == kSlotDogtag || slot == kSlotShotgunPump;
+    return (slot >= 0 && slot < kGripItemCount) || slot == kSlotBandageRoll || slot == kSlotDogtag || slot == kSlotShotgunPump ||
+           slot == kSlotMedkitBottle || slot == kSlotMedkitRoll;
 }
 
 bool GripSlotHasHand(int slot, int hand)
 {
     if (slot < 0 || slot >= kGripSlotCount || hand < 0 || hand > 1) return false;
-    if (slot == kSlotGunSupport || slot == kSlotBullet || slot == kSlotShotgunPump) return hand == 0;
+    if (slot == kSlotGunSupport || slot == kSlotBullet || slot == kSlotShotgunPump || slot == kSlotMedkitBottle || slot == kSlotMedkitRoll) return hand == 0;
     if (slot == kSlotCord || slot == kSlotBandageRoll) return hand == 1;
     return true;
 }
@@ -887,6 +888,16 @@ bool GripsTick()
             // the game doesn't report, if any, otherwise the one it holds.
             int placed = GripSlotHasPlace(h.atWork) ? h.atWork : h.item;
             h.known = placed >= 0 && GamePlacing(hand, h.game);
+            // (Said once a run for each item and hand, as a line for BunkerVR_grips.txt: the place to start a pose of
+            // its own from.)
+            static bool said[2][kGripSlotCount] = {};
+            if (h.known && placed < kGripSlotCount && !said[hand][placed])
+            {
+                said[hand][placed] = true;
+                Log("GRIPS: the game places %s in the %s hand as: place %.1f %.1f %.1f %.0f %.0f %.0f", kSlotNames[placed],
+                    hand == 0 ? "left" : "right", h.game.forward * 100.0f, h.game.up * 100.0f, h.game.right * 100.0f, h.game.turnRight,
+                    h.game.tipUp, h.game.leanRight);
+            }
         }
         for (int slot = 0; slot < kGripSlotCount; ++slot)
         {

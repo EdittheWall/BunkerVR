@@ -1,7 +1,7 @@
 BunkerVR patch 1
 file script/custom/player/PlayerState_UsingFlare.hps
 from b454d6f1deecfb5d1b1b5fafc34d4dd4467018494456f597f66621dabc9ed81c 3308
-to 9fa4d1e78c9c8f2f58bb82eefd4044166574a503723f87f39a5cf3ae4733e0b6 11098
+to dd3ac2a23fde72990d8f77fc53581a0067b1300dabffdf270d96e137bccbfc35 12639
 =94
 +
 +	//------------------------------------------------------------
@@ -51,11 +51,30 @@ to 9fa4d1e78c9c8f2f58bb82eefd4044166574a503723f87f39a5cf3ae4733e0b6 11098
 +
 +	void _Global_VRIgnite()
 +	{
++		VRIgnite(true);
++	}
++
++	// BunkerVR: a flare that burned in the hand as the player left a level, in the hand again in the new level: lit
++	// there anew, quietly, burning on from how long it had burned (argument 0, seconds; Prop_Flare.hps
++	// _Global_VRSetBurnt). The body script asks once the hand has it back (VRUpdateFlare).
++	void _Global_VRIgniteCarried()
++	{
++		float fBurnt = cScript_GetGlobalArgFloat(0);
++		tString sLit = VRIgnite(false);
++		if (sLit == "") return;
++		cScript_SetGlobalArgFloat(0, fBurnt);
++		cScript_RunGlobalFunc(sLit, "cScrPropFlare", "_Global_VRSetBurnt");
++	}
++
++	// The burning flare made at the hand's (the cord's pull lights it, with its sound; carried into a new level, it is
++	// made again without). Returns its name, or "" if none was made.
++	tString VRIgnite(bool abSound)
++	{
 +		cLuxMap@ pMap = cLux_GetCurrentMap();
-+		if (pMap is null || VRLitFlare() !is null) return;
-+		if (Item_GetHeldType(eItemHandlerHand_Right) != "Flare") return;
++		if (pMap is null || VRLitFlare() !is null) return "";
++		if (Item_GetHeldType(eItemHandlerHand_Right) != "Flare") return "";
 +		cLuxProp@ pHand = cLux_ToProp(pMap.GetEntityByName(Item_GetHeldEntity(eItemHandlerHand_Right)));
-+		if (pHand is null) return;
++		if (pHand is null) return "";
 +
 +		uint lStart = cSystem_GetApplicationTime();
 +		tString sName = pHand.GetName() + "_VRLit";
@@ -66,7 +85,7 @@ to 9fa4d1e78c9c8f2f58bb82eefd4044166574a503723f87f39a5cf3ae4733e0b6 11098
 +		if (pLit is null)
 +		{
 +			Log("BunkerVR: FLARE: the burning flare (" + msThrowEnt + ") could not be made\n");
-+			return;
++			return "";
 +		}
 +		sName = pLit.GetName();
 +
@@ -88,8 +107,10 @@ to 9fa4d1e78c9c8f2f58bb82eefd4044166574a503723f87f39a5cf3ae4733e0b6 11098
 +		// bigger, is hidden while held.
 +		VRShowHandFlare(pLit, false);
 +
-+		pLit.PlaySound("BunkerVR_FlareIgnite", "weapons/throwables/flare/ignite", true, true);
-+		Log("BunkerVR: FLARE: lit by its cord: " + sName + " burns in the hand (made in " + (cSystem_GetApplicationTime() - lStart) + " ms)\n");
++		if (abSound) pLit.PlaySound("BunkerVR_FlareIgnite", "weapons/throwables/flare/ignite", true, true);
++		Log("BunkerVR: FLARE: " + (abSound ? "lit by its cord" : "carried into this level burning") + ": " + sName + " burns in the hand (made in " +
++			(cSystem_GetApplicationTime() - lStart) + " ms)\n");
++		return sName;
 +	}
 +
 +	// BunkerVR: the throw by hand. Lit: the burning flare is let go at the
@@ -144,11 +165,21 @@ to 9fa4d1e78c9c8f2f58bb82eefd4044166574a503723f87f39a5cf3ae4733e0b6 11098
 +		}
 +		VRForgetLit();
 +
-+		// Let go: falling, touching the world after a moment (not the hand or
-+		// the body), turning a little as it goes when thrown. Its own model is
-+		// shown again (it is hidden while held).
++		// Let go: falling, touching the world at once (the player's body after a
++		// moment), turning a little as it goes when thrown, from the player's
++		// side of any wall or door the real hand has gone into (held, it went
++		// through everything: BunkerVR_ThrowPlace, as the other things thrown
++		// by hand). Its own model is shown again (it is hidden while held).
 +		VRShowHandFlare(apLit, true);
 +		apLit.SetStaticPhysics(false);
++		iPhysicsBody@ pVRMain = apLit.GetBodyNum() == 1 ? apLit.GetBody(0) : null;
++		cCamera@ pVRCam = mBaseObj.mpPlayer.GetCamera();
++		if (pVRMain !is null && pVRCam !is null)
++		{
++			cMatrixf mtxVRBody = pVRMain.GetLocalMatrix();
++			cMatrixf mtxVRClear = BunkerVR_ThrowPlace(pVRMain, pVRCam.GetPosition(), mtxVRBody);
++			if ((mtxVRClear.GetTranslation() - mtxVRBody.GetTranslation()).Length() > 0.001f) pVRMain.SetMatrix(mtxVRClear);
++		}
 +		pMap.AddTimer(apLit.GetName(), abThrown ? 0.1f : 0.05f, "$_Throwable_ActivateThrownCollision");
 +		apLit.WakeUp();
 +		for (int i = 0; i < apLit.GetBodyNum(); ++i)
@@ -157,7 +188,7 @@ to 9fa4d1e78c9c8f2f58bb82eefd4044166574a503723f87f39a5cf3ae4733e0b6 11098
 +			pBody.Enable();
 +			pBody.SetLinearVelocity(avVelocity);
 +			pBody.SetCollideCharacter(false);
-+			pBody.SetCollide(false);
++			pBody.SetCollide(true);
 +			if (abThrown == false) continue;
 +			pBody.SetThrownByPlayer(true);
 +			pBody.AddTorque(cMath_Vector3ClampLength(cMath_RandomSphereSurfacePoint(1.f), 0.5f, 1.f));

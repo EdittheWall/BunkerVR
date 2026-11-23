@@ -1,0 +1,11 @@
+BunkerVR patch 1
+file script/effects/Effect_Sway.hps
+from 1ebfd226acfc103772c6e59f7f20ec1dbd37e47189f595373c58a9e7d795af8a 6295
+to 7552056db5af455237f83bbf0d9357068919e93384cc7b6452ab54aaf65a6a74 6553
+=195
+-1
++		// BunkerVR: also left out in the headset with comfort (cVR_ComfortOn: unless the menu's "Knockdown and Death
++		// View" is No Comfort): a sway rolls and rocks the whole view, the head held still, as the gas in the
++		// tunnels does.
++		if (mbReduceCameraMotion || cVR_ComfortOn())
+end

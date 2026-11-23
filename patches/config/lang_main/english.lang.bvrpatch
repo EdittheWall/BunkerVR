@@ -1,7 +1,7 @@
 BunkerVR patch 1
 file config/lang_main/english.lang
 from 47ecb80fa1d8f70fa4db45ae789893456ef97ce907b4f2f56bf08ab1eb6f095a 94528
-to f8c8fa367f9b7f91a33f130ba86de7dae3d26638755a3930c102d7675b9de258 94029
+to dd923dd08d7d776eaa7e961bf7b5a07d5d8e6037626f9f61f87e31df57e82a83 94080
 =13
 -29
 +    <Entry Name="HintLookAround">Turn your head to look around, and use the right stick to turn.[br]Hold Y on the left controller (B on Valve Index) to re-center your view.</Entry>
@@ -23,7 +23,7 @@ to f8c8fa367f9b7f91a33f130ba86de7dae3d26638755a3930c102d7675b9de258 94029
 +    <Entry Name="HintInventory">Press B to open your inventory.</Entry>
 +    <Entry Name="HintCrouch">Pull the right stick down, or duck, to crouch.</Entry>
 +    <Entry Name="HintSneak">Moving while crouched makes less noise and reduces the chance of being noticed.</Entry>
-+    <Entry Name="HintFlashlight">Reach to the left side of your chest with your left hand and squeeze to take out or put away the flashlight. Clicking the right stick also works.</Entry>
++    <Entry Name="HintFlashlight">Reach to the left side of your chest with your left hand and squeeze to take out or put away the flashlight.</Entry>
 +    <Entry Name="HintLean">Lean your body to peek around corners.</Entry>
 +    <Entry Name="HintLean_Toggle">Lean your body to peek around corners.</Entry>
 +    <Entry Name="InteractiveAnimation">Push the left stick forward to continue.</Entry>
@@ -35,15 +35,15 @@ to f8c8fa367f9b7f91a33f130ba86de7dae3d26638755a3930c102d7675b9de258 94029
 +    <Entry Name="HintPocketWatch_Toggle">Raise the pocket watch to read it. When it stops, pinch its crown with your left hand and twist to wind it, then press the crown to start it.</Entry>
 =6
 -5
-+    <Entry Name="HintEquipGun">Tap A to draw or put away the gun.[br]If you use the holster, squeeze the grip at your right hip instead.</Entry>
++    <Entry Name="HintEquipGun">Squeeze the grip at your right hip to draw or put away the revolver, or behind your right shoulder for the shotgun.</Entry>
 +    <Entry Name="HintAimGun">Point the gun and pull the trigger to fire.</Entry>
 +    <Entry Name="HintAimGun_Toggle">Point the gun and pull the trigger to fire.</Entry>
 +    <Entry Name="HintCheckAmmo">Hold A and flick the revolver sideways to swing the cylinder open and check your bullets. Flick it back to close it.</Entry>
 +    <Entry Name="HintCheckAmmo_Toggle">Hold A and flick the revolver sideways to swing the cylinder open and check your bullets. Flick it back to close it.</Entry>
 =3
 -2
-+    <Entry Name="HintUseItem">Squeeze the trigger to use the item in your hand. To use it on something, hold it against that thing first.[br]For a bandage or medkit, grab it with your left hand, pull it open, then wrap it around your left forearm.</Entry>
-+    <Entry Name="HintUseItem_Toggle">Squeeze the trigger to use the item in your hand. To use it on something, hold it against that thing first.[br]For a bandage or medkit, grab it with your left hand, pull it open, then wrap it around your left forearm.</Entry>
++    <Entry Name="HintUseItem">Squeeze the trigger to use the item in your hand. To use it on something, hold it against that thing first.[br]For a bandage, grab it with your left hand, pull it open, then wrap it around your left forearm. For a medkit, lift its flap with your left hand.</Entry>
++    <Entry Name="HintUseItem_Toggle">Squeeze the trigger to use the item in your hand. To use it on something, hold it against that thing first.[br]For a bandage, grab it with your left hand, pull it open, then wrap it around your left forearm. For a medkit, lift its flap with your left hand.</Entry>
 =2
 -2
 +    <Entry Name="HintLoadBullets">With the cylinder open, take a bullet from the pouch on your left hip and push it into an empty chamber.[br]Tip the gun upward to drop out spent shells.</Entry>

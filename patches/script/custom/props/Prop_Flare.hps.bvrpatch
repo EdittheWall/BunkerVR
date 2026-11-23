@@ -1,16 +1,28 @@
 BunkerVR patch 1
 file script/custom/props/Prop_Flare.hps
 from fd441c0c22016a3302e53505face582452f791283f2488b82852a252aca3e9cf 11644
-to ff1e96e43f9e514b1a7dc30560f9687f578a6f5b7a4350b14ece753dfd75d789 12038
-=203
+to b552324d48b815737505be077f6dc13b3037e8ea3fe8a74acc441f9bc10015a5 12687
+=126
++	// BunkerVR: a flare carried burning in the hand into a new level is made there anew (PlayerState_UsingFlare.hps
++	// _Global_VRIgniteCarried): it burns on from how long it had burned (argument 0, seconds).
++	void _Global_VRSetBurnt()
++	{
++		if (mState != eFlareState_Burn) return;
++		mfStateCount = cMath_Clamp(cScript_GetGlobalArgFloat(0), 0.f, gfFlare_BurnTime);
++	}
++
+=77
 +			///////////////////
 +			// BunkerVR: while it burns in the player's hand (lit by its cord,
 +			// PlayerState_UsingFlare.hps) it never counts as stopped, so it
 +			// leaves no blocker for the creatures' paths until it is let go.
++			// And how long it has burned is told, so that it burns on from there in the next level when the
++			// player leaves the level with it (VRFlareAtLeave in PlayerBodyHandler.hps; _Global_VRSetBurnt).
 +			if (cScript_GetGlobalVarBool("BunkerVR_FlareInHand_" + mBaseObj.GetName()))
 +			{
 +				mvPrevPos = mBaseObj.GetPosition();
 +				mfStoppedCount = 0;
++				cScript_SetGlobalVarFloat("BunkerVR_FlareLitBurnt", mfStateCount);
 +			}
 +
 end

@@ -69,9 +69,10 @@ cVector3f BunkerVR_HoldPlace(iPhysicsBody@ apBody, const cMatrixf &in a_mtxWante
 	return vAt;
 }
 
-// BunkerVR: is a thing at a_mtxAt clear of the world's static geometry (pushed
-// out of it by less than 2 mm, the same check as above)? For carrying a held
-// thing along with the player's own movement (cBunkerVRWeight).
+// BunkerVR: is a thing at a_mtxAt clear of the world (pushed out by less than 2 mm, the same check as above), its
+// static geometry and the things that move too: doors, crates, loose props? (The engine leaves out characters, the
+// player's and the creatures', and whatever has its collision off, such as the items in the hands.) For carrying a
+// held thing along with the player's own movement (cBunkerVRWeight, BunkerVR_CarryClear).
 bool BunkerVR_PlaceClear(iPhysicsBody@ apBody, const cMatrixf &in a_mtxAt)
 {
 	cLuxMap@ pMap = cLux_GetCurrentMap();
@@ -79,7 +80,77 @@ bool BunkerVR_PlaceClear(iPhysicsBody@ apBody, const cMatrixf &in a_mtxAt)
 	iCollideShape@ pShape = apBody !is null ? apBody.GetShape() : null;
 	if(pPhysics is null || pShape is null) return false;
 	cVector3f vPush = cVector3f(0.0f);
-	return pPhysics.CheckShapeWorldCollision(vPush, pShape, a_mtxAt, apBody, false, true, false, false) == false || vPush.Length() < 0.002f;
+	return pPhysics.CheckShapeWorldCollision(vPush, pShape, a_mtxAt, apBody, false, false, false, false) == false || vPush.Length() < 0.002f;
+}
+
+// BunkerVR: a thing let go of by hand (thrown or put down) leaves from where the hand has it; but the real hand can be
+// inside a wall, a table or a shut door, where the drawn hand is stopped. Along the line from the eyes (avFrom) to that
+// place (a_mtxAt, the thing's body as it is there), it goes as far as it is clear (BunkerVR_PlaceClear, in steps of
+// gfBunkerVR_ThrowPlaceStep), so it always leaves on the player's side and can touch the world from the start. Returns
+// the body's matrix: a_mtxAt itself when the way is clear, or when not even the first step is.
+const float gfBunkerVR_ThrowPlaceStep = 0.04f;
+cMatrixf BunkerVR_ThrowPlace(iPhysicsBody@ apBody, const cVector3f &in avFrom, const cMatrixf &in a_mtxAt)
+{
+	if(apBody is null) return a_mtxAt;
+	cVector3f vWay = a_mtxAt.GetTranslation() - avFrom;
+	float fWay = vWay.Length();
+	if(fWay < 0.001f) return a_mtxAt;
+	int lSteps = int(fWay / gfBunkerVR_ThrowPlaceStep) + 1;
+	if(lSteps > 40) lSteps = 40;
+	cMatrixf mtxTry = a_mtxAt;
+	cMatrixf mtxClear = a_mtxAt;
+	for(int i = 0; i <= lSteps; ++i)
+	{
+		mtxTry.SetTranslation(avFrom + vWay * (float(i) / float(lSteps)));
+		if(BunkerVR_PlaceClear(apBody, mtxTry) == false) return i > 0 ? mtxClear : a_mtxAt;
+		mtxClear = mtxTry;
+	}
+	return a_mtxAt;
+}
+
+// BunkerVR: ...and the whole way a carry would take it, as the player's frame goes from a_mtxFrameWas to a_mtxFrame:
+// at its end and at spots between, no more than gfBunkerVR_CarryCheckStep apart along the thing's path (at most
+// glBunkerVR_CarryChecksMost), so that a door's leaf cannot pass between two of them: a snap turn beside a shut door
+// swings a held can 30 cm along an arc, and a run moves it 10 cm an update.
+// Something only grazed on the way does not stop it: pushed out by less than gfBunkerVR_CarryGraze at every check,
+// the carry goes ahead, its end pushed out (avSlide): it slides along the crate beside it or the wall it brushes, as
+// a carried thing would. (Stopped by a graze, a held crate turned beside the one it was stacked on was left behind a
+// few centimetres an update, then let go of or flung, 80 cm behind the hands.) A door's leaf passed through would
+// need a far bigger push at the check inside it.
+const float gfBunkerVR_CarryCheckStep = 0.04f;	// meters along the thing's path between two checks (a door's leaf is about 4 cm)
+const int glBunkerVR_CarryChecksMost = 8;		// checks at most for one carry (a 45-degree snap turn, the thing half a meter out: 5 cm apart)
+const float gfBunkerVR_CarryGraze = 0.015f;		// meters: a push out at least this big stops the carry
+cVector3f gvBunkerVR_CarryPush = cVector3f(0.0f);	// (for the log: the push out of the place that stopped the last carry stopped, and how far along it was)
+float gfBunkerVR_CarryBlockedAt = 0.0f;
+bool BunkerVR_CarryClear(iPhysicsBody@ apBody, const cMatrixf &in a_mtxFrameWas, const cMatrixf &in a_mtxFrame, cVector3f &out avSlide)
+{
+	avSlide = cVector3f(0.0f);
+	cLuxMap@ pMap = cLux_GetCurrentMap();
+	iPhysicsWorld@ pPhysics = pMap !is null ? pMap.GetPhysicsWorld() : null;
+	iCollideShape@ pShape = apBody !is null ? apBody.GetShape() : null;
+	if(pPhysics is null || pShape is null) return false;
+	cMatrixf mtxBodyWas = apBody.GetLocalMatrix();
+	cMatrixf mtxFrameWasInv = cMath_MatrixInverse(a_mtxFrameWas);
+	cMatrixf mtxEnd = cMath_MatrixMul(cMath_MatrixMul(a_mtxFrame, mtxFrameWasInv), mtxBodyWas);
+	float fPath = (mtxEnd.GetTranslation() - mtxBodyWas.GetTranslation()).Length();
+	int lChecks = int(fPath / gfBunkerVR_CarryCheckStep) + 1;
+	if(lChecks > glBunkerVR_CarryChecksMost) lChecks = glBunkerVR_CarryChecksMost;
+	for(int i = 1; i <= lChecks; ++i)
+	{
+		cMatrixf mtxAt = mtxEnd;
+		if(i < lChecks)
+			mtxAt = cMath_MatrixMul(cMath_MatrixMul(BunkerVR_Slerp(float(i) / float(lChecks), a_mtxFrameWas, a_mtxFrame), mtxFrameWasInv), mtxBodyWas);
+		cVector3f vPush = cVector3f(0.0f);
+		if(pPhysics.CheckShapeWorldCollision(vPush, pShape, mtxAt, apBody, false, false, false, false) == false || vPush.Length() < 0.002f) continue;
+		if(vPush.Length() >= gfBunkerVR_CarryGraze || BunkerVR_IsNumber(vPush.x + vPush.y + vPush.z) == false)
+		{
+			gfBunkerVR_CarryBlockedAt = float(i) / float(lChecks);
+			gvBunkerVR_CarryPush = vPush;
+			return false;
+		}
+		if(i == lChecks) avSlide = vPush;
+	}
+	return true;
 }
 
 // BunkerVR: a thing held in one hand caught on something, which would draw the
@@ -540,7 +611,9 @@ class cBunkerVRWeight
 		// before it runs the scripts, and this update's turn is made before the
 		// holds (VRDoSnapTurn in PlayerBodyHandler.hps), so the thing goes exactly
 		// as the view does, at any update rate. Not when abCarry is false, nor
-		// where it would be inside static geometry (BunkerVR_PlaceClear), nor
+		// where it would be in something solid on the way (static geometry, a
+		// door, a crate: BunkerVR_CarryClear; the hold then pulls it on against
+		// that, as the physics allows), nor
 		// across a jump of more than a quarter turn or 1.5 m, nor for a body held
 		// by a joint or attached to another (moved at once, it would fight the
 		// joint): then the move goes into the feed.
@@ -553,11 +626,13 @@ class cBunkerVRWeight
 			{
 				cMatrixf mtxCarry = cMath_MatrixMul(mtxFrame, cMath_MatrixInverse(m_mtxFrameWas));
 				cMatrixf mtxBody = cMath_MatrixMul(mtxCarry, apBody.GetLocalMatrix());
-				if(BunkerVR_PlaceClear(apBody, mtxBody))
+				cVector3f vSlide;
+				if(BunkerVR_CarryClear(apBody, m_mtxFrameWas, mtxFrame, vSlide))
 				{
 					cMatrixf mtxCarryTurn = mtxCarry.GetRotation();
 					cVector3f vSpeedNow = apBody.GetLinearVelocity();
 					cVector3f vSpinNow = apBody.GetAngularVelocity();
+					mtxBody.SetTranslation(mtxBody.GetTranslation() + vSlide); // (out of what it grazed)
 					apBody.SetMatrix(mtxBody);
 					apBody.SetLinearVelocity(cMath_MatrixMul3x3(mtxCarryTurn, vSpeedNow));
 					apBody.SetAngularVelocity(cMath_MatrixMul3x3(mtxCarryTurn, vSpinNow));
@@ -566,8 +641,9 @@ class cBunkerVRWeight
 				else if(glBunkerVR_CarryNotes < 6)
 				{
 					glBunkerVR_CarryNotes++;
-					Log("BunkerVR: weight: " + msThing + " not carried with the player's move this update: its place there is in something solid (" +
-						glBunkerVR_CarryNotes + " of 6)\n");
+					Log("BunkerVR: weight: " + msThing + " not carried with the player's move this update: something solid is in its way there (" +
+						glBunkerVR_CarryNotes + " of 6; " + int(gfBunkerVR_CarryBlockedAt * 100.0f + 0.5f) + "% of the way along, " +
+						int(gvBunkerVR_CarryPush.Length() * 1000.0f + 0.5f) + " mm into it)\n");
 				}
 			}
 		}
@@ -1491,6 +1567,155 @@ cVector3f BunkerVR_ThrowLimit(const cVector3f &in avThrow, float afMass)
 	return cMath_Vector3MaxLength(avThrow, cMath_Sqrt(2.0f * BunkerVR_ThrowEnergyFor(afMass) / afMass));
 }
 
+// BunkerVR: a heavy thing dragged along the floor by one hand (the game's grab, PlayerState_Interact_Grab.hps): its
+// speed there changes no faster than one arm's pull, gfBunkerVR_DragForce, moves its real weight (afMass, kg): a 25 kg
+// block 10 m/s², starting and stopping over a few tenths of a second instead of with the hand. Let go, it leaves with
+// at most a throw's energy for light things, gfBunkerVR_ThrowEnergy (the block about 2.2 m/s, not the 6 a heave with
+// both hands gives it).
+const float gfBunkerVR_DragForce = 250.0f;	// newtons one arm pulls a heavy thing along the floor with
+float BunkerVR_DragAccel(float afMass)
+{
+	if(afMass <= 0.1f) return 1000.0f;
+	return gfBunkerVR_DragForce / afMass;
+}
+cVector3f BunkerVR_DragLetGoLimit(const cVector3f &in avThrow, float afMass)
+{
+	if(afMass <= 0.0f) return avThrow;
+	return cMath_Vector3MaxLength(avThrow, cMath_Sqrt(2.0f * gfBunkerVR_ThrowEnergy / afMass));
+}
+
+// BunkerVR: where a hand has been over its last updates, and when, for the speed it lets a thing go with: one record
+// for every let-go (the hands' own holds and the items thrown by hand, PlayerBodyHandler.hps; the game's grab,
+// PlayerState_Interact_Grab.hps). Each place carries its game time, so a speed is the way gone over the time it took,
+// whatever the update rate did meanwhile (90 a second, 45, or moving between). The record starts again after a jump of
+// the view (a snap turn, a jump: "BunkerVR_ViewJumpTime"), whose places would read as a fling sideways, and is stale
+// once the PC's clock has gone on more than gfBunkerVR_TrailGap since its last place (a pause, a menu, a load): a
+// thing let go of then leaves with no speed of the hand's from before.
+const int glBunkerVR_TrailSize = 20;			// places kept (about a fifth of a second at 90 updates a second)
+const uint glBunkerVR_TrailGapMs = 250;		// the PC's clock gone on this long since the last place: stale (milliseconds)
+const float gfBunkerVR_TrailWindow = 0.03f;	// each speed measured over at least this long (seconds): evens out the jitter
+const float gfBunkerVR_ThrowPeakAge = 0.2f;	// a let-go looks back this long for the hand's fastest stretch (seconds)...
+const float gfBunkerVR_ThrowPeakFrom = 1.5f;	// ...a throw when that was this fast (m/s): that speed, boosted; slower, a
+												// put-down: the hand's speed now, not boosted (a boosted peak made a thing
+												// set down gently slide or tip)
+class cBunkerVRHandTrail
+{
+	array<cVector3f> mvAt;
+	array<double> mvTime;
+	int mlCount = 0;
+	uint mlClockLast = 0;
+
+	void Clear() { mlCount = 0; }
+	int Count() { return mlCount; }
+
+	// The hand's place now (once each update). (The "At" forms take the clocks as arguments, for the script tests:
+	// the game's time, the PC's in milliseconds, and when the view last jumped.)
+	void Add(const cVector3f &in avAt)
+	{
+		AddAt(avAt, cEngine_GetGameTime(), cSystem_GetApplicationTime(), double(cScript_GetGlobalVarFloat("BunkerVR_ViewJumpTime")));
+	}
+	void AddAt(const cVector3f &in avAt, double afNow, uint alClock, double afJump)
+	{
+		if(int(mvAt.length()) != glBunkerVR_TrailSize)
+		{
+			mvAt.resize(uint(glBunkerVR_TrailSize));
+			mvTime.resize(uint(glBunkerVR_TrailSize));
+			mlCount = 0;
+		}
+		if(mlCount > 0)
+		{
+			double fLast = mvTime[glBunkerVR_TrailSize - 1];
+			// (Asked twice in one update: the place now replaces the last.)
+			if(afNow <= fLast && alClock - mlClockLast <= glBunkerVR_TrailGapMs)
+			{
+				mvAt[glBunkerVR_TrailSize - 1] = avAt;
+				mlClockLast = alClock;
+				return;
+			}
+			// (A jump stamped at or after the last place: kept as a float, against the double time. One stamped after now
+			// is from another run, the game's time counting from nothing again, as after loading a save: not a jump.)
+			bool bJumped = afJump >= fLast - 0.002 && afJump <= afNow + 0.002;
+			if(bJumped || afNow <= fLast || alClock - mlClockLast > glBunkerVR_TrailGapMs) mlCount = 0;
+		}
+		double fNow = afNow;
+		uint lClock = alClock;
+		for(int i = 0; i < glBunkerVR_TrailSize - 1; ++i)
+		{
+			mvAt[i] = mvAt[i + 1];
+			mvTime[i] = mvTime[i + 1];
+		}
+		mvAt[glBunkerVR_TrailSize - 1] = avAt;
+		mvTime[glBunkerVR_TrailSize - 1] = fNow;
+		if(mlCount < glBunkerVR_TrailSize) mlCount++;
+		mlClockLast = lClock;
+	}
+
+	// Is it of use now (two places or more, not stale)?
+	bool Fresh() { return FreshAt(cSystem_GetApplicationTime()); }
+	bool FreshAt(uint alClock)
+	{
+		return mlCount >= 2 && int(mvAt.length()) == glBunkerVR_TrailSize && alClock - mlClockLast <= glBunkerVR_TrailGapMs;
+	}
+
+	// The speed over the stretch that ends at place alAt: back to the newest place at least gfBunkerVR_TrailWindow
+	// older. False when the record does not go back that far.
+	bool SpeedAt(int alAt, cVector3f &out avSpeed)
+	{
+		avSpeed = cVector3f(0.0f);
+		for(int j = alAt - 1; j >= glBunkerVR_TrailSize - mlCount; --j)
+		{
+			double fTook = mvTime[alAt] - mvTime[j];
+			if(fTook < gfBunkerVR_TrailWindow - 0.0001) continue;
+			avSpeed = (mvAt[alAt] - mvAt[j]) / float(fTook);
+			return true;
+		}
+		return false;
+	}
+
+	// How fast the hand moves now (over the last gfBunkerVR_TrailWindow), 0 when not known.
+	cVector3f SpeedNow() { return SpeedNowAt(cSystem_GetApplicationTime()); }
+	cVector3f SpeedNowAt(uint alClock)
+	{
+		cVector3f vSpeed = cVector3f(0.0f);
+		if(FreshAt(alClock)) SpeedAt(glBunkerVR_TrailSize - 1, vSpeed);
+		return vSpeed;
+	}
+
+	// ...and between its last two places only (a thing gliding into the hand follows it so), 0 when not known.
+	cVector3f LastStep()
+	{
+		if(Fresh() == false) return cVector3f(0.0f);
+		double fTook = mvTime[glBunkerVR_TrailSize - 1] - mvTime[glBunkerVR_TrailSize - 2];
+		if(fTook < 0.0001) return cVector3f(0.0f);
+		return (mvAt[glBunkerVR_TrailSize - 1] - mvAt[glBunkerVR_TrailSize - 2]) / float(fTook);
+	}
+
+	// The speed a thing let go of leaves with. People let go a little late, the hand already slowing and dropping: so
+	// the fastest stretch of the last gfBunkerVR_ThrowPeakAge, times afBoost (the menu's throw strength), when that was
+	// a throw (gfBunkerVR_ThrowPeakFrom or faster); else the hand's speed now. afPeak: that fastest stretch (m/s).
+	cVector3f ThrowSpeed(float afBoost, float &out afPeak) { return ThrowSpeedAt(afBoost, afPeak, cSystem_GetApplicationTime()); }
+	cVector3f ThrowSpeedAt(float afBoost, float &out afPeak, uint alClock)
+	{
+		afPeak = 0.0f;
+		if(FreshAt(alClock) == false) return cVector3f(0.0f);
+		double fNewest = mvTime[glBunkerVR_TrailSize - 1];
+		cVector3f vBest = cVector3f(0.0f);
+		for(int i = glBunkerVR_TrailSize - 1; i >= glBunkerVR_TrailSize - mlCount; --i)
+		{
+			if(fNewest - mvTime[i] > gfBunkerVR_ThrowPeakAge) break;
+			cVector3f vSpeed = cVector3f(0.0f);
+			if(SpeedAt(i, vSpeed) == false) break;
+			if(vSpeed.Length() > afPeak)
+			{
+				afPeak = vSpeed.Length();
+				vBest = vSpeed;
+			}
+		}
+		if(afPeak >= gfBunkerVR_ThrowPeakFrom) return vBest * afBoost;
+		return SpeedNowAt(alClock);
+	}
+}
+
 // How the thing is turned is worked out a little at a time: each update,
 // both hands' own rotations since the last update, half and half (a small
 // turn, BunkerVR_TwoHandStep), are given to the thing; and a second copy of
@@ -2030,43 +2255,6 @@ float BunkerVR_KeepLineTurn(const cVector3f &in avLine, const cVector3f &in avFi
 	while(fStep > cMath_Pi) fStep -= cMath_PiMul2;
 	while(fStep < -cMath_Pi) fStep += cMath_PiMul2;
 	return afApplied + cMath_Clamp(fStep, -afMostStep, afMostStep);
-}
-
-//------------------------------------------------------------
-// The gentle knockdowns
-
-// BunkerVR: 0 at or below afLow, 1 at or above afHigh, and between them an S
-// with no sudden start or stop (3t^2 - 2t^3). For the comfort ring and the
-// eased return of VRGentleView (PlayerBodyHandler.hps).
-float BunkerVR_SmoothStep(float afLow, float afHigh, float afX)
-{
-	if(afHigh <= afLow) return afX >= afHigh ? 1.0f : 0.0f;
-	float fT = cMath_Clamp((afX - afLow) / (afHigh - afLow), 0.0f, 1.0f);
-	return fT * fT * (3.0f - 2.0f * fT);
-}
-
-// BunkerVR: where a point at avPos, going at avVel, is afTimeStep later as it
-// follows avTarget the way a critically damped spring does, afOmega tight (a
-// gap left still closes to 40% in 2 / afOmega seconds and to 20% in 3 /
-// afOmega, never swinging past); its speed then in avVelAfter. Worked out
-// whole for the step, the target held still across it, so a long step (the
-// game held up) cannot make it swing or run away. Started still, its path is
-// an average of where the target has been, so it never goes beyond the
-// target's path: following the animated head of a knockdown, the view never
-// goes lower than the head went (VRGentleView, PlayerBodyHandler.hps).
-cVector3f BunkerVR_SpringFollow(const cVector3f &in avPos, const cVector3f &in avVel, const cVector3f &in avTarget, float afOmega, float afTimeStep, cVector3f &out avVelAfter)
-{
-	avVelAfter = avVel;
-	if(afTimeStep <= 0.0f) return avPos;
-	// e^-x as 1 / (1 + x + 0.48x^2 + 0.235x^3): within 0.1% for a step of up
-	// to 1 / afOmega, and between 0 and 1 for any step (the script language
-	// has no e^x).
-	float fX = afOmega * afTimeStep;
-	float fDecay = 1.0f / (1.0f + fX + 0.48f * fX * fX + 0.235f * fX * fX * fX);
-	cVector3f vGap = avPos - avTarget;
-	cVector3f vPush = (avVel + vGap * afOmega) * afTimeStep;
-	avVelAfter = (avVel - vPush * afOmega) * fDecay;
-	return avTarget + (vGap + vPush) * fDecay;
 }
 
 //------------------------------------------------------------

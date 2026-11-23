@@ -36,8 +36,8 @@ the flashlight sit on your body. To recenter your view, hold Y.
 | Smooth Turn Speed | Slow to Very Fast | How fast smooth turning rotates you |
 | Movement Vignette | Off, Weak, Medium, Strong | Darkens the edges of your view while the thumbsticks move or turn you. Your own movement is never darkened |
 | Head Bob | Default, Off | Camera motion from walking and breathing. Default keeps a little of it |
-| Knockdown View | No Comfort, Cutscene Screen, Vignette | How knockdowns, falls and the Beast's kills are shown: through your own eyes as the game moves you, on a large screen, or through your eyes with the edges darkened |
-| Knockdown Vignette | None to Strong | How far that vignette closes in |
+| Knockdown View | No Comfort, Cutscene Screen, Comfort | How knockdowns, deaths and the Beast's kills are shown. Comfort (the default): through your own eyes, with a blink as you're thrown and as you land, the edges darkened while you fly, and darkness when the Beast covers your eyes or a death begins. No Comfort: through your own eyes as the game moves you, nothing softened. Cutscene Screen: on a large screen. With Comfort or Cutscene Screen, the game's crouch and crawl also happen in a blink, and the view never sways |
+| Knockdown Vignette | None to Strong | How far Comfort's vignette closes in |
 | Screen Effects | On, Off | Blood across your view when you're hurt, and the gas mask's view while you wear it |
 
 Cutscenes always play on a cinema screen in a dark room.

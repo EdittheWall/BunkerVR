@@ -1,12 +1,19 @@
 BunkerVR patch 1
 file script/props/Prop_SwingDoor.hps
 from 1f269861b3f362cde0e76147b65e2cadc77bc4cf6bd187a0c71153f262788bdb 32898
-to c6b3b20db16f0c99f80d7835a0ac569048f31a418123bc3c9b3c48041ebdead2 44161
+to 3d2b62a02f13f90faf6d4727c7ed1ea8d5abef662948e0d9e1b08a805a537ae6 44467
 =14
 +// BunkerVR: a VR hand takes hold of a door's handle when its palm is within this distance of it (meters).
 +const float gfVRDoorGripReach = 0.25f;
 +
-=571
+=339
+-3
++		// BunkerVR: only the animations this door has. A door without one has an empty name there, and stopping
++		// it logs "Can not find animation ''" each time; the VR handle's unlatch and rattle come here often.
++		if(asName != msHandleUpAnimation && msHandleUpAnimation != "") mBaseObj.StopAnimation(msHandleUpAnimation, afFadeTime);
++		if(asName != msHandleDownAnimation && msHandleDownAnimation != "") mBaseObj.StopAnimation(msHandleDownAnimation, afFadeTime);
++		if(asName != msHandleLockedAnimation && msHandleLockedAnimation != "") mBaseObj.StopAnimation(msHandleLockedAnimation, afFadeTime);
+=229
 +		mbVRWaitForTurn = false; // BunkerVR
 =7
 +				VRBuzz(2, 0.10f, 0.9f); // BunkerVR: the holding hand feels the rattle

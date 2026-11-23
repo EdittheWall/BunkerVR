@@ -1,7 +1,7 @@
 BunkerVR patch 1
 file script/player/PlayerState_Interact_RotateBase.hps
 from 42d18dd53c5de9130efcdab2b238ca8f05b18b447ba8e2a1e165fd3cc0938002 27337
-to 0cfdf0671a3bb80a0cb493ad0ef0deab95ea355da0518c6afd3348b33612a60c 32076
+to cfbfda519644827955fe762db2db25c4fe8cb78ecd50e122fdeb7340cc1d5fab 32108
 =108
 +	// BunkerVR: what a VR hand holds here, for the log, and how far it turns
 +	// between two ticks in the hand (radians; 0: no ticks).
@@ -61,7 +61,7 @@ to 0cfdf0671a3bb80a0cb493ad0ef0deab95ea355da0518c6afd3348b33612a60c 32076
 +		if(vToSpot.Length() > 0.03f && vToHand.Length() > 0.03f)
 +		{
 +			float fAngle = cMath_ATan2(cMath_Vector3Dot(vPin, cMath_Vector3Cross(vToSpot, vToHand)), cMath_Vector3Dot(vToSpot, vToHand));
-+			float fCatchUp = cMath_Min(gfVRHoldCatchUp * fStrength, 0.75f);
++			float fCatchUp = VRHoldCatchUpShare(cMath_Min(gfVRHoldCatchUp * fStrength, 0.75f), afTimeStep);
 +			fWanted = cMath_Clamp(fAngle * (fCatchUp / cMath_Max(afTimeStep, 0.004f)), -fMostSpeed, fMostSpeed);
 +			fGap = cMath_Abs(fAngle) * vToSpot.Length();
 +		}

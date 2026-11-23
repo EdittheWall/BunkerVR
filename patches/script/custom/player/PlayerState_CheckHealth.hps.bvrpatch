@@ -1,8 +1,11 @@
 BunkerVR patch 1
 file script/custom/player/PlayerState_CheckHealth.hps
 from b82ab90f24549a9543633ce7833f679e08e6fbb1e1951cef55a7ec4cca09f103 21884
-to 6959f75e453b0384565b315cab8a25e825cd3de940ef9328f984225f5fc7d5d9 22979
-=133
+to f0bb3df5451686821936d6f9ab4cb14e0f6ad4399431e2dc76579b927211223e 23091
+=89
+-1
++		mlCheckHealthMode = (cVR_Running() ? 0 : cLux_GetUserConfig().GetInt("Accessibility", "CheckHealthMode", 0)); // BunkerVR: Hold while VR runs (the mod holds the game's buttons as long as a hand does)
+=43
 +	// BunkerVR: is the VR mod running? It answers through the camera: after
 +	// setting a special roll value, reading the camera's matrix returns the
 +	// mod's data (12345 as its first number) instead.

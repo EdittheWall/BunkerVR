@@ -1,7 +1,7 @@
 BunkerVR patch 1
 file script/player/PlayerState_Interact.hps
 from fac9647bb2bf79d1b3799ea94cc6e986e36b21d2f5143676e0cd629345064d37 6862
-to 0c9ac1b3127ffcc55addc65b2452838fdcc67b69c6bddbd5b0499b2c6909be4b 18027
+to dfd1acab74f5cd60b15777a5934a92e1b11c21db86c3f23b8ad5e48a427d0a93 18736
 =9
 +// BunkerVR: a VR hand holding a drawer, lever or wheel lets go when the real
 +// hand is this far from the spot it holds (meters)...
@@ -9,14 +9,28 @@ to 0c9ac1b3127ffcc55addc65b2452838fdcc67b69c6bddbd5b0499b2c6909be4b 18027
 +// ...for this long (seconds). The same as a held door; see VRHoldSpot.
 +const float gfVRInteractLetGoTime = 0.15f;
 +// ...and the object is moved to close this share of the gap to the hand each
-+// update (a quarter, as a held door; the game's own push, which is limited,
-+// does the moving).
++// update at 90 updates a second (a quarter, as a held door; the game's own push,
++// which is limited, does the moving). At any other rate the same pace in time:
++// VRHoldCatchUpShare.
 +const float gfVRHoldCatchUp = 0.25f;
++
++// BunkerVR: the share of the gap to the hand a held thing closes in an update of afTimeStep seconds, afShareAt90
++// being its share at 90 updates a second: the same pace in time at any rate (a fixed share each update followed
++// the hand half as fast at 45).
++float VRHoldCatchUpShare(float afShareAt90, float afTimeStep)
++{
++	float fShare = cMath_Clamp(afShareAt90, 0.0f, 0.99f);
++	if(afTimeStep <= 0.0f) return fShare;
++	return 1.0f - cMath_Pow(1.0f - fShare, cMath_Min(afTimeStep, 0.1f) * 90.0f);
++}
 +// ...and the spot held is the palm whenever it is this near the object's box
 +// (meters; see VRHoldSpot).
 +const float gfVRHoldNearThing = 0.12f;
 +
-=88
+=67
+-1
++		mbToggleModeActive = (cVR_Running() ? 0 : cLux_GetUserConfig().GetInt("Accessibility", "PhysicsInteractionMode", 0)) == 1; // BunkerVR: Hold while VR runs (the mod holds the game's buttons as long as a hand does)
+=20
 +		mbVRHoldSet = false; // BunkerVR: a hold starts afresh
 =27
 +		VRHoldClear(); // BunkerVR

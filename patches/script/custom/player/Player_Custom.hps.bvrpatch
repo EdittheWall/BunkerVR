@@ -1,8 +1,11 @@
 BunkerVR patch 1
 file script/custom/player/Player_Custom.hps
 from d5ceb3772faaf5e29d774ec94917e6b45dd4c031277a52aef60fa05364dc9509 163903
-to a5baf96d5a0f5006d78ee193c1665e399c22e18bff5ec9474a4e1746ec642eb4 174555
-=287
+to 8801148f4d3c967e7dfaaa349cfa97cb106956bf2fd8338fa38a50fbca59956d 174667
+=260
+-1
++		mlCheckHealth_Mode = (cVR_Running() ? 0 : pConfig.GetInt("Accessibility", "CheckHealthMode", 0)); // BunkerVR: Hold while VR runs (the mod holds the game's buttons as long as a hand does)
+=26
 -1
 +
 +		////////////////////////////////////

@@ -669,7 +669,8 @@ static const Category kCategories[] = {
     { "Fuel and bottles", { 0, 4, 2, 1, 3 }, 5 },
     { "Tools, keys and parts", { 17, 16, 32, 27, 28, 30, 31 }, 7 },
     { "Other things", { 18, 13, 29, 21, 8, 9 }, 6 },
-    { "Hands at work", { kSlotGunSupport, kSlotBullet, kSlotCord, kSlotDoor, kSlotLoose, kSlotBandageRoll, kSlotDogtag, kSlotShotgunPump }, 8 },
+    { "Hands at work", { kSlotGunSupport, kSlotBullet, kSlotCord, kSlotDoor, kSlotLoose, kSlotBandageRoll, kSlotDogtag, kSlotShotgunPump,
+                         kSlotMedkitBottle, kSlotMedkitRoll }, 10 },
 };
 
 static bool Matches(int slot)
@@ -1277,6 +1278,16 @@ static void MovePanel()
         else if (!known && g_slot == kSlotShotgunPump)
         {
             ImGui::TextWrapped("Hold the shotgun's pump with your left hand (squeeze on the fore-end and keep squeezing): then where it sits is known, and it can be moved from there.");
+        }
+        else if (!known && g_slot == kSlotMedkitBottle)
+        {
+            ImGui::TextWrapped("Open a medkit (lift its flap with your left hand) and take its bottle out with your left hand: then where it sits is known, "
+                               "and it can be moved from there. It stays in the hand while this tool is open.");
+        }
+        else if (!known && g_slot == kSlotMedkitRoll)
+        {
+            ImGui::TextWrapped("Drink from a medkit's bottle, then take its dressing roll out with your left hand: then where it sits is known, and it "
+                               "can be moved from there.");
         }
         else if (!known)
         {

@@ -79,6 +79,12 @@ unsigned long long CameraLastWorldSerial();
 // waiting for a button, the pause menu)? The world is not drawn then.
 bool CameraGamePaused();
 
+// The same, but over as soon as the game runs again: the body script's update
+// (which a pause stops) has sent its news since the last news of the pause.
+// For buttons that mean something else while paused: the pause's own news
+// lingers for its last moments, and a press then would reach the running game.
+bool CameraGamePausedNow();
+
 // Did the body script report within the last moments that the game's
 // inventory is open? It does not always pause the game.
 bool CameraInventoryOpen();
@@ -99,7 +105,10 @@ bool CameraGetScreenEffects(float strengths[kScreenEffectCount]);
 // kItemLighter in the left hand is the game's own lighter, which it puts
 // there while a molotov is held ready. The torch is brandished by holding it
 // out and waved by a swing, not held "ready" as kItemOther things are.
-enum { kItemNone = 0, kItemFlashlight = 1, kItemHealth = 2, kItemGrenade = 3, kItemLighter = 4, kItemBottle = 5, kItemTorch = 6, kItemOther = 9 };
+// kItemHealth is the bandage (pulled open and wound round the forearm here);
+// the medkit is worked by the body script alone (VRUpdateMedkit in
+// Prop_PlayerBody.hps), which claims the hands' squeezes it needs.
+enum { kItemNone = 0, kItemFlashlight = 1, kItemHealth = 2, kItemGrenade = 3, kItemLighter = 4, kItemBottle = 5, kItemTorch = 6, kItemMedkit = 7, kItemOther = 9 };
 int CameraRightItemKind();
 int CameraLeftItemKind();
 

@@ -1,0 +1,10 @@
+BunkerVR patch 1
+file script/custom/player/PlayerState_Normal_Custom.hps
+from 799e857e836d80c374609ff4c55418f616e7c696f411b7f508766a40f7efca81 15860
+to c13cc251a8ffb7463b549d9e783d910049c33976911091e1c6045e56cfa007e4 16196
+=50
+-3
++		mlUseItemMode = (cVR_Running() ? 0 : pConfig.GetInt("Accessibility", "UseItemMode", 0)); // BunkerVR: Hold while VR runs (the mod holds the game's buttons as long as a hand does)
++		mlReloadWeaponMode = (cVR_Running() ? 0 : pConfig.GetInt("Accessibility", "ReloadWeaponMode", 0)); // BunkerVR: Hold while VR runs (the mod holds the game's buttons as long as a hand does)
++		mlChargeFlashlightMode = (cVR_Running() ? 0 : pConfig.GetInt("Accessibility", "ChargeFlashlightMode", 0)); // BunkerVR: Hold while VR runs (the mod holds the game's buttons as long as a hand does)
+end

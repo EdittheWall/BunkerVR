@@ -1,8 +1,184 @@
 BunkerVR patch 1
 file script/custom/agents/agent_stalker.hps
 from d882fd8082866f6f3de84a6a2dc542fd473943942089147d47b5a461a785ed15 650389
-to 62b4edbe5c5e710c95113dff2265abb4aaf923bd42711d660f583c86c03effb2 650875
-=16679
+to c6d1c235e0cf6bcce68f86e3f60f67e1ef1780e33a091668655075194f72e949 658590
+=2143
++	// BunkerVR: the Beast directed for filming (the VR mod's Trailer page, VRTrailer in PlayerBodyHandler.hps).
++	// Arg 0: kept calm, taking no notice of the player (not seen, not felt near, the player's own sounds not heard, no
++	// damage given). Arg 1: the speed it goes to a sound at (0 its own, 1 a walk, 2 a run).
++	[nosave] bool mbVRTrailerCalm = false;
++	[nosave] int mlVRTrailerSpeed = 0;
++	void _Global_VRTrailer()
++	{
++		mbVRTrailerCalm = cScript_GetGlobalArgBool(0);
++		mlVRTrailerSpeed = cScript_GetGlobalArgInt(1);
++		if (mbVRTrailerCalm == false) return;
++		mbVRTrailerHuntOut = false;
++
++		// Calmed while after the player: it lets them be and waits where it is.
++		int lState = mpStateMachine.GetCurrentState();
++		if (lState == eStalkerState_PlayerDetected || lState == eStalkerState_Alert || lState == eStalkerState_PreHunt ||
++			lState == eStalkerState_Hunt || lState == eStalkerState_PostHunt || lState == eStalkerState_AttackClose ||
++			lState == eStalkerState_Rage || lState == eStalkerState_Stalk || lState == eStalkerState_SearchArea ||
++			lState == eStalkerState_CheckLastKnownPosition)
++		{
++			mBaseObj.ResetPlayerDetectionState();
++			mpStateMachine.ChangeState(eStalkerState_Idle);
++		}
++	}
++
++	// BunkerVR: the Trailer page's "Spawn the Beast Where You Look": out of the walls (or from wherever it is) and put
++	// with its feet on a spot (arg 0), turned to a yaw (arg 1), waiting there (Idle: kept calm, it stays). It is put
++	// there as it comes into Idle, once the state it leaves has tidied up (leaving the walls hides its body). Not while
++	// it throws or kills the player. Returns whether it is to be put there.
++	[nosave] bool mbVRTrailerPlace = false;
++	[nosave] cVector3f mvVRTrailerPlacePos = cVector3f(0.0f);
++	[nosave] float mfVRTrailerPlaceYaw = 0.0f;
++	void _Global_VRTrailerPlace()
++	{
++		int lState = mpStateMachine.GetCurrentState();
++		if (lState == eStalkerState_ThrowPlayer || lState == eStalkerState_KillPlayer)
++		{
++			cScript_SetGlobalReturnBool(false);
++			return;
++		}
++		mvVRTrailerPlacePos = cScript_GetGlobalArgVector3f(0);
++		mfVRTrailerPlaceYaw = cScript_GetGlobalArgFloat(1);
++		mbVRTrailerPlace = true;
++		if (lState == eStalkerState_Idle) VRTrailerPlaceNow();
++		else mpStateMachine.ChangeState(eStalkerState_Idle);
++		cScript_SetGlobalReturnBool(true);
++	}
++
++	// Put there now, as it is put when it comes out of a hole (Emerge_PrepareEmerge).
++	void VRTrailerPlaceNow()
++	{
++		mbVRTrailerPlace = false;
++		iCharacterBody@ pCharBody = mBaseObj.GetCharBody();
++		if (pCharBody is null) return;
++		mpSoundListener.SetHearRadius(mfHearRadius);
++		mpSoundListener.SetSoundRadiusMul(mfHearingMul);
++		mpPathfinder.Stop();
++		mpMover.StopTurning();
++		SetHidden(false);
++		pCharBody.SetFeetPosition(mvVRTrailerPlacePos, false);
++		pCharBody.SetYaw(mfVRTrailerPlaceYaw);
++	}
++
++	// BunkerVR: for the Trailer page's holes (VRTrailerNearestHole): its hole network, registered now if it has not
++	// been yet (as its first update after being switched on does, OnUpdate: the page may have just switched it on).
++	void _Global_VRTrailerHoleNetwork()
++	{
++		if (mlGhoulHoleNetworkId == -1)
++			mlGhoulHoleNetworkId = Blackboard_RegisterGhoulHoleNetwork(mBaseObj.GetMap(), msHoleNetwork);
++		cScript_SetGlobalReturnInt(mlGhoulHoleNetworkId);
++	}
++
++	// BunkerVR: for the Trailer page's watch on it (VRUpdateTrailer): its state's name, and whether it is in the walls.
++	void _Global_VRTrailerState()
++	{
++		tString sState = StateToString(mpStateMachine.GetCurrentState());
++		cScript_SetGlobalReturnString((sState != "" ? sState : "between states") + (mbHidden ? ", in the walls" : ""));
++	}
++
++	// BunkerVR: the Trailer page's "Hunt Me": no longer calm, in active mode, told where the player is and at once alert
++	// to them, as when it sees them (Alert: it turns to them, then hunts them). In the walls it does so as it next comes
++	// out (Emerge_DecidePostEmergeBehaviour; the page brings it out of the hole nearest the player). Returns whether it
++	// is in the walls.
++	[nosave] bool mbVRTrailerHuntOut = false;
++	void _Global_VRTrailerHunt()
++	{
++		mbVRTrailerCalm = false;
++		mlVRTrailerSpeed = 0;
++		ChangeMode(eStalkerMode_Active, false);
++		cScript_SetGlobalReturnBool(mbHidden);
++		if (mbHidden) mbVRTrailerHuntOut = true;
++		else VRTrailerHuntNow();
++	}
++
++	void VRTrailerHuntNow()
++	{
++		mbVRTrailerHuntOut = false;
++		mBaseObj.RevealPlayerPos();
++		mpStateMachine.ChangeState(eStalkerState_Alert);
++	}
++	
++	//------------------------------------------------------------
++	
+=411
+-2
++		// Give damage (BunkerVR: none while kept calm for filming, _Global_VRTrailer)
++		if (mbVRTrailerCalm == false && GetSensesActive(false) && 
+=969
++		if (mbVRTrailerCalm) return; // BunkerVR: kept calm for filming: its presence held, so it keeps its mode (_Global_VRTrailer)
+=1320
++		if (mbVRTrailerCalm) return; // BunkerVR: kept calm for filming (_Global_VRTrailer)
+=757
++		// BunkerVR: kept calm for filming (_Global_VRTrailer): the player's own sounds not heard
++		if (mbVRTrailerCalm && bCausedByPlayer)
++		{
++			return true;
++		}
++		
+=1669
++			if (mbVRTrailerCalm) return true; // BunkerVR: kept calm for filming (_Global_VRTrailer)
+=76
++			if (mbVRTrailerCalm) return true; // BunkerVR: kept calm for filming (_Global_VRTrailer)
+=382
++		if (mbVRTrailerPlace) VRTrailerPlaceNow(); // BunkerVR: put where the Trailer page says (_Global_VRTrailerPlace)
+=90
++		if (mbVRTrailerCalm) return; // BunkerVR: kept calm for filming, it waits where it was put (_Global_VRTrailer)
+=250
+-1
++				bool bHunt = mbVRTrailerCalm == false && mBaseObj.GetDistanceToPlayer() < 5.f && GetPlayerIsInLoS(true, false); // BunkerVR: (_Global_VRTrailer)
+=73
++			if (mbVRTrailerCalm) return true; // BunkerVR: kept calm for filming (_Global_VRTrailer)
+=244
+-1
++		bool bPlayerByHole = mbVRTrailerCalm == false && // BunkerVR: kept calm for filming (_Global_VRTrailer)
++							 mBaseObj.GetDistanceToPlayer() < gfStalker_MaxAttackPlayerDistHole &&
+=200
++		if (mbVRTrailerHuntOut) { VRTrailerHuntNow(); return; } // BunkerVR: the Trailer page's "Hunt Me" (_Global_VRTrailerHunt)
+=337
++		if (mlVRTrailerSpeed == 1) SetSpeedState(eStalkerSpeed_Walk); // BunkerVR: as directed for filming (_Global_VRTrailer)
++		else if (mlVRTrailerSpeed == 2) SetSpeedState(eStalkerSpeed_Run);
+=117
+-1
++					if (mbVRTrailerCalm == false) // BunkerVR: kept calm for filming, it shrugs it off and waits there (_Global_VRTrailer)
+=79
++			if (mbVRTrailerCalm) return true; // BunkerVR: kept calm for filming (_Global_VRTrailer)
+=162
++				if (mlVRTrailerSpeed == 1) lNewSpeedState = eStalkerSpeed_Walk; // BunkerVR: as directed for filming (_Global_VRTrailer)
++				else if (mlVRTrailerSpeed == 2) lNewSpeedState = eStalkerSpeed_Run;
+=693
++			if (mbVRTrailerCalm) return true; // BunkerVR: kept calm for filming (_Global_VRTrailer)
+=257
++		if (mbVRTrailerCalm) return; // BunkerVR: calmed for filming: it is leaving this state, no attack meanwhile (_Global_VRTrailer)
+=94
++			if (mbVRTrailerCalm) return true; // BunkerVR: kept calm for filming (_Global_VRTrailer)
+=214
++		if (mbVRTrailerCalm) return; // BunkerVR: calmed for filming: it is leaving this state, no attack meanwhile (_Global_VRTrailer)
+=102
++		mbVRTrailerHuntOut = false; // BunkerVR: hunting already (_Global_VRTrailerHunt)
+=98
++		if (mbVRTrailerCalm) return; // BunkerVR: calmed for filming: it is leaving this state, no attack meanwhile (_Global_VRTrailer)
+=93
++			if (mbVRTrailerCalm) return true; // BunkerVR: kept calm for filming (_Global_VRTrailer)
+=255
++			if (mbVRTrailerCalm) return true; // BunkerVR: kept calm for filming (_Global_VRTrailer)
+=603
++			if (mbVRTrailerCalm) return true; // BunkerVR: kept calm for filming (_Global_VRTrailer)
+=2522
+-1
++		bool bPlayerAtHole = mbVRTrailerCalm == false && // BunkerVR: kept calm for filming (_Global_VRTrailer)
++							 mBaseObj.GetDistanceToPlayer() < gfStalker_MaxAttackPlayerDistHole &&
+=236
++			if (mbVRTrailerCalm) return; // BunkerVR: kept calm for filming, it waits in this hole (_Global_VRTrailer)
+=1499
++		if (mbVRTrailerCalm) return; // BunkerVR: kept calm for filming (_Global_VRTrailer)
+=230
++		if (mbVRTrailerCalm) return; // BunkerVR: kept calm for filming (_Global_VRTrailer)
+=498
 +		//////////////////////
 +		// BunkerVR: where the Beast and the player are placed for the kill, and
 +		// which Beast, so the VR view can turn to face it (PlayerBodyHandler.hps
